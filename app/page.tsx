@@ -48,7 +48,8 @@ const TICKETS: TicketDef[] = [
     sub: "BOOTH PASS",
     homeNote: "เล่นเกมให้เต็มที่",
     blurb: "1 ใบ เล่นเกมได้ 1 ซุ้ม เลือกซุ้มได้ทั้งหน้างาน", // TODO: แก้ให้ตรงสิทธิ์จริง
-    price: 50, // TODO: แก้ราคา
+    // TODO: 10 บาทเพื่อทดสอบ ก่อนขายจริงแก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts (ฝั่งเซิร์ฟเวอร์คิดเงินจากตัวนั้น)
+    price: 10,
     layout: "banner",
     groupNote: "เลือกซุ้มที่ชอบ แล้วไปเล่นกัน!",
     meta: "1 ใบ / 1 ซุ้ม • ใช้ได้เฉพาะวันงาน",
@@ -63,7 +64,8 @@ const TICKETS: TicketDef[] = [
     sub: "LUCKY DRAW TICKET",
     homeNote: "ลุ้นรางวัลสุดเซอร์ไพรส์",
     blurb: "1 ใบ = 1 สิทธิ์สุ่มของรางวัล ภายในงาน", // TODO: แก้ให้ตรงสิทธิ์จริง
-    price: 20, // TODO: แก้ราคา
+    // TODO: 10 บาทเพื่อทดสอบ ก่อนขายจริงแก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
+    price: 10,
     layout: "compact",
     groupNote: "ลุ้นของรางวัล • 1 สิทธิ์",
     chips: ["รอสุ่มภายในงาน", "ยังไม่ได้ใช้สิทธิ์"],
@@ -87,12 +89,23 @@ type Order = {
 
 type User = { id: string; username: string; name: string; phone: string };
 
-type View = "home" | "buy" | "pay" | "done" | "tickets" | "profile" | "auth";
+type View = "home" | "buy" | "pay" | "qr" | "done" | "tickets" | "profile" | "auth";
 
 type Cart = Partial<Record<TicketId, number>>;
 
+// รายการชำระเงินที่รอจ่าย (มาจาก POST /api/orders)
+type Payment = { id: string; amount: number; expiresAt: string; qrUrl: string };
+
+// ผลจาก GET /api/payments/[id]
+type PayPoll = {
+  status: "pending" | "paid" | "expired" | "failed";
+  expiresAt: string;
+  orders?: Order[];
+};
+
 const MAX_QTY = 20; // จำนวนสูงสุดต่อตั๋ว 1 ประเภท ต่อการซื้อ 1 ครั้ง (กันกดพลาด)
 const CART_KEY = "payday-cart-v1";
+const POLL_MS = 3000; // เช็กสถานะการจ่ายทุกกี่มิลลิวินาที
 
 /* ---------- helper ---------- */
 function load<T>(key: string, fallback: T): T {
@@ -123,6 +136,7 @@ async function api<T = Record<string, unknown>>(
       method,
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, error: data.error ?? "เกิดข้อผิดพลาด ลองใหม่อีกครั้ง", status: res.status };
@@ -145,6 +159,9 @@ const fmtTime = (iso?: string) =>
         minute: "2-digit",
       })
     : "";
+
+const fmtCountdown = (secs: number) =>
+  `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
 
 /* ---------- ไอคอน ---------- */
 function Icon({ children, className = "h-6 w-6" }: { children: ReactNode; className?: string }) {
@@ -676,6 +693,13 @@ export default function Home() {
   const [payError, setPayError] = useState("");
   const [payBusy, setPayBusy] = useState(false);
 
+  // QR พร้อมเพย์: รายการที่รอจ่าย + สถานะ + นาฬิกานับถอยหลัง
+  const [payment, setPayment] = useState<Payment | null>(null);
+  const [payStatus, setPayStatus] = useState<"pending" | "expired" | "failed">("pending");
+  const [pollNote, setPollNote] = useState("");
+  const [qrFailed, setQrFailed] = useState(false);
+  const [now, setNow] = useState(0);
+
   // เข้าสู่ระบบ / สมัครสมาชิก
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authUser, setAuthUser] = useState("");
@@ -724,6 +748,70 @@ export default function Home() {
     window.scrollTo({ top: 0 });
   }, [view]);
 
+  // เข้าหน้า "ตั๋วของฉัน" ให้โหลดตั๋วใหม่เสมอ
+  // (กรณีจ่ายแล้วปิดหน้า QR ไป ตั๋วถูกออกโดย webhook ฝั่งเซิร์ฟเวอร์ ต้องดึงมาแสดง)
+  useEffect(() => {
+    if (view !== "tickets" || !user) return;
+    let cancelled = false;
+    (async () => {
+      const r = await api<{ orders: Order[] }>("/api/orders");
+      if (r.ok && !cancelled) setOrders(r.data.orders);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [view, user]);
+
+  // หน้า QR: เช็กสถานะการจ่ายทุก POLL_MS + เดินนาฬิกานับถอยหลัง
+  useEffect(() => {
+    if (view !== "qr" || !payment) return;
+    let stopped = false;
+    let busy = false;
+    const paymentId = payment.id;
+
+    const tick = async () => {
+      if (busy || stopped) return;
+      busy = true;
+      const r = await api<PayPoll>(`/api/payments/${paymentId}`);
+      busy = false;
+      if (stopped) return;
+
+      if (!r.ok) {
+        if (r.status === 401) {
+          stopped = true;
+          setPayment(null);
+          needLogin("pay");
+        } else if (r.status === 404) {
+          stopped = true;
+          setPayStatus("failed");
+        } else {
+          setPollNote(r.error); // เน็ตหลุดชั่วคราว ลองใหม่รอบถัดไปเอง
+        }
+        return;
+      }
+
+      setPollNote("");
+      const d = r.data;
+      if (d.status === "paid" && d.orders) {
+        stopped = true;
+        finishPaid(d.orders);
+      } else if (d.status === "expired" || d.status === "failed") {
+        stopped = true;
+        setPayStatus(d.status);
+      }
+    };
+
+    tick();
+    const poll = setInterval(tick, POLL_MS);
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      stopped = true;
+      clearInterval(poll);
+      clearInterval(clock);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, payment]);
+
   const defOf = (id: TicketId) => TICKETS.find((t) => t.id === id)!;
   const cartLines = TICKETS.flatMap((t) => {
     const q = cart[t.id] ?? 0;
@@ -736,6 +824,10 @@ export default function Home() {
   const usedOrders = orders
     .filter((o) => o.used)
     .sort((a, b) => (b.usedAt ?? "").localeCompare(a.usedAt ?? ""));
+
+  const secsLeft = payment
+    ? Math.max(0, Math.ceil((new Date(payment.expiresAt).getTime() - now) / 1000))
+    : 0;
 
   function go(v: View) {
     setView(v);
@@ -795,6 +887,7 @@ export default function Home() {
     await api("/api/auth/logout", "POST");
     setUser(null);
     setOrders([]);
+    setPayment(null);
     setAccName("");
     setAccPhone("");
     setAccSaved(false);
@@ -826,6 +919,18 @@ export default function Home() {
     go("pay");
   }
 
+  // จ่ายสำเร็จ (เซิร์ฟเวอร์ยืนยันกับ Opn แล้ว): เก็บตั๋ว ล้างตะกร้า ไปหน้ารับตั๋ว
+  function finishPaid(made: Order[]) {
+    const codes = new Set(made.map((o) => o.code));
+    setOrders((prev) => [...made, ...prev.filter((o) => !codes.has(o.code))]);
+    setCart({});
+    save(CART_KEY, {});
+    setPayment(null);
+    setJustBought(made);
+    setView("done");
+  }
+
+  // กดยืนยัน: ขอ QR จากเซิร์ฟเวอร์ ตั๋วยังไม่ถูกออกจนกว่าจะจ่ายสำเร็จ
   async function confirmPay() {
     if (cartLines.length === 0 || payBusy) return;
     if (!user) return needLogin("pay");
@@ -840,11 +945,11 @@ export default function Home() {
       return;
     }
 
-    // TODO: เชื่อมระบบชำระเงินจริง (เช่น PromptPay/บัตร) แล้วสร้างตั๋วหลังจ่ายสำเร็จเท่านั้น
-    // ตั๋วถูกสร้างและเก็บใน MongoDB ผ่าน POST /api/orders (ราคาคิดฝั่งเซิร์ฟเวอร์)
+    // เซิร์ฟเวอร์คิดราคาเอง สร้างรายการรอจ่าย + QR PromptPay ผ่าน Opn
+    // ตั๋วถูกสร้างใน MongoDB หลัง Opn ยืนยันว่าจ่ายแล้วเท่านั้น (polling หรือ webhook)
     setPayBusy(true);
     setPayError("");
-    const r = await api<{ orders: Order[] }>("/api/orders", "POST", {
+    const r = await api<{ payment: Payment }>("/api/orders", "POST", {
       items: cartLines.map((l) => ({ ticket: l.def.id, qty: l.qty })),
       name: buyerName,
       phone: cleanPhone,
@@ -856,13 +961,18 @@ export default function Home() {
       return;
     }
 
-    const made = r.data.orders;
-    setOrders([...made, ...orders]);
+    setPayment(r.data.payment);
+    setPayStatus("pending");
+    setPollNote("");
+    setQrFailed(false);
+    setNow(Date.now());
+    setView("qr");
+  }
 
-    setCart({});
-    save(CART_KEY, {});
-    setJustBought(made);
-    setView("done");
+  // ออกจากหน้า QR (ยกเลิกการรอ) กลับไปหน้าสรุปรายการ
+  function leaveQr() {
+    setPayment(null);
+    go("pay");
   }
 
   async function markUsed(code: string) {
@@ -904,7 +1014,8 @@ export default function Home() {
   const badges: Badges = { tickets: readyOrders.length };
   const showNav =
     view === "home" || view === "buy" || view === "tickets" || view === "profile" || view === "auth";
-  const navView: View = view === "pay" || view === "done" ? "buy" : view === "auth" ? "profile" : view;
+  const navView: View =
+    view === "pay" || view === "qr" || view === "done" ? "buy" : view === "auth" ? "profile" : view;
 
   const inputCls =
     "mt-1 w-full rounded-xl border border-[#cfdcc0] bg-white px-4 py-3 text-base outline-none focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a]";
@@ -918,7 +1029,7 @@ export default function Home() {
     <div className={`min-h-screen bg-[#f1f7e9] text-[#14402c] ${appFont.className}`}>
       <main
         className={`mx-auto w-full max-w-md px-5 pt-6 ${
-          view === "buy" ? "pb-64" : showNav ? "pb-28" : view === "done" ? "pb-10" : "pb-64"
+          view === "buy" ? "pb-64" : showNav ? "pb-28" : view === "done" || view === "qr" ? "pb-10" : "pb-64"
         }`}
       >
         {/* ===== หน้าหลัก ===== */}
@@ -1087,7 +1198,7 @@ export default function Home() {
           </section>
         )}
 
-        {/* ===== ชำระเงิน (ขั้นที่ 2) ===== */}
+        {/* ===== ชำระเงิน (ขั้นที่ 2): สรุปรายการ ===== */}
         {view === "pay" && (
           <section aria-label="ชำระเงิน">
             <SubHeader title="ชำระเงิน" onBack={() => go("buy")} />
@@ -1122,13 +1233,13 @@ export default function Home() {
 
             <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-4">
               <h2 className="text-base font-bold">วิธีชำระเงิน</h2>
-              {/* TODO: เพิ่มวิธีชำระเงินอื่น/เชื่อม payment gateway จริง */}
               <div className="mt-3 flex items-center justify-between rounded-2xl border-2 border-[#14402c] bg-[#f1f7e9] px-4 py-3">
                 <span className="text-sm font-bold">PromptPay (สแกน QR)</span>
                 <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#14402c] text-white">
                   <IconCheck className="h-3.5 w-3.5" />
                 </span>
               </div>
+              <p className="mt-2 text-xs text-[#6b7f6f]">กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน มีอายุ 15 นาที</p>
             </div>
 
             <CheckoutBar>
@@ -1150,10 +1261,83 @@ export default function Home() {
                 disabled={payBusy}
                 className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
               >
-                {payBusy ? "กำลังดำเนินการ..." : "ยืนยันการชำระเงิน"}
+                {payBusy ? "กำลังสร้าง QR..." : "สร้าง QR เพื่อชำระเงิน"}
                 <IconArrow className="h-5 w-5 text-[#d9f27a]" />
               </button>
             </CheckoutBar>
+          </section>
+        )}
+
+        {/* ===== ชำระเงิน (ขั้นที่ 2): สแกน QR ===== */}
+        {view === "qr" && payment && (
+          <section aria-label="สแกน QR ชำระเงิน">
+            <SubHeader title="สแกนเพื่อชำระเงิน" onBack={leaveQr} />
+            <div className="mt-6">
+              <Steps current={2} />
+            </div>
+
+            <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-5 text-center">
+              <p className="text-xs text-[#6b7f6f]">ยอดที่ต้องชำระ</p>
+              <p className="mt-1 text-4xl font-extrabold">{baht(payment.amount)}</p>
+
+              {payStatus === "pending" ? (
+                <>
+                  <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-[#e3ecd6] bg-white p-2">
+                    {qrFailed ? (
+                      <p className="px-4 text-sm text-red-600">แสดง QR ไม่ได้ กด “สร้าง QR ใหม่” ด้านล่าง</p>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={payment.qrUrl}
+                        alt={`QR PromptPay ยอด ${baht(payment.amount)}`}
+                        className="h-full w-full object-contain"
+                        onError={() => setQrFailed(true)}
+                      />
+                    )}
+                  </div>
+                  <p className="mt-4 text-sm text-[#4d6652]">เปิดแอปธนาคาร แล้วสแกน QR นี้เพื่อจ่ายเงิน</p>
+                  {secsLeft > 0 ? (
+                    <p className="mt-2 text-sm font-bold" aria-live="off">
+                      QR หมดอายุใน {fmtCountdown(secsLeft)}
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-sm font-bold text-[#a15c00]">หมดเวลาแล้ว กำลังตรวจสอบการชำระเงิน...</p>
+                  )}
+                  <p role="status" className="mt-3 flex items-center justify-center gap-2 text-xs text-[#6b7f6f]">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-[#2f8f5b]" />
+                    รอรับการชำระเงิน
+                  </p>
+                  {pollNote && <p className="mt-2 text-xs text-red-600">{pollNote}</p>}
+                </>
+              ) : (
+                <div className="mt-4 rounded-2xl bg-[#f1f7e9] p-5">
+                  <p role="alert" className="text-base font-bold">
+                    {payStatus === "expired" ? "QR หมดอายุแล้ว" : "สร้างรายการชำระเงินไม่สำเร็จ"}
+                  </p>
+                  <p className="mt-1 text-sm text-[#4d6652]">
+                    ถ้าคุณจ่ายไปแล้ว ตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” ภายในไม่กี่นาที
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {payStatus !== "pending" || qrFailed ? (
+                <button
+                  type="button"
+                  onClick={leaveQr}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99]"
+                >
+                  สร้าง QR ใหม่
+                  <IconArrow className="h-5 w-5 text-[#d9f27a]" />
+                </button>
+              ) : null}
+              <InfoBox
+                icon={<IconInfo className="h-5 w-5" />}
+                title="จ่ายแล้วรอสักครู่"
+                text="ระบบจะพาไปรับตั๋วอัตโนมัติ ถ้าปิดหน้านี้ไปก่อน ตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน”"
+              />
+            </div>
           </section>
         )}
 

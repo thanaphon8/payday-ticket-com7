@@ -25,6 +25,12 @@ export async function getDb(): Promise<Db> {
       db.collection("users").createIndex({ usernameLower: 1 }, { unique: true }),
       db.collection("orders").createIndex({ code: 1 }, { unique: true }),
       db.collection("orders").createIndex({ userId: 1, at: -1 }),
+      db.collection("orders").createIndex({ paymentId: 1 }),
+      // รายการชำระเงิน: ดูของตัวเอง และหาจาก charge id ของ Opn (ตอน webhook)
+      db.collection("payments").createIndex({ userId: 1, createdAt: -1 }),
+      db
+        .collection("payments")
+        .createIndex({ chargeId: 1 }, { unique: true, partialFilterExpression: { chargeId: { $type: "string" } } }),
     ])
       .then(() => undefined)
       .catch((e) => {

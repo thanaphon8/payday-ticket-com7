@@ -2,7 +2,17 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { getSessionUser, validPhone } from "@/lib/auth";
-import { MAX_QTY, TICKET_PRICES, isTicketId, makeCode, toOrder, type TicketId } from "@/lib/tickets";
+import {
+  MAX_QTY,
+  PAYMENT_TTL_MINUTES,
+  buildPaymentLines,
+  isTicketId,
+  toOrder,
+  type TicketId,
+} from "@/lib/tickets";
+import { OpnError, createPromptPayCharge } from "@/lib/opn";
+
+const MAX_PENDING = 5; // รายการรอชำระเงินค้างได้พร้อมกันต่อผู้ใช้ (กันกดรัว ๆ)
 
 // รายการตั๋วทั้งหมดของผู้ใช้ที่ login
 export async function GET() {
@@ -18,7 +28,9 @@ export async function GET() {
   return NextResponse.json({ orders: docs.map(toOrder) });
 }
 
-// ซื้อตั๋ว: body = { items: [{ ticket, qty }], name, phone }
+// เริ่มชำระเงิน: body = { items: [{ ticket, qty }], name, phone }
+// ยังไม่ออกตั๋ว สร้างรายการรอจ่าย + QR PromptPay แล้วคืน { payment: { id, amount, expiresAt, qrUrl } }
+// ตั๋วจะถูกออกหลัง Opn ยืนยันว่าจ่ายแล้วเท่านั้น (ดู /api/payments/[id] และ /api/webhooks/opn)
 export async function POST(req: Request) {
   const user = await getSessionUser().catch(() => null);
   if (!user) return NextResponse.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
@@ -42,29 +54,69 @@ export async function POST(req: Request) {
     wanted.push({ ticket: it.ticket, qty });
   }
 
-  // TODO: เชื่อมระบบชำระเงินจริง (PromptPay/บัตร) แล้วค่อยสร้างตั๋วหลังจ่ายสำเร็จเท่านั้น
-  const at = new Date().toISOString();
+  const db = await getDb();
+  const payments = db.collection("payments");
   const userId = new ObjectId(user.id);
-  const docs = wanted.flatMap(({ ticket, qty }) =>
-    Array.from({ length: qty }, () => ({
-      code: makeCode(ticket),
-      userId,
-      ticket,
-      name,
-      phone,
-      price: TICKET_PRICES[ticket], // ราคามาจากเซิร์ฟเวอร์เสมอ ไม่เชื่อค่าจากหน้าเว็บ
-      at,
-      used: false,
-    })),
-  );
+
+  const pendingCount = await payments.countDocuments({
+    userId,
+    status: "pending",
+    expiresAt: { $gt: new Date().toISOString() },
+  });
+  if (pendingCount >= MAX_PENDING)
+    return NextResponse.json(
+      { error: "มีรายการรอชำระเงินค้างอยู่หลายรายการ รอสักครู่หรือจ่ายรายการเดิมก่อน" },
+      { status: 429 },
+    );
+
+  // ราคามาจากเซิร์ฟเวอร์เสมอ ไม่เชื่อค่าจากหน้าเว็บ
+  const { tickets, amount } = buildPaymentLines(wanted);
+  if (amount < 20)
+    return NextResponse.json({ error: "ยอดรวมต้องไม่ต่ำกว่า ฿20 (ขั้นต่ำของ PromptPay)" }, { status: 400 });
+  const paymentId = new ObjectId();
+  const createdAt = new Date();
+  const expiresAt = new Date(createdAt.getTime() + PAYMENT_TTL_MINUTES * 60_000);
+
+  await payments.insertOne({
+    _id: paymentId,
+    userId,
+    name,
+    phone,
+    tickets, // รหัสตั๋วถูกล็อกไว้ตั้งแต่ตอนนี้ ออกตั๋วซ้ำเมื่อไรก็ได้รหัสเดิม
+    amount, // หน่วยบาท
+    status: "pending",
+    chargeId: null,
+    qrUrl: null,
+    createdAt: createdAt.toISOString(),
+    expiresAt: expiresAt.toISOString(),
+    fulfilled: false,
+  });
 
   try {
-    const db = await getDb();
-    await db.collection("orders").insertMany(docs);
-    return NextResponse.json({ orders: docs.map((d) => toOrder(d as never)) });
+    const charge = await createPromptPayCharge({
+      amountBaht: amount,
+      expiresAt,
+      description: `Payday Park ${tickets.length} ใบ`,
+      metadata: { paymentId: paymentId.toString(), userId: user.id },
+      idempotencyKey: paymentId.toString(),
+    });
+    if (!charge.qrUrl) throw new Error("Opn ไม่ส่ง QR กลับมา");
+
+    await payments.updateOne({ _id: paymentId }, { $set: { chargeId: charge.id, qrUrl: charge.qrUrl } });
+
+    return NextResponse.json({
+      payment: {
+        id: paymentId.toString(),
+        amount,
+        expiresAt: expiresAt.toISOString(),
+        qrUrl: charge.qrUrl,
+      },
+    });
   } catch (e) {
-    // รหัสตั๋วชนกัน (โอกาสน้อยมาก) → ให้ลองกดซื้อใหม่
-    console.error(e);
-    return NextResponse.json({ error: "สร้างตั๋วไม่สำเร็จ ลองใหม่อีกครั้ง" }, { status: 500 });
+    console.error("สร้าง charge ไม่สำเร็จ:", e);
+    await payments.updateOne({ _id: paymentId }, { $set: { status: "failed" } }).catch(() => {});
+    const detail = process.env.NODE_ENV !== "production" && e instanceof Error ? ` (${e.message})` : "";
+    const status = e instanceof OpnError && e.status === 0 ? 503 : 502;
+    return NextResponse.json({ error: `สร้าง QR ไม่สำเร็จ ลองใหม่อีกครั้ง${detail}` }, { status });
   }
 }
