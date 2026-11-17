@@ -5,7 +5,8 @@ import { Prompt } from "next/font/google";
 
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
 
-type Tab = "reviewing" | "approved" | "rejected";
+type ListTab = "reviewing" | "approved" | "rejected";
+type Tab = ListTab | "summary";
 type SlipCheck = {
   amount: number | null;
   amountOk: boolean;
@@ -30,8 +31,19 @@ type Item = {
   rejectReason: string | null;
   slip: { transRef: string; sendingBank: string; check: SlipCheck | null } | null;
 };
-type Counts = Record<Tab, number>;
+type Counts = Record<ListTab, number>;
 type Gate = "loading" | "ok" | "unauth" | "forbidden";
+type Summary = {
+  buyers: number;
+  orders: number;
+  booth: { count: number; amount: number };
+  lucky: { count: number; amount: number };
+  total: { count: number; amount: number };
+  pending: { count: number; amount: number };
+  rejected: number;
+  daily: { date: string; orders: number; booth: number; lucky: number; amount: number }[];
+  generatedAt: string;
+};
 
 const POLL_MS = 10_000;
 const RECEIVER_LABEL = "บริษัท คอมเซเว่น จำกัด (มหาชน)";
@@ -49,8 +61,11 @@ const BANKS: Record<string, string> = {
 };
 
 const baht = (n: number) => `฿${n.toLocaleString("th-TH")}`;
+const num = (n: number) => n.toLocaleString("th-TH");
 const fmt = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "-";
+const fmtDay = (ymd: string) =>
+  new Date(`${ymd}T00:00:00+07:00`).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "2-digit" });
 
 function beep() {
   try {
@@ -104,11 +119,40 @@ function Mark({ ok, label }: { ok: boolean | null; label: string }) {
   );
 }
 
+// การ์ดตัวเลขในหน้าสรุป
+function Stat({
+  title,
+  value,
+  sub,
+  tone = "light",
+}: {
+  title: string;
+  value: string;
+  sub?: string;
+  tone?: "light" | "dark" | "accent";
+}) {
+  const cls =
+    tone === "dark"
+      ? "bg-[#14402c] text-white border-[#14402c]"
+      : tone === "accent"
+        ? "bg-[#d9f27a] text-[#14402c] border-[#d9f27a]"
+        : "bg-white text-[#14402c] border-[#e3ecd6]";
+  const subCls = tone === "dark" ? "text-white/80" : "text-[#4d6652]";
+  return (
+    <div className={`min-w-0 rounded-3xl border p-4 sm:p-5 ${cls}`}>
+      <p className={`text-xs font-semibold sm:text-sm ${subCls}`}>{title}</p>
+      <p className="mt-1 text-2xl font-extrabold sm:text-3xl">{value}</p>
+      {sub && <p className={`mt-1 text-xs sm:text-sm ${subCls}`}>{sub}</p>}
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [gate, setGate] = useState<Gate>("loading");
   const [tab, setTab] = useState<Tab>("reviewing");
   const [items, setItems] = useState<Item[]>([]);
   const [counts, setCounts] = useState<Counts>({ reviewing: 0, approved: 0, rejected: 0 });
+  const [summary, setSummary] = useState<Summary | null>(null);
   const [sound, setSound] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -126,17 +170,27 @@ export default function AdminPage() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/admin/payments?status=${tabRef.current}`, { cache: "no-store" });
+      const current = tabRef.current;
+      const listStatus: ListTab = current === "summary" ? "reviewing" : current;
+      const [res, sumRes] = await Promise.all([
+        fetch(`/api/admin/payments?status=${listStatus}`, { cache: "no-store" }),
+        current === "summary" ? fetch("/api/admin/summary", { cache: "no-store" }) : Promise.resolve(null),
+      ]);
       if (res.status === 401) return setGate("unauth");
       if (res.status === 403) return setGate("forbidden");
       if (!res.ok) return setNote("โหลดข้อมูลไม่ได้ กำลังลองใหม่");
       const data = (await res.json()) as { counts: Counts; payments: Item[] };
       setGate("ok");
       setNote("");
-      setItems(data.payments);
+      if (current !== "summary") setItems(data.payments);
       setCounts(data.counts);
       if (prevReviewing.current !== null && data.counts.reviewing > prevReviewing.current && soundRef.current) beep();
       prevReviewing.current = data.counts.reviewing;
+
+      if (sumRes) {
+        if (sumRes.ok) setSummary((await sumRes.json()) as Summary);
+        else setNote("โหลดสรุปยอดไม่ได้ กำลังลองใหม่");
+      }
     } catch {
       setNote("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กำลังลองใหม่");
     }
@@ -207,6 +261,7 @@ export default function AdminPage() {
     ["reviewing", "รอตรวจ"],
     ["approved", "อนุมัติแล้ว"],
     ["rejected", "ปฏิเสธ"],
+    ["summary", "สรุปยอด"],
   ];
 
   return (
@@ -214,9 +269,11 @@ export default function AdminPage() {
       <main className="mx-auto w-full max-w-md px-4 pb-16 pt-5 sm:max-w-3xl sm:px-6 sm:pt-8">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
           <div className="min-w-0">
-            <h1 className="text-2xl font-bold sm:text-3xl">ตรวจสลีป</h1>
+            <h1 className="text-2xl font-bold sm:text-3xl">{tab === "summary" ? "สรุปยอดขาย" : "ตรวจสลีป"}</h1>
             <p className="mt-1 text-xs leading-relaxed text-[#4d6652] sm:text-sm">
-              ระบบอ่านสลีปให้เบื้องต้น ✓ = ตรงกับรายการ / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ
+              {tab === "summary"
+                ? "ยอดขายนับจากรายการที่อนุมัติแล้วเท่านั้น รายการที่รอตรวจแสดงแยกไว้ต่างหาก"
+                : "ระบบอ่านสลีปให้เบื้องต้น ✓ = ตรงกับรายการ / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
             </p>
           </div>
           <button
@@ -229,7 +286,7 @@ export default function AdminPage() {
           </button>
         </header>
 
-        <div role="tablist" className="mt-5 grid grid-cols-3 rounded-2xl bg-[#e3ecd6] p-1 sm:mt-6">
+        <div role="tablist" className="mt-5 grid grid-cols-4 rounded-2xl bg-[#e3ecd6] p-1 sm:mt-6">
           {tabs.map(([id, label]) => (
             <button
               key={id}
@@ -240,10 +297,12 @@ export default function AdminPage() {
                 setTab(id);
                 setItems([]);
                 setDetailId(null);
+                setConfirmId(null);
+                setRejectId(null);
               }}
               className={`relative min-h-11 rounded-xl px-1 py-2.5 text-xs font-bold transition sm:text-sm ${tab === id ? "bg-[#14402c] text-white" : "text-[#4d6652]"}`}
             >
-              {label} ({counts[id]})
+              {id === "summary" ? label : `${label} (${counts[id]})`}
               {id === "reviewing" && counts.reviewing > 0 && tab !== "reviewing" && (
                 <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500" />
               )}
@@ -257,7 +316,91 @@ export default function AdminPage() {
           </p>
         )}
 
-        {items.length === 0 ? (
+        {tab === "summary" ? (
+          !summary ? (
+            <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+              กำลังโหลดสรุปยอด...
+            </div>
+          ) : (
+            <section className="mt-5 sm:mt-6">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+                <Stat
+                  title="ยอดเงินรวมทั้งหมด"
+                  value={baht(summary.total.amount)}
+                  sub={`ตั๋วทั้งหมด ${num(summary.total.count)} ใบ`}
+                  tone="dark"
+                />
+                <Stat
+                  title="จำนวนผู้ซื้อ"
+                  value={`${num(summary.buyers)} คน`}
+                  sub={`${num(summary.orders)} ออเดอร์ที่อนุมัติแล้ว`}
+                  tone="accent"
+                />
+                <Stat
+                  title="ตั๋วเข้างาน (ซุ้ม)"
+                  value={`${num(summary.booth.count)} ใบ`}
+                  sub={`รวมเป็นเงิน ${baht(summary.booth.amount)}`}
+                />
+                <Stat
+                  title="ตั๋ว Lucky Draw"
+                  value={`${num(summary.lucky.count)} ใบ`}
+                  sub={`รวมเป็นเงิน ${baht(summary.lucky.amount)}`}
+                />
+                <Stat
+                  title="รอตรวจ (ยังไม่นับในยอดขาย)"
+                  value={`${num(summary.pending.count)} รายการ`}
+                  sub={`รวม ${baht(summary.pending.amount)}`}
+                />
+                <Stat title="ถูกปฏิเสธ" value={`${num(summary.rejected)} รายการ`} />
+              </div>
+
+              <div className="mt-5 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+                <div className="flex items-center justify-between gap-3 p-4">
+                  <h2 className="text-base font-bold sm:text-lg">ยอดขายรายวัน</h2>
+                  <a
+                    href="/api/admin/summary/csv"
+                    download
+                    className="min-h-10 shrink-0 rounded-full bg-[#14402c] px-4 py-2.5 text-xs font-bold text-white sm:text-sm"
+                  >
+                    ส่งออก CSV
+                  </a>
+                </div>
+                {summary.daily.length === 0 ? (
+                  <p className="border-t border-[#e3ecd6] p-6 text-center text-sm text-[#4d6652]">ยังไม่มียอดขาย</p>
+                ) : (
+                  <div className="overflow-x-auto border-t border-[#e3ecd6]">
+                    <table className="w-full min-w-[420px] text-left text-xs sm:text-sm">
+                      <thead className="bg-[#f8fbf3] text-[#4d6652]">
+                        <tr>
+                          <th className="px-4 py-2.5 font-semibold">วันที่</th>
+                          <th className="px-2 py-2.5 text-right font-semibold">ออเดอร์</th>
+                          <th className="px-2 py-2.5 text-right font-semibold">เข้างาน</th>
+                          <th className="px-2 py-2.5 text-right font-semibold">Lucky</th>
+                          <th className="px-4 py-2.5 text-right font-semibold">ยอดเงิน</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {summary.daily.map((d) => (
+                          <tr key={d.date} className="border-t border-[#e3ecd6]">
+                            <td className="px-4 py-2.5 font-semibold">{fmtDay(d.date)}</td>
+                            <td className="px-2 py-2.5 text-right">{num(d.orders)}</td>
+                            <td className="px-2 py-2.5 text-right">{num(d.booth)}</td>
+                            <td className="px-2 py-2.5 text-right">{num(d.lucky)}</td>
+                            <td className="px-4 py-2.5 text-right font-bold">{baht(d.amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <p className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">
+                อัปเดตล่าสุด {fmt(summary.generatedAt)} · รีเฟรชอัตโนมัติทุก 10 วินาที
+              </p>
+            </section>
+          )
+        ) : items.length === 0 ? (
           <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
             {tab === "reviewing" ? "ไม่มีสลีปรอตรวจ" : "ยังไม่มีรายการ"}
           </div>
