@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Prompt } from "next/font/google";
 
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
@@ -32,7 +32,7 @@ type Item = {
   slip: { transRef: string; sendingBank: string; check: SlipCheck | null } | null;
 };
 type Counts = Record<ListTab, number>;
-type Gate = "loading" | "ok" | "unauth" | "forbidden";
+type Gate = "loading" | "ok" | "unauth" | "forbidden" | "locked";
 type Summary = {
   buyers: number;
   orders: number;
@@ -110,11 +110,11 @@ function Mark({ ok, label }: { ok: boolean | null; label: string }) {
   return (
     <div className="flex items-center gap-1.5">
       <span
-        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-extrabold sm:h-7 sm:w-7 sm:text-sm ${cls}`}
+        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-extrabold sm:h-7 sm:w-7 sm:text-sm ${cls}`}
       >
         {ok === null ? "?" : ok ? "✓" : "!"}
       </span>
-      <span className="text-[11px] font-semibold leading-none text-[#4d6652] sm:text-xs">{label}</span>
+      <span className="whitespace-nowrap text-[11px] font-semibold leading-none text-[#4d6652] sm:text-sm">{label}</span>
     </div>
   );
 }
@@ -161,6 +161,9 @@ export default function AdminPage() {
   const [reason, setReason] = useState("");
   const [zoom, setZoom] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [pw, setPw] = useState("");
+  const [pwErr, setPwErr] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
 
   const prevReviewing = useRef<number | null>(null);
   const soundRef = useRef(true);
@@ -177,7 +180,13 @@ export default function AdminPage() {
         current === "summary" ? fetch("/api/admin/summary", { cache: "no-store" }) : Promise.resolve(null),
       ]);
       if (res.status === 401) return setGate("unauth");
-      if (res.status === 403) return setGate("forbidden");
+      if (res.status === 403) {
+        // เป็น admin แต่ยังไม่กรอกรหัส admin (หรือหมดอายุ 12 ชั่วโมง) → หน้ากรอกรหัส
+        const st = (await fetch("/api/admin/login", { cache: "no-store" })
+          .then((r) => r.json())
+          .catch(() => null)) as { isAdmin?: boolean; unlocked?: boolean } | null;
+        return setGate(st?.isAdmin && !st.unlocked ? "locked" : "forbidden");
+      }
       if (!res.ok) return setNote("โหลดข้อมูลไม่ได้ กำลังลองใหม่");
       const data = (await res.json()) as { counts: Counts; payments: Item[] };
       setGate("ok");
@@ -214,6 +223,43 @@ export default function AdminPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [zoom]);
 
+  async function unlock(e: FormEvent) {
+    e.preventDefault();
+    if (!pw || pwBusy) return;
+    setPwBusy(true);
+    setPwErr("");
+    try {
+      const res = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pw }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPwErr(data.error ?? "เข้าสู่ระบบไม่สำเร็จ");
+      } else {
+        setPw("");
+        await load();
+      }
+    } catch {
+      setPwErr("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้");
+    }
+    setPwBusy(false);
+  }
+
+  async function lock() {
+    await fetch("/api/admin/login", { method: "DELETE" }).catch(() => {});
+    setItems([]);
+    setSummary(null);
+    setCounts({ reviewing: 0, approved: 0, rejected: 0 });
+    setDetailId(null);
+    setConfirmId(null);
+    setRejectId(null);
+    setZoom(null);
+    prevReviewing.current = null;
+    setGate("locked");
+  }
+
   async function act(id: string, body: { action: "approve" } | { action: "reject"; reason: string }) {
     setBusyId(id);
     setNote("");
@@ -236,6 +282,44 @@ export default function AdminPage() {
   }
 
   const shell = `min-h-screen bg-[#f1f7e9] text-[#14402c] ${appFont.className}`;
+
+  if (gate === "locked") {
+    return (
+      <div className={shell}>
+        <main className="mx-auto max-w-md px-4 py-16 text-center sm:px-5">
+          <h1 className="text-2xl font-bold">หน้าเจ้าหน้าที่</h1>
+          <p className="mt-3 text-sm text-[#4d6652]">กรอกรหัสผ่าน admin เพื่อเข้าใช้งาน</p>
+          <form onSubmit={unlock} className="mt-5">
+            <input
+              type="password"
+              value={pw}
+              onChange={(e) => setPw(e.target.value)}
+              placeholder="รหัสผ่าน admin"
+              autoComplete="current-password"
+              autoFocus
+              maxLength={200}
+              className="min-h-12 w-full rounded-xl border border-[#cfdcc0] bg-white px-4 py-3 text-base outline-none focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a] sm:text-sm"
+            />
+            {pwErr && (
+              <p role="alert" className="mt-3 text-sm font-medium text-red-600">
+                {pwErr}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={pwBusy || pw.length === 0}
+              className="mt-4 min-h-12 w-full rounded-2xl bg-[#14402c] py-3 text-sm font-bold text-white disabled:opacity-60"
+            >
+              {pwBusy ? "กำลังตรวจสอบ..." : "เข้าสู่หน้า admin"}
+            </button>
+          </form>
+          <a href="/" className="mt-5 inline-block text-sm font-semibold text-[#4d6652] underline">
+            กลับหน้าแรก
+          </a>
+        </main>
+      </div>
+    );
+  }
 
   if (gate !== "ok") {
     return (
@@ -266,7 +350,7 @@ export default function AdminPage() {
 
   return (
     <div className={shell}>
-      <main className="mx-auto w-full max-w-md px-4 pb-16 pt-5 sm:max-w-3xl sm:px-6 sm:pt-8">
+      <main className="mx-auto w-full max-w-lg px-4 pb-16 pt-5 sm:max-w-4xl sm:px-6 sm:pt-8">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
           <div className="min-w-0">
             <h1 className="text-2xl font-bold sm:text-3xl">{tab === "summary" ? "สรุปยอดขาย" : "ตรวจสลีป"}</h1>
@@ -276,14 +360,23 @@ export default function AdminPage() {
                 : "ระบบอ่านสลีปให้เบื้องต้น ✓ = ตรงกับรายการ / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setSound((s) => !s)}
-            aria-pressed={sound}
-            className={`min-h-11 shrink-0 self-start rounded-full px-5 py-2.5 text-xs font-bold sm:text-sm ${sound ? "bg-[#d9f27a]" : "bg-white text-[#6b7f6f]"}`}
-          >
-            เสียงเตือน: {sound ? "เปิด" : "ปิด"}
-          </button>
+          <div className="flex shrink-0 gap-2 self-start">
+            <button
+              type="button"
+              onClick={() => setSound((s) => !s)}
+              aria-pressed={sound}
+              className={`min-h-11 rounded-full px-5 py-2.5 text-xs font-bold sm:text-sm ${sound ? "bg-[#d9f27a]" : "bg-white text-[#6b7f6f]"}`}
+            >
+              เสียงเตือน: {sound ? "เปิด" : "ปิด"}
+            </button>
+            <button
+              type="button"
+              onClick={lock}
+              className="min-h-11 rounded-full border border-[#14402c] px-5 py-2.5 text-xs font-bold sm:text-sm"
+            >
+              ล็อก
+            </button>
+          </div>
         </header>
 
         <div role="tablist" className="mt-5 grid grid-cols-4 rounded-2xl bg-[#e3ecd6] p-1 sm:mt-6">
@@ -472,9 +565,10 @@ export default function AdminPage() {
                           aria-hidden="true"
                           className="flex shrink-0 flex-col justify-center gap-2.5 border-l border-[#e3ecd6] pl-3 sm:gap-3 sm:pl-4"
                         >
-                          <Mark ok={check ? check.amountOk : null} label="ยอด" />
-                          <Mark ok={check ? check.receiverOk : null} label="ผู้รับ" />
-                          <Mark ok={check ? check.timeOk : null} label="เวลา" />
+                          <Mark ok={check ? check.amountOk : null} label="ยอดเงิน" />
+                          <Mark ok={check ? check.receiverOk : null} label="ผู้รับเงิน" />
+                          <Mark ok={check ? check.timeOk : null} label="วันเวลาโอน" />
+                          <Mark ok={true} label="เลขอ้างอิง" />
                         </div>
                       )}
                     </div>

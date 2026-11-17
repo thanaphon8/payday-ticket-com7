@@ -20,7 +20,7 @@ const EVENT = {
 };
 
 /* สีหลัก (ตามดีไซน์)
-   เขียว #14402c · ไลม์ #d9f27a · เหลือง #ffcf5c · พื้นหลัง #f1f7e9 · กล่องเขียวอ่อน #e3ecd6 */
+   เขียว #14402c · ไลม์ #d9f27a · เหลือง #ffcf5c · พื้นหลัง #f1f7e9 · กล่องเขียวอ่อน #e3ecd6 · midnight blue #0f1b4d · แดงเลือดหมู #6b1d24 */
 
 type TicketId = "booth" | "lucky";
 
@@ -29,6 +29,7 @@ type TicketDef = {
   title: string;
   sub: string; // ชื่ออังกฤษตัวเล็ก
   homeNote: string; // ข้อความในการ์ดหน้าหลัก
+  homeImage?: string; // ถ้าใส่: หน้าหลักแสดงรูปนี้แทนการ์ดทั้งใบ (ไฟล์ใน public/) และหน้าซื้อตั๋วใช้รูปนี้เป็นส่วนบนของตั๋ว (ราคา/ปุ่มจำนวนอยู่ส่วนล่างแยกด้วยรอยประ) ชื่อตั๋วจะอยู่เหนือกรอบ
   blurb: string; // คำอธิบายในหน้าเลือกตั๋ว
   price: number;
   layout: "banner" | "compact"; // รูปแบบการ์ดในหน้า "ตั๋วของฉัน"
@@ -37,6 +38,8 @@ type TicketDef = {
   chips?: [string, string]; // ป้ายสถานะ (แบบ compact)
   showLabel: string; // ข้อความปุ่ม "แสดงตั๋ว"
   card: string; // สีการ์ด/ไอคอน
+  fg: string; // สีตัวหนังสือบนการ์ด
+  dash: string; // สีเส้นประ
   button: string; // สีปุ่ม
   soft: string; // สีอ่อนของป้ายสถานะ
 };
@@ -47,6 +50,7 @@ const TICKETS: TicketDef[] = [
     title: "ตั๋วเข้าซุ้ม",
     sub: "BOOTH PASS",
     homeNote: "เล่นเกมให้เต็มที่",
+    homeImage: "/img/p1.png",
     blurb: "1 ใบ เล่นเกมได้ 1 ซุ้ม เลือกซุ้มได้ทั้งหน้างาน", // TODO: แก้ให้ตรงสิทธิ์จริง
     // TODO: 10 บาทเพื่อทดสอบ ก่อนขายจริงแก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts (ฝั่งเซิร์ฟเวอร์คิดเงินจากตัวนั้น)
     price: 10,
@@ -54,7 +58,9 @@ const TICKETS: TicketDef[] = [
     groupNote: "เลือกซุ้มที่ชอบ แล้วไปเล่นกัน!",
     meta: "1 ใบ / 1 ซุ้ม • ใช้ได้เฉพาะวันงาน",
     showLabel: "แสดงตั๋วเข้าซุ้ม",
-    card: "bg-[#d9f27a]",
+    card: "bg-[#0f1b4d]",
+    fg: "text-white",
+    dash: "border-white/30",
     button: "bg-[#14402c] text-white",
     soft: "bg-[#eef9c8]",
   },
@@ -63,6 +69,7 @@ const TICKETS: TicketDef[] = [
     title: "Lucky Draw",
     sub: "LUCKY DRAW TICKET",
     homeNote: "ลุ้นรางวัลสุดเซอร์ไพรส์",
+    homeImage: "/img/p2.png",
     blurb: "1 ใบ = 1 สิทธิ์สุ่มของรางวัล ภายในงาน", // TODO: แก้ให้ตรงสิทธิ์จริง
     // TODO: 10 บาทเพื่อทดสอบ ก่อนขายจริงแก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
     price: 10,
@@ -70,9 +77,11 @@ const TICKETS: TicketDef[] = [
     groupNote: "ลุ้นของรางวัล • 1 สิทธิ์",
     chips: ["รอสุ่มภายในงาน", "ยังไม่ได้ใช้สิทธิ์"],
     showLabel: "แสดงตั๋ว Lucky Draw",
-    card: "bg-[#ffcf5c]",
-    button: "bg-[#ffcf5c] text-[#14402c]",
-    soft: "bg-[#ffe9b0]",
+    card: "bg-[#6b1d24]",
+    fg: "text-white",
+    dash: "border-white/30",
+    button: "bg-[#6b1d24] text-white",
+    soft: "bg-[#f3d9dc]",
   },
 ];
 
@@ -470,15 +479,17 @@ function Perforated({
   className = "",
   bg = "bg-white",
   dash = "border-[#bfd0ab]",
+  text = "text-[#14402c]",
 }: {
   top: ReactNode;
   bottom: ReactNode;
   className?: string;
   bg?: string; // สีพื้นตั๋ว
   dash?: string; // สีเส้นประ
+  text?: string; // สีตัวหนังสือ
 }) {
   return (
-    <div className={`text-[#14402c] drop-shadow-[0_2px_6px_rgba(20,64,44,0.14)] ${className}`}>
+    <div className={`${text} drop-shadow-[0_2px_6px_rgba(20,64,44,0.14)] ${className}`}>
       <div style={notchMask("100%")} className={`overflow-hidden rounded-t-3xl ${bg}`}>
         {top}
       </div>
@@ -498,7 +509,7 @@ function TicketPass({ def, order }: { def: TicketDef; order: Order }) {
     <Perforated
       top={
         <div className="p-2">
-          <div className={`flex items-center justify-between rounded-2xl px-4 py-3 ${def.card}`}>
+          <div className={`flex items-center justify-between rounded-2xl px-4 py-3 ${def.card} ${def.fg}`}>
             <div>
               <p className="text-[10px] font-bold tracking-widest">{def.sub}</p>
               <p className="text-lg font-extrabold leading-tight">{def.title}</p>
@@ -531,11 +542,13 @@ function Stepper({
   max,
   name,
   onChange,
+  onDark = false,
 }: {
   value: number;
   max: number;
   name: string;
   onChange: (n: number) => void;
+  onDark?: boolean; // ใช้บนพื้นหลังดำ/รูปภาพ: ตัวเลขสีขาว ปุ่มบวกสีไลม์
 }) {
   return (
     <div className="flex items-center gap-3">
@@ -548,7 +561,7 @@ function Stepper({
       >
         <IconMinus className="h-5 w-5" />
       </button>
-      <span aria-live="polite" className="min-w-6 text-center text-lg font-semibold">
+      <span aria-live="polite" className={`min-w-6 text-center text-lg font-semibold ${onDark ? "text-white" : ""}`}>
         {value}
       </span>
       <button
@@ -556,7 +569,9 @@ function Stepper({
         aria-label={`เพิ่มจำนวน${name}`}
         onClick={() => onChange(value + 1)}
         disabled={value >= max}
-        className="flex h-10 w-10 items-center justify-center rounded-full bg-[#14402c] text-white transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+        className={`flex h-10 w-10 items-center justify-center rounded-full transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
+          onDark ? "bg-[#d9f27a] text-[#14402c]" : "bg-[#14402c] text-white"
+        }`}
       >
         <IconPlus className="h-5 w-5" />
       </button>
@@ -875,15 +890,18 @@ function TopNav({
 }
 
 /* ---------- แถบสรุปยอด ----------
-   มือถือ: ติดขอบล่างจอ  /  จอใหญ่: เป็นการ์ดลอยอยู่คอลัมน์ขวา (sticky) */
+   ติดขอบล่างจอทั้งมือถือและคอมพิวเตอร์
+   มือถือ: aboveNav = วางเหนือแถบเมนูล่าง / คอมพิวเตอร์: ไม่มีแถบเมนูล่าง จึงชิดขอบล่างเลย */
 function CheckoutBar({ children, aboveNav = false }: { children: ReactNode; aboveNav?: boolean }) {
   return (
     <div
-      className={`fixed inset-x-0 z-40 rounded-t-3xl border-t border-[#e3ecd6] bg-white shadow-[0_-8px_24px_rgba(20,64,44,0.08)] md:sticky md:inset-x-auto md:bottom-auto md:top-24 md:z-10 md:rounded-3xl md:border md:pb-0 md:shadow-[0_2px_12px_rgba(20,64,44,0.08)] ${
-        aboveNav ? "bottom-[calc(4rem+env(safe-area-inset-bottom))]" : "bottom-0 pb-[env(safe-area-inset-bottom)]"
+      className={`fixed inset-x-0 z-40 rounded-t-3xl border-t border-[#e3ecd6] bg-white shadow-[0_-8px_24px_rgba(20,64,44,0.08)] ${
+        aboveNav
+          ? "bottom-[calc(4rem+env(safe-area-inset-bottom))] md:bottom-0"
+          : "bottom-0 pb-[env(safe-area-inset-bottom)]"
       }`}
     >
-      <div className="mx-auto w-full max-w-md px-5 py-4 md:max-w-none md:px-6 md:py-6">{children}</div>
+      <div className="mx-auto w-full max-w-md px-5 py-4 md:max-w-6xl md:px-8 md:py-5">{children}</div>
     </div>
   );
 }
@@ -1488,6 +1506,16 @@ export default function Home() {
   const sheetDef = sheet ? defOf(sheet) : null;
   const sheetOrders = sheet ? readyOrders.filter((o) => o.ticket === sheet) : [];
 
+  // ระยะเว้นด้านล่างของหน้า: หน้าซื้อ/ชำระเงินมีแถบสรุปยอดติดขอบล่าง ต้องเว้นที่ให้ทั้งมือถือและคอมพิวเตอร์
+  const mainPad =
+    view === "buy" || view === "pay"
+      ? "pb-64 md:pb-48"
+      : showNav
+        ? "pb-28 md:pb-16"
+        : view === "done" || view === "qr"
+          ? "pb-10 md:pb-16"
+          : "pb-64 md:pb-16";
+
   return (
     <div
       className={`min-h-screen bg-[#f1f7e9] text-[#14402c] [&_button:disabled]:cursor-not-allowed [&_button:not(:disabled)]:cursor-pointer ${appFont.className}`}
@@ -1502,11 +1530,7 @@ export default function Home() {
         onLogin={() => needLogin("home")}
       />
 
-      <main
-        className={`mx-auto w-full max-w-md px-5 pt-6 md:max-w-6xl md:px-8 md:pb-16 md:pt-8 ${
-          view === "buy" ? "pb-64" : showNav ? "pb-28" : view === "done" || view === "qr" ? "pb-10" : "pb-64"
-        }`}
-      >
+      <main className={`mx-auto w-full max-w-md px-5 pt-6 md:max-w-6xl md:px-8 md:pt-8 ${mainPad}`}>
         {/* ===== หน้าหลัก ===== */}
         {view === "home" && (
           <>
@@ -1583,15 +1607,29 @@ export default function Home() {
                     aria-label={`${t.title} ${baht(t.price)} ต่อใบ`}
                     className="block text-left transition active:scale-[0.98] md:hover:-translate-y-0.5"
                   >
+                    {/* ชื่อตั๋ว (ตั๋วที่มีรูป): อยู่เหนือกรอบ */}
+                    {t.homeImage && (
+                      <p className="px-1 pb-2 text-lg font-bold text-[#14402c] md:pb-3 md:text-2xl">{t.title}</p>
+                    )}
                     <Perforated
                       bg={t.card}
-                      dash="border-[#14402c]/35"
+                      text={t.fg}
+                      dash={t.dash}
                       top={
-                        <div className="px-4 pb-3 pt-4 md:px-6 md:pb-4 md:pt-6">
-                          {iconOf(t.id, "h-6 w-6 md:h-8 md:w-8")}
-                          <p className="mt-2 text-lg font-bold leading-tight md:text-2xl">{t.title}</p>
-                          <p className="mt-1 text-xs md:text-sm">{t.homeNote}</p>
-                        </div>
+                        t.homeImage ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={t.homeImage}
+                            alt={`${t.title} ${baht(t.price)} ต่อใบ`}
+                            className="block h-auto w-full"
+                          />
+                        ) : (
+                          <div className="px-4 pb-3 pt-4 md:px-6 md:pb-4 md:pt-6">
+                            {iconOf(t.id, "h-6 w-6 md:h-8 md:w-8")}
+                            <p className="mt-2 text-lg font-bold leading-tight md:text-2xl">{t.title}</p>
+                            <p className="mt-1 text-xs md:text-sm">{t.homeNote}</p>
+                          </div>
+                        )
                       }
                       bottom={
                         <div className="flex w-full items-end justify-between px-4 pb-4 pt-3 md:px-6 md:pb-6 md:pt-4">
@@ -1599,7 +1637,11 @@ export default function Home() {
                             {baht(t.price)}
                             <span className="text-xs font-medium"> / ใบ</span>
                           </p>
-                          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#14402c] text-white md:h-11 md:w-11">
+                          <span
+                            className={`flex h-9 w-9 items-center justify-center rounded-full md:h-11 md:w-11 ${
+                              t.homeImage ? "bg-[#d9f27a] text-[#14402c]" : "bg-[#14402c] text-white"
+                            }`}
+                          >
                             <IconArrow className="h-5 w-5" />
                           </span>
                         </div>
@@ -1622,7 +1664,7 @@ export default function Home() {
 
         {/* ===== เลือกตั๋ว (ขั้นที่ 1) ===== */}
         {view === "buy" && (
-          <section aria-label="เลือกตั๋ว">
+          <section aria-label="เลือกตั๋ว" className="md:mx-auto md:max-w-5xl">
             <SubHeader title="เลือกตั๋วของคุณ" onBack={() => go("home")} />
             <div className="mt-6">
               <Steps current={1} />
@@ -1631,53 +1673,72 @@ export default function Home() {
             <h2 className="mt-8 text-2xl font-bold md:text-3xl">พร้อมสนุกกี่ใบดี?</h2>
             <p className="mt-1 text-sm text-[#4d6652] md:text-base">เลือกจำนวนตั๋วทั้ง 2 แบบในครั้งเดียว</p>
 
-            <div className="md:mt-6 md:grid md:grid-cols-[minmax(0,1fr)_22rem] md:items-start md:gap-8">
-              <div className="mt-5 flex flex-col gap-4 md:mt-0 md:grid md:grid-cols-2">
-                {TICKETS.map((t) => {
-                  const q = cart[t.id] ?? 0;
-                  return (
+            {/* มือถือ: เรียงลง / คอมพิวเตอร์: 2 ตั๋วเรียงซ้ายขวา */}
+            <div className="mt-5 flex flex-col gap-4 md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-6">
+              {TICKETS.map((t) => {
+                const q = cart[t.id] ?? 0;
+
+                // ส่วนบน: ตั๋วที่มีรูปใช้รูปเดียวกับหน้าหลัก (ชื่อตั๋วอยู่เหนือกรอบ) / ตั๋วอื่นใช้การ์ดข้อความ
+                // ส่วนล่าง (หลังรอยประ): ราคา + ปุ่ม + - แยกจากตัวตั๋วเหมือนกันทุกใบ
+                return (
+                  <div key={t.id}>
+                    {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-[#14402c]">{t.title}</p>}
                     <Perforated
-                      key={t.id}
                       bg={t.card}
-                      dash="border-[#14402c]/35"
+                      text={t.fg}
+                      dash={t.dash}
                       top={
-                        <div className="p-4">
-                          <div className="flex items-center gap-3">
-                            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
-                              {iconOf(t.id, "h-6 w-6")}
-                            </span>
-                            <div>
-                              <p className="text-lg font-bold leading-tight">{t.title}</p>
-                              <p className="text-[10px] font-semibold tracking-widest text-[#14402c]/70">{t.sub}</p>
+                        t.homeImage ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={t.homeImage} alt={t.title} className="block h-auto w-full" />
+                        ) : (
+                          <div className="p-4">
+                            <div className="flex items-center gap-3">
+                              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
+                                {iconOf(t.id, "h-6 w-6")}
+                              </span>
+                              <div>
+                                <p className="text-lg font-bold leading-tight">{t.title}</p>
+                                <p className="text-[10px] font-semibold tracking-widest opacity-70">{t.sub}</p>
+                              </div>
                             </div>
+                            <p className="mt-4 text-sm opacity-80">{t.blurb}</p>
                           </div>
-                          <p className="mt-4 text-sm text-[#14402c]/80">{t.blurb}</p>
-                        </div>
+                        )
                       }
                       bottom={
                         <div className="flex items-center justify-between gap-2 px-4 pb-4 pt-3">
                           <p className="text-3xl font-extrabold">
                             {baht(t.price)}
-                            <span className="text-xs font-medium text-[#14402c]/70"> / ใบ</span>
+                            <span className="text-xs font-medium opacity-70"> / ใบ</span>
                           </p>
-                          <Stepper value={q} max={MAX_QTY} name={t.title} onChange={(n) => setQty(t.id, n)} />
+                          <Stepper
+                            value={q}
+                            max={MAX_QTY}
+                            name={t.title}
+                            onChange={(n) => setQty(t.id, n)}
+                            onDark={!!t.homeImage}
+                          />
                         </div>
                       }
                     />
-                  );
-                })}
+                  </div>
+                );
+              })}
 
-                <div className="md:col-span-2">
-                  <InfoBox
-                    icon={<IconShield className="h-5 w-5" />}
-                    title="ตั๋วแต่ละประเภทใช้แทนกันไม่ได้"
-                    text="ตั๋วใช้ได้เฉพาะวันงานที่ระบุเท่านั้น"
-                  />
-                </div>
+              <div className="md:col-span-2">
+                <InfoBox
+                  icon={<IconShield className="h-5 w-5" />}
+                  title="ตั๋วแต่ละประเภทใช้แทนกันไม่ได้"
+                  text="ตั๋วใช้ได้เฉพาะวันงานที่ระบุเท่านั้น"
+                />
               </div>
+            </div>
 
-              <CheckoutBar aboveNav>
-                <div className="flex items-end justify-between">
+            {/* แถบสรุปยอดติดขอบล่าง (มือถือ: เหนือแถบเมนู / คอมพิวเตอร์: ชิดล่างสุด) */}
+            <CheckoutBar aboveNav>
+              <div className="md:flex md:items-center md:justify-between md:gap-8">
+                <div className="flex items-end justify-between md:items-center md:gap-8">
                   <div>
                     <p className="text-xs text-[#6b7f6f]">ทั้งหมด {cartCount} ใบ</p>
                     <p className="text-sm font-bold">ยอดรวม</p>
@@ -1688,72 +1749,70 @@ export default function Home() {
                   type="button"
                   onClick={toPay}
                   disabled={cartCount === 0}
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-[#c7d3bb] disabled:text-white/80"
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-[#c7d3bb] disabled:text-white/80 md:mt-0 md:w-80 md:shrink-0"
                 >
                   {user ? "ไปชำระเงิน" : "เข้าสู่ระบบเพื่อชำระเงิน"}
                   <IconArrow className="h-5 w-5 text-[#d9f27a]" />
                 </button>
-              </CheckoutBar>
-            </div>
+              </div>
+            </CheckoutBar>
           </section>
         )}
 
         {/* ===== ชำระเงิน (ขั้นที่ 2): สรุปรายการ ===== */}
         {view === "pay" && (
-          <section aria-label="ชำระเงิน">
+          <section aria-label="ชำระเงิน" className="md:mx-auto md:max-w-3xl">
             <SubHeader title="ชำระเงิน" onBack={() => go("buy")} />
             <div className="mt-6">
               <Steps current={2} />
             </div>
 
-            <div className="md:mt-6 md:grid md:grid-cols-[minmax(0,1fr)_22rem] md:items-start md:gap-8">
-              <div>
-                <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-4 md:mt-0 md:p-6">
-                  <h2 className="text-base font-bold">สรุปรายการ</h2>
-                  <p className="mt-0.5 text-xs text-[#6b7f6f]">
-                    {EVENT.name} · {EVENT.date}
-                  </p>
-                  <ul className="mt-3 divide-y divide-[#e3ecd6]">
-                    {cartLines.map(({ def, qty: q }) => (
-                      <li key={def.id} className="flex items-center justify-between gap-3 py-3">
-                        <div className="flex items-center gap-3">
-                          <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${def.card}`}>
-                            {iconOf(def.id, "h-5 w-5")}
-                          </span>
-                          <div>
-                            <p className="text-sm font-bold">{def.title}</p>
-                            <p className="text-xs text-[#6b7f6f]">
-                              {baht(def.price)} × {q}
-                            </p>
-                          </div>
-                        </div>
-                        <p className="text-base font-bold">{baht(def.price * q)}</p>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+            <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-4 md:p-6">
+              <h2 className="text-base font-bold">สรุปรายการ</h2>
+              <p className="mt-0.5 text-xs text-[#6b7f6f]">
+                {EVENT.name} · {EVENT.date}
+              </p>
+              <ul className="mt-3 divide-y divide-[#e3ecd6]">
+                {cartLines.map(({ def, qty: q }) => (
+                  <li key={def.id} className="flex items-center justify-between gap-3 py-3">
+                    <div className="flex items-center gap-3">
+                      <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${def.card} ${def.fg}`}>
+                        {iconOf(def.id, "h-5 w-5")}
+                      </span>
+                      <div>
+                        <p className="text-sm font-bold">{def.title}</p>
+                        <p className="text-xs text-[#6b7f6f]">
+                          {baht(def.price)} × {q}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-base font-bold">{baht(def.price * q)}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
 
-                <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-4 md:p-6">
-                  <h2 className="text-base font-bold">วิธีชำระเงิน</h2>
-                  <div className="mt-3 flex items-center justify-between rounded-2xl border-2 border-[#14402c] bg-[#f1f7e9] px-4 py-3">
-                    <span className="text-sm font-bold">PromptPay (สแกน QR)</span>
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#14402c] text-white">
-                      <IconCheck className="h-3.5 w-3.5" />
-                    </span>
-                  </div>
-                  <p className="mt-2 text-xs text-[#6b7f6f]">
-                    กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน โอนแล้วส่งสลีปภายใน 60 นาที รอเจ้าหน้าที่ตรวจสอบ
-                  </p>
-                </div>
+            <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-4 md:p-6">
+              <h2 className="text-base font-bold">วิธีชำระเงิน</h2>
+              <div className="mt-3 flex items-center justify-between rounded-2xl border-2 border-[#14402c] bg-[#f1f7e9] px-4 py-3">
+                <span className="text-sm font-bold">PromptPay (สแกน QR)</span>
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#14402c] text-white">
+                  <IconCheck className="h-3.5 w-3.5" />
+                </span>
               </div>
+              <p className="mt-2 text-xs text-[#6b7f6f]">
+                กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน โอนแล้วส่งสลีปภายใน 60 นาที รอเจ้าหน้าที่ตรวจสอบ
+              </p>
+            </div>
 
-              <CheckoutBar>
-                {payError && (
-                  <p role="alert" className="mb-2 text-sm font-medium text-red-600">
-                    {payError}
-                  </p>
-                )}
-                <div className="flex items-end justify-between">
+            <CheckoutBar>
+              {payError && (
+                <p role="alert" className="mb-2 text-sm font-medium text-red-600">
+                  {payError}
+                </p>
+              )}
+              <div className="md:flex md:items-center md:justify-between md:gap-8">
+                <div className="flex items-end justify-between md:items-center md:gap-8">
                   <div>
                     <p className="text-xs text-[#6b7f6f]">ทั้งหมด {cartCount} ใบ</p>
                     <p className="text-sm font-bold">ยอดรวม</p>
@@ -1764,13 +1823,13 @@ export default function Home() {
                   type="button"
                   onClick={confirmPay}
                   disabled={payBusy}
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60 md:mt-0 md:w-80 md:shrink-0"
                 >
                   {payBusy ? "กำลังสร้าง QR..." : "สร้าง QR เพื่อชำระเงิน"}
                   <IconArrow className="h-5 w-5 text-[#d9f27a]" />
                 </button>
-              </CheckoutBar>
-            </div>
+              </div>
+            </CheckoutBar>
           </section>
         )}
 
@@ -1986,7 +2045,8 @@ export default function Home() {
                         <Perforated
                           key={t.id}
                           bg={t.card}
-                          dash="border-[#14402c]/35"
+                          text={t.fg}
+                          dash={t.dash}
                           top={
                             <div className="p-4">
                               <div className="flex items-start justify-between gap-3">
@@ -1995,7 +2055,7 @@ export default function Home() {
                                     {iconOf(t.id, "h-6 w-6")}
                                   </span>
                                   <div>
-                                    <p className="text-[10px] font-bold tracking-widest text-[#14402c]/70">{t.sub}</p>
+                                    <p className="text-[10px] font-bold tracking-widest opacity-70">{t.sub}</p>
                                     <p className="text-xl font-bold leading-tight">{t.title}</p>
                                   </div>
                                 </div>
@@ -2005,11 +2065,11 @@ export default function Home() {
                                 </div>
                               </div>
                               <p className="mt-4 text-sm font-semibold">{t.groupNote}</p>
-                              {t.meta && <p className="mt-1 text-xs text-[#14402c]/70">{t.meta}</p>}
+                              {t.meta && <p className="mt-1 text-xs opacity-70">{t.meta}</p>}
                               {t.chips && (
                                 <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
-                                  <span className="rounded-full bg-white/60 px-3 py-1.5">{t.chips[0]}</span>
-                                  <span className="rounded-full bg-[#14402c]/10 px-3 py-1.5">{t.chips[1]}</span>
+                                  <span className="rounded-full bg-white/20 px-3 py-1.5">{t.chips[0]}</span>
+                                  <span className="rounded-full bg-black/20 px-3 py-1.5">{t.chips[1]}</span>
                                 </div>
                               )}
                             </div>

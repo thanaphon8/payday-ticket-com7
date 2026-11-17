@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
+import { createHash, createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { cookies } from "next/headers";
 import { ObjectId } from "mongodb";
@@ -8,6 +8,9 @@ const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) =>
 
 export const COOKIE = "payday-session";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 วัน
+
+export const ADMIN_COOKIE = "payday-admin";
+export const ADMIN_MAX_AGE = 60 * 60 * 12; // 12 ชั่วโมง
 
 export type SessionUser = { id: string; username: string; name: string; phone: string; isAdmin?: boolean };
 
@@ -56,6 +59,7 @@ export async function createSession(userId: string) {
 export async function destroySession() {
   const jar = await cookies();
   jar.delete(COOKIE);
+  jar.delete(ADMIN_COOKIE);
 }
 
 // admin = user ที่มี role: "admin" ใน MongoDB หรือ username อยู่ใน ADMIN_USERNAMES (คั่นด้วย ,)
@@ -87,10 +91,61 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   return { id: u._id.toString(), username: u.username, name: u.name, phone: u.phone, isAdmin: isAdminUser(u) };
 }
 
-// ใช้ใน /api/admin/*: ok=false → ตอบ 401 (ยังไม่ login) หรือ 403 (ไม่ใช่ admin)
+/* ---------- รหัสผ่าน admin (ADMIN_PASSWORD ใน .env.local) ---------- */
+// ไม่ตั้ง ADMIN_PASSWORD หรือสั้นกว่า 8 ตัว = ปิดหน้า admin ทั้งหมด (fail closed)
+export function verifyAdminPassword(pw: string) {
+  const expected = process.env.ADMIN_PASSWORD;
+  if (!expected || expected.length < 8) return false;
+  const a = createHash("sha256").update(pw).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
+// cookie ปลดล็อก admin: ผูกกับ userId + หมดอายุ 12 ชั่วโมง ลงลายเซ็น HMAC (แยกจาก cookie session)
+export async function createAdminUnlock(userId: string) {
+  const exp = Math.floor(Date.now() / 1000) + ADMIN_MAX_AGE;
+  const payload = `${userId}.${exp}`;
+  const jar = await cookies();
+  jar.set(ADMIN_COOKIE, `${payload}.${sign(`admin:${payload}`)}`, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: ADMIN_MAX_AGE,
+  });
+}
+
+export async function destroyAdminUnlock() {
+  const jar = await cookies();
+  jar.delete(ADMIN_COOKIE);
+}
+
+async function hasAdminUnlock(userId: string) {
+  const jar = await cookies();
+  const raw = jar.get(ADMIN_COOKIE)?.value;
+  if (!raw) return false;
+  const [uid, exp, sig] = raw.split(".");
+  if (!uid || !exp || !sig || uid !== userId) return false;
+
+  const a = Buffer.from(sig);
+  const b = Buffer.from(sign(`admin:${uid}.${exp}`));
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return false;
+  return Number(exp) >= Date.now() / 1000;
+}
+
+// สถานะสำหรับหน้า admin: login แล้วไหม / เป็น admin ไหม / กรอกรหัส admin แล้วไหม
+export async function getAdminState(): Promise<{ loggedIn: boolean; isAdmin: boolean; unlocked: boolean }> {
+  const user = await getSessionUser().catch(() => null);
+  if (!user) return { loggedIn: false, isAdmin: false, unlocked: false };
+  if (!user.isAdmin) return { loggedIn: true, isAdmin: false, unlocked: false };
+  return { loggedIn: true, isAdmin: true, unlocked: await hasAdminUnlock(user.id) };
+}
+
+// ใช้ใน /api/admin/*: ok=false → ตอบ 401 (ยังไม่ login) หรือ 403 (ไม่ใช่ admin หรือยังไม่กรอกรหัส admin)
 export async function requireAdmin(): Promise<{ ok: true; user: SessionUser } | { ok: false; status: 401 | 403 }> {
   const user = await getSessionUser().catch(() => null);
   if (!user) return { ok: false, status: 401 };
   if (!user.isAdmin) return { ok: false, status: 403 };
+  if (!(await hasAdminUnlock(user.id))) return { ok: false, status: 403 };
   return { ok: true, user };
 }
