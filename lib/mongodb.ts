@@ -26,11 +26,15 @@ export async function getDb(): Promise<Db> {
       db.collection("orders").createIndex({ code: 1 }, { unique: true }),
       db.collection("orders").createIndex({ userId: 1, at: -1 }),
       db.collection("orders").createIndex({ paymentId: 1 }),
-      // รายการชำระเงิน: ดูของตัวเอง และหาจาก charge id ของ Opn (ตอน webhook)
+      // รายการโอนเงิน: ของตัวเอง / หน้า admin กรองตามสถานะ / รหัสอ้างอิง (Ref1) ไม่ซ้ำ
       db.collection("payments").createIndex({ userId: 1, createdAt: -1 }),
+      db.collection("payments").createIndex({ status: 1, createdAt: -1 }),
       db
         .collection("payments")
-        .createIndex({ chargeId: 1 }, { unique: true, partialFilterExpression: { chargeId: { $type: "string" } } }),
+        .createIndex({ ref: 1 }, { unique: true, partialFilterExpression: { ref: { $type: "string" } } }),
+      // สลีป: key = ธนาคาร-transRef ซ้ำไม่ได้ (กันใช้สลีปใบเดิมซ้ำ)
+      db.collection("slips").createIndex({ key: 1 }, { unique: true }),
+      db.collection("slips").createIndex({ paymentId: 1 }),
     ])
       .then(() => undefined)
       .catch((e) => {

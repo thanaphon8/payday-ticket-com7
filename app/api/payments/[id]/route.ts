@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { getSessionUser } from "@/lib/auth";
-import { fulfillPayment, toOrder, type PaymentTicket } from "@/lib/tickets";
-import { OpnError, getCharge, isDeadCharge, isPaid } from "@/lib/opn";
+import { expireStale, fulfillPayment, toOrder, toPaymentInfo, type PaymentTicket } from "@/lib/tickets";
+import { makeQrDataUrl } from "@/lib/billerQr";
 
-type PayStatus = "pending" | "paid" | "expired" | "failed";
-
-// หน้าเว็บเรียกทุก 3 วินาทีเพื่อเช็กว่าจ่ายแล้วหรือยัง
-// คืน { status, expiresAt, orders? } เมื่อ status = "paid" จะมี orders (ตั๋วที่เพิ่งออก)
+// หน้าเว็บเรียกทุก 5 วินาทีตอนอยู่หน้าโอนเงิน
+// คืน { id, amount, expiresAt, ref, status, rejectReason?, qrUrl?, orders? }
+//  - qrUrl: มีเมื่อยังต้องโอน/ส่งสลีป (awaiting_slip, rejected)
+//  - orders: มีเมื่ออนุมัติแล้ว (approved)
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionUser().catch(() => null);
   if (!user) return NextResponse.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
@@ -16,61 +16,56 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params;
   if (!ObjectId.isValid(id)) return NextResponse.json({ error: "ไม่พบรายการชำระเงิน" }, { status: 404 });
   const paymentId = new ObjectId(id);
+  const userId = new ObjectId(user.id);
 
   const db = await getDb();
-  const payments = db.collection("payments");
+  await expireStale(db, userId);
+
   // ดูได้เฉพาะรายการของตัวเอง
-  let pay = await payments.findOne({ _id: paymentId, userId: new ObjectId(user.id) });
+  const pay = await db.collection("payments").findOne({ _id: paymentId, userId });
   if (!pay) return NextResponse.json({ error: "ไม่พบรายการชำระเงิน" }, { status: 404 });
 
-  const expiresAt = pay.expiresAt as string;
+  const info = toPaymentInfo(pay);
 
-  async function paidResponse() {
-    const codes = (pay!.tickets as PaymentTicket[]).map((t) => t.code);
+  if (info.status === "awaiting_slip" || info.status === "rejected") {
+    const qrUrl = await makeQrDataUrl(info.ref, info.amount).catch(() => undefined);
+    return NextResponse.json({ ...info, qrUrl });
+  }
+
+  if (info.status === "approved") {
+    // เผื่อ admin กดอนุมัติแล้วระบบล้มก่อนออกตั๋วครบ: เรียกซ้ำได้ ไม่เกิดตั๋วซ้ำ
+    await fulfillPayment(db, paymentId);
+    const codes = (pay.tickets as PaymentTicket[]).map((t) => t.code);
     const docs = await db.collection("orders").find({ code: { $in: codes } }).toArray();
     const orders = docs.map(toOrder).sort((a, b) => codes.indexOf(a.code) - codes.indexOf(b.code));
-    return NextResponse.json({ status: "paid" as PayStatus, expiresAt, orders });
+    return NextResponse.json({ ...info, orders });
   }
 
-  // ออกตั๋วแล้ว
-  if (pay.fulfilled === true) return paidResponse();
+  return NextResponse.json(info);
+}
 
-  // รายการที่จบแล้วโดยไม่ได้จ่าย
-  if (pay.status === "expired" || pay.status === "failed") {
-    // กรณีพิเศษ: จ่ายตอนใกล้หมดเวลา แล้ว Opn ยังไม่ได้แจ้ง ให้เช็กกับ Opn อีกครั้งก่อนตัดสินว่าไม่สำเร็จ
-    if (!pay.chargeId) return NextResponse.json({ status: pay.status as PayStatus, expiresAt });
-  }
+// ยกเลิกรายการซื้อ: ลบได้เฉพาะรายการของตัวเองที่ยังไม่ได้ส่งสลีป (awaiting_slip)
+// รายการที่ส่งสลีปแล้ว / อนุมัติแล้ว / หมดอายุ ลบไม่ได้
+export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const user = await getSessionUser().catch(() => null);
+  if (!user) return NextResponse.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
 
-  if (!pay.chargeId) return NextResponse.json({ status: "failed" as PayStatus, expiresAt });
+  const { id } = await params;
+  if (!ObjectId.isValid(id)) return NextResponse.json({ error: "ไม่พบรายการชำระเงิน" }, { status: 404 });
+  const paymentId = new ObjectId(id);
+  const userId = new ObjectId(user.id);
 
-  // ถาม Opn โดยตรงเสมอ ไม่เชื่อสถานะที่หน้าเว็บส่งมา
-  let charge;
-  try {
-    charge = await getCharge(pay.chargeId as string);
-  } catch (e) {
-    console.error("เช็กสถานะ charge ไม่สำเร็จ:", e);
-    const status = e instanceof OpnError && e.status === 0 ? 503 : 502;
-    return NextResponse.json({ error: "เช็กสถานะไม่ได้ กำลังลองใหม่" }, { status });
-  }
+  const db = await getDb();
+  await expireStale(db, userId);
 
-  if (isPaid(charge)) {
-    // กันยอดไม่ตรง: ยอดที่ Opn รับต้องเท่ากับยอดที่เราคิดไว้ (สตางค์)
-    if (charge.amountSatang !== Math.round((pay.amount as number) * 100)) {
-      console.error("ยอดไม่ตรง", { paymentId: id, charge: charge.amountSatang, expected: pay.amount });
-      return NextResponse.json({ error: "ยอดชำระไม่ตรงกับรายการ กรุณาติดต่อเจ้าหน้าที่" }, { status: 409 });
-    }
-    const done = await fulfillPayment(db, paymentId);
-    if (done) {
-      pay = (await payments.findOne({ _id: paymentId })) ?? pay;
-      return paidResponse();
-    }
-  }
+  // เงื่อนไขสถานะอยู่ในคำสั่งลบเลย กันชนกับการส่งสลีปที่เข้ามาพร้อมกัน
+  const r = await db
+    .collection("payments")
+    .deleteOne({ _id: paymentId, userId, status: "awaiting_slip", slipId: null });
 
-  if (isDeadCharge(charge)) {
-    const status: PayStatus = charge.status === "expired" ? "expired" : "failed";
-    await payments.updateOne({ _id: paymentId, status: "pending" }, { $set: { status } });
-    return NextResponse.json({ status, expiresAt });
-  }
+  if (r.deletedCount === 1) return NextResponse.json({ ok: true });
 
-  return NextResponse.json({ status: "pending" as PayStatus, expiresAt });
+  const exists = await db.collection("payments").findOne({ _id: paymentId, userId }, { projection: { _id: 1 } });
+  if (!exists) return NextResponse.json({ error: "ไม่พบรายการชำระเงิน" }, { status: 404 });
+  return NextResponse.json({ error: "รายการนี้ส่งสลีปแล้ว ยกเลิกไม่ได้" }, { status: 409 });
 }

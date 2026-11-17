@@ -7,8 +7,14 @@ export const TICKET_PRICES = { booth: 10, lucky: 10 } as const;
 export type TicketId = keyof typeof TICKET_PRICES;
 export const MAX_QTY = 20;
 
-// อายุของรายการรอชำระเงิน (นาที) ใช้ทั้งหมดอายุ QR และนับถอยหลังบนหน้าเว็บ
-export const PAYMENT_TTL_MINUTES = 15;
+// เวลาที่ผู้ซื้อมีในการโอน + ส่งสลีป (นาที) นับใหม่ทุกครั้งที่ถูกปฏิเสธสลีป
+// พอส่งสลีปแล้ว (สถานะ reviewing) ไม่หมดอายุ รอ admin ตรวจกี่ชั่วโมงก็ได้
+export const PAYMENT_TTL_MINUTES = 60;
+export const MAX_SLIPS_PER_PAYMENT = 5; // ส่งสลีปได้กี่ครั้งต่อรายการ (กันรัวส่ง)
+
+export type PaymentStatus = "awaiting_slip" | "reviewing" | "approved" | "rejected" | "expired";
+// สถานะที่ยังค้างอยู่ (แสดงในหน้า "ตั๋วของฉัน")
+export const OPEN_STATUSES: PaymentStatus[] = ["awaiting_slip", "reviewing", "rejected"];
 
 export const isTicketId = (x: unknown): x is TicketId =>
   typeof x === "string" && Object.prototype.hasOwnProperty.call(TICKET_PRICES, x);
@@ -17,6 +23,9 @@ export function makeCode(ticket: TicketId) {
   const prefix = ticket === "booth" ? "BT" : "LD";
   return `PD-${prefix}-${randomBytes(4).toString("hex").toUpperCase()}`;
 }
+
+// รหัสอ้างอิงรายการ (ฝังใน QR เป็น Ref1 ไปโผล่ใน statement ธนาคาร) 10 ตัว A-Z 0-9
+export const makeRef = () => `PD${randomBytes(4).toString("hex").toUpperCase()}`;
 
 // แปลงเอกสารใน MongoDB เป็นรูปแบบที่หน้าเว็บใช้ (ไม่ส่ง _id / userId ออกไป)
 export function toOrder(d: WithId<Document>) {
@@ -32,10 +41,22 @@ export function toOrder(d: WithId<Document>) {
   };
 }
 
+// รายการโอนเงินในรูปแบบที่หน้าเว็บใช้ (qrUrl ใส่เพิ่มเองตอนต้องใช้)
+export function toPaymentInfo(p: WithId<Document>) {
+  return {
+    id: p._id.toString(),
+    amount: p.amount as number,
+    expiresAt: p.expiresAt as string,
+    ref: p.ref as string,
+    status: p.status as PaymentStatus,
+    rejectReason: (p.rejectReason as string | undefined) ?? undefined,
+  };
+}
+
 /* ---------- การชำระเงิน ---------- */
 
-// ตั๋วที่จะถูกออกหลังจ่ายสำเร็จ: สร้างรหัสและล็อกราคาไว้ตั้งแต่ตอนสร้างรายการรอจ่าย
-// เพื่อให้การออกตั๋วซ้ำ (polling กับ webhook ชนกัน) ได้รหัสเดิม และไม่เกิดตั๋วซ้ำ
+// ตั๋วที่จะถูกออกหลัง admin อนุมัติ: สร้างรหัสและล็อกราคาไว้ตั้งแต่ตอนสร้างรายการ
+// เพื่อให้การออกตั๋วซ้ำได้รหัสเดิม และไม่เกิดตั๋วซ้ำ
 export type PaymentTicket = { code: string; ticket: TicketId; price: number };
 
 export function buildPaymentLines(items: { ticket: TicketId; qty: number }[]) {
@@ -50,20 +71,25 @@ export function buildPaymentLines(items: { ticket: TicketId; qty: number }[]) {
   return { tickets, amount };
 }
 
-// ออกตั๋วหลังจ่ายสำเร็จ เรียกซ้ำได้ปลอดภัย (idempotent)
-// ใช้ทั้งตอน polling และ webhook: ตัวไหนมาถึงก่อนก็ออกตั๋ว อีกตัวจะไม่สร้างซ้ำ
+// รายการที่รอโอน/สลีปถูกปฏิเสธ แล้วเลยเวลา → หมดอายุ (เรียกก่อนอ่านรายการทุกครั้ง)
+export async function expireStale(db: Db, userId?: ObjectId) {
+  await db.collection("payments").updateMany(
+    {
+      ...(userId ? { userId } : {}),
+      status: { $in: ["awaiting_slip", "rejected"] },
+      expiresAt: { $lt: new Date().toISOString() },
+    },
+    { $set: { status: "expired" } },
+  );
+}
+
+// ออกตั๋วหลัง admin อนุมัติ เรียกซ้ำได้ปลอดภัย (idempotent)
 // คืน true เมื่อรายการนี้ออกตั๋วครบแล้ว
 export async function fulfillPayment(db: Db, paymentId: ObjectId): Promise<boolean> {
   const payments = db.collection("payments");
 
-  // เปลี่ยนเป็น paid ครั้งเดียว (รวมกรณีจ่ายหลังหมดเวลา ก็ออกตั๋วให้ตามที่ตกลงไว้)
-  await payments.updateOne(
-    { _id: paymentId, status: { $ne: "paid" } },
-    { $set: { status: "paid", paidAt: new Date().toISOString() } },
-  );
-
   const pay = await payments.findOne({ _id: paymentId });
-  if (!pay || pay.status !== "paid") return false;
+  if (!pay || pay.status !== "approved") return false;
   if (pay.fulfilled === true) return true;
 
   const tickets = pay.tickets as PaymentTicket[];
@@ -75,7 +101,7 @@ export async function fulfillPayment(db: Db, paymentId: ObjectId): Promise<boole
     name: pay.name as string,
     phone: pay.phone as string,
     price: t.price,
-    at: pay.paidAt as string,
+    at: (pay.approvedAt as string) ?? new Date().toISOString(),
     used: false,
   }));
 

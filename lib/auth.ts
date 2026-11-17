@@ -9,7 +9,7 @@ const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) =>
 export const COOKIE = "payday-session";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 วัน
 
-export type SessionUser = { id: string; username: string; name: string; phone: string };
+export type SessionUser = { id: string; username: string; name: string; phone: string; isAdmin?: boolean };
 
 /* ---------- validate ---------- */
 export const validUsername = (u: string) => /^[a-zA-Z0-9._]{3,20}$/.test(u);
@@ -58,6 +58,16 @@ export async function destroySession() {
   jar.delete(COOKIE);
 }
 
+// admin = user ที่มี role: "admin" ใน MongoDB หรือ username อยู่ใน ADMIN_USERNAMES (คั่นด้วย ,)
+function isAdminUser(u: Record<string, unknown>) {
+  if (u.role === "admin") return true;
+  const names = (process.env.ADMIN_USERNAMES ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return names.includes(String(u.username ?? "").toLowerCase());
+}
+
 export async function getSessionUser(): Promise<SessionUser | null> {
   const jar = await cookies();
   const raw = jar.get(COOKIE)?.value;
@@ -74,5 +84,13 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   const db = await getDb();
   const u = await db.collection("users").findOne({ _id: new ObjectId(userId) });
   if (!u) return null;
-  return { id: u._id.toString(), username: u.username, name: u.name, phone: u.phone };
+  return { id: u._id.toString(), username: u.username, name: u.name, phone: u.phone, isAdmin: isAdminUser(u) };
+}
+
+// ใช้ใน /api/admin/*: ok=false → ตอบ 401 (ยังไม่ login) หรือ 403 (ไม่ใช่ admin)
+export async function requireAdmin(): Promise<{ ok: true; user: SessionUser } | { ok: false; status: 401 | 403 }> {
+  const user = await getSessionUser().catch(() => null);
+  if (!user) return { ok: false, status: 401 };
+  if (!user.isAdmin) return { ok: false, status: 403 };
+  return { ok: true, user };
 }

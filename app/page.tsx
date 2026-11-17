@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Prompt } from "next/font/google";
 
@@ -93,19 +93,35 @@ type View = "home" | "buy" | "pay" | "qr" | "done" | "tickets" | "profile" | "au
 
 type Cart = Partial<Record<TicketId, number>>;
 
-// รายการชำระเงินที่รอจ่าย (มาจาก POST /api/orders)
-type Payment = { id: string; amount: number; expiresAt: string; qrUrl: string };
+// สถานะรายการโอนเงิน (ตรงกับ PaymentStatus ใน lib/tickets.ts)
+type PayStatus = "awaiting_slip" | "reviewing" | "approved" | "rejected" | "expired";
+
+// รายการโอนเงิน (มาจาก POST /api/orders, GET /api/orders และ GET /api/payments/[id])
+type Payment = {
+  id: string;
+  amount: number;
+  expiresAt: string;
+  ref: string;
+  status: PayStatus;
+  qrUrl?: string;
+  rejectReason?: string;
+};
 
 // ผลจาก GET /api/payments/[id]
-type PayPoll = {
-  status: "pending" | "paid" | "expired" | "failed";
-  expiresAt: string;
-  orders?: Order[];
-};
+type PayPoll = Payment & { orders?: Order[] };
 
 const MAX_QTY = 20; // จำนวนสูงสุดต่อตั๋ว 1 ประเภท ต่อการซื้อ 1 ครั้ง (กันกดพลาด)
 const CART_KEY = "payday-cart-v1";
-const POLL_MS = 3000; // เช็กสถานะการจ่ายทุกกี่มิลลิวินาที
+const SLIP_POLL_MS = 5000; // เช็กสถานะรายการโอนทุกกี่มิลลิวินาที
+const SWIPE_REVEAL = 88; // ความกว้างปุ่ม "ลบ" ที่โผล่ตอนปัดซ้าย (px)
+
+const STATUS_LABEL: Record<PayStatus, string> = {
+  awaiting_slip: "รอโอน / ส่งสลีป",
+  reviewing: "รอเจ้าหน้าที่ตรวจสลีป",
+  rejected: "สลีปไม่ผ่าน ส่งใหม่ได้",
+  approved: "อนุมัติแล้ว",
+  expired: "หมดเวลา",
+};
 
 /* ---------- helper ---------- */
 function load<T>(key: string, fallback: T): T {
@@ -128,7 +144,7 @@ function save(key: string, value: unknown) {
 // เรียก API ของเว็บ: สำเร็จคืน {ok:true,data} / ล้มเหลวคืน {ok:false,error,status}
 async function api<T = Record<string, unknown>>(
   url: string,
-  method: "GET" | "POST" | "PATCH" = "GET",
+  method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
   body?: unknown,
 ): Promise<{ ok: true; data: T } | { ok: false; error: string; status: number }> {
   try {
@@ -548,6 +564,105 @@ function Stepper({
   );
 }
 
+/* ---------- แถวที่ปัดซ้ายเพื่อลบ ----------
+   ปัดไปทางซ้ายจนปุ่มแดง "ลบ" โผล่ แล้วกดปุ่มเพื่อยืนยัน
+   แตะที่การ์ดตอนเปิดอยู่ = ปิดกลับ  ใช้ pointer events จึงลากด้วยเมาส์ได้เหมือนกัน */
+function SwipeRow({
+  children,
+  onDelete,
+  deleting = false,
+  label,
+}: {
+  children: ReactNode;
+  onDelete: () => void;
+  deleting?: boolean;
+  label: string;
+}) {
+  const [dx, setDx] = useState(0);
+  const [drag, setDrag] = useState(false);
+  const st = useRef({ x: 0, y: 0, base: 0, active: false, horizontal: false, moved: false });
+
+  const end = () => {
+    const s = st.current;
+    if (!s.active) return;
+    s.active = false;
+    setDrag(false);
+    if (s.horizontal) setDx((cur) => (cur <= -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0));
+  };
+
+  return (
+    <div className="relative overflow-hidden rounded-2xl">
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={deleting}
+        tabIndex={dx < 0 ? 0 : -1}
+        aria-hidden={dx >= 0}
+        aria-label={label}
+        style={{ width: SWIPE_REVEAL, opacity: dx < 0 ? (deleting ? 0.6 : 1) : 0 }}
+        className="absolute inset-y-0 right-0 flex items-center justify-center bg-red-600 text-sm font-bold text-white"
+      >
+        {deleting ? "กำลังลบ..." : "ลบ"}
+      </button>
+
+      <div
+        style={{
+          transform: `translateX(${dx}px)`,
+          transition: drag ? "none" : "transform 200ms ease",
+          touchAction: "pan-y",
+        }}
+        className="relative select-none"
+        onPointerDown={(e) => {
+          if (deleting) return;
+          const s = st.current;
+          s.x = e.clientX;
+          s.y = e.clientY;
+          s.base = dx <= -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0;
+          s.active = true;
+          s.horizontal = false;
+          s.moved = false;
+        }}
+        onPointerMove={(e) => {
+          const s = st.current;
+          if (!s.active) return;
+          const mx = e.clientX - s.x;
+          const my = e.clientY - s.y;
+          if (!s.horizontal) {
+            if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+            if (Math.abs(my) > Math.abs(mx)) {
+              s.active = false; // เลื่อนหน้าจอขึ้นลง ไม่ใช่การปัด
+              return;
+            }
+            s.horizontal = true;
+            s.moved = true;
+            setDrag(true);
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }
+          setDx(Math.max(-SWIPE_REVEAL, Math.min(0, s.base + mx)));
+        }}
+        onPointerUp={end}
+        onPointerCancel={end}
+        onClickCapture={(e) => {
+          const s = st.current;
+          if (s.moved) {
+            // เพิ่งลากเสร็จ ไม่นับเป็นการกด
+            s.moved = false;
+            e.preventDefault();
+            e.stopPropagation();
+          } else if (dx < 0) {
+            // เปิดอยู่แล้วแตะที่การ์ด = ปิด
+            e.preventDefault();
+            e.stopPropagation();
+            setDx(0);
+          }
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- ขั้นตอน 1-2-3 ---------- */
 function Steps({ current }: { current: 1 | 2 | 3 }) {
   const steps = ["เลือกตั๋ว", "ชำระเงิน", "รับตั๋ว"];
@@ -677,6 +792,275 @@ function CheckoutBar({ children, aboveNav = false }: { children: ReactNode; abov
   );
 }
 
+/* ---------- โอนเงิน + ส่งสลีป ---------- */
+
+// ย่อรูปใหญ่ก่อนส่ง (กันไฟล์ใหญ่เกินลิมิตของโฮสต์) รูปเล็กอยู่แล้วส่งตามเดิม
+async function shrinkImage(file: File): Promise<File> {
+  if (file.size <= 2.5 * 1024 * 1024) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 2200 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext("2d")?.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.9));
+    return blob ? new File([blob], "slip.jpg", { type: "image/jpeg" }) : file;
+  } catch {
+    return file;
+  }
+}
+
+function SlipPay({
+  paymentId,
+  onBack,
+  onPaid,
+  onNeedLogin,
+}: {
+  paymentId: string;
+  onBack: () => void;
+  onPaid: (orders: Order[]) => void;
+  onNeedLogin: () => void;
+}) {
+  const [pay, setPay] = useState<Payment | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [now, setNow] = useState(0);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [qrFailed, setQrFailed] = useState(false);
+
+  // เช็กสถานะทุก SLIP_POLL_MS: อนุมัติแล้ว → ไปหน้ารับตั๋วเอง
+  useEffect(() => {
+    let stopped = false;
+    let running = false;
+
+    const tick = async () => {
+      if (running || stopped) return;
+      running = true;
+      const r = await api<PayPoll>(`/api/payments/${paymentId}`);
+      running = false;
+      if (stopped) return;
+
+      if (!r.ok) {
+        if (r.status === 401) {
+          stopped = true;
+          onNeedLogin();
+        } else if (r.status === 404) {
+          stopped = true;
+          setLoadError("ไม่พบรายการชำระเงิน");
+        } else {
+          setLoadError(r.error); // เน็ตหลุดชั่วคราว ลองใหม่รอบถัดไปเอง
+        }
+        return;
+      }
+
+      setLoadError("");
+      const { orders, ...p } = r.data;
+      setPay(p);
+      if (p.status === "approved" && orders) {
+        stopped = true;
+        onPaid(orders);
+      } else if (p.status === "expired") {
+        stopped = true;
+      }
+    };
+
+    setNow(Date.now());
+    tick();
+    const poll = setInterval(tick, SLIP_POLL_MS);
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      stopped = true;
+      clearInterval(poll);
+      clearInterval(clock);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentId]);
+
+  // พรีวิวรูปที่เลือก
+  useEffect(() => {
+    if (!file) {
+      setPreview("");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  async function upload() {
+    if (!file || busy) return;
+    if (file.size > 25 * 1024 * 1024) return setErr("รูปใหญ่เกินไป เลือกรูปอื่น");
+    setBusy(true);
+    setErr("");
+    try {
+      const fd = new FormData();
+      fd.append("slip", await shrinkImage(file));
+      const res = await fetch(`/api/payments/${paymentId}/slip`, { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) return onNeedLogin();
+      if (!res.ok) return setErr(data.error ?? "ส่งสลีปไม่สำเร็จ ลองใหม่อีกครั้ง");
+      setFile(null);
+      setPay((p) => (p ? { ...p, status: "reviewing", rejectReason: undefined } : p));
+    } catch {
+      setErr("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const secsLeft = pay ? Math.max(0, Math.ceil((new Date(pay.expiresAt).getTime() - now) / 1000)) : 0;
+  const open = pay && (pay.status === "awaiting_slip" || pay.status === "rejected");
+
+  return (
+    <section aria-label="โอนเงินและส่งสลีป">
+      <SubHeader title="โอนเงินและส่งสลีป" onBack={onBack} />
+      <div className="mt-6">
+        <Steps current={2} />
+      </div>
+
+      {!pay && <p className="mt-6 text-sm text-[#4d6652]">{loadError || "กำลังโหลด..."}</p>}
+
+      {open && (
+        <>
+          {pay.status === "rejected" && (
+            <div role="alert" className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4">
+              <p className="text-sm font-bold text-red-700">สลีปไม่ผ่าน</p>
+              <p className="mt-1 text-sm text-red-700">{pay.rejectReason ?? "กรุณาตรวจสอบแล้วส่งสลีปใหม่"}</p>
+            </div>
+          )}
+
+          <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-5 text-center">
+            <p className="text-xs text-[#6b7f6f]">โอนตามยอดนี้เป๊ะ ๆ</p>
+            <p className="mt-1 text-4xl font-extrabold">{baht(pay.amount)}</p>
+
+            <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-[#e3ecd6] bg-white p-2">
+              {qrFailed || !pay.qrUrl ? (
+                <p className="px-4 text-sm text-red-600">แสดง QR ไม่ได้ ปิดหน้านี้แล้วเปิดใหม่</p>
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={pay.qrUrl}
+                  alt={`QR พร้อมเพย์ ยอด ${baht(pay.amount)}`}
+                  className="h-full w-full object-contain"
+                  onError={() => setQrFailed(true)}
+                />
+              )}
+            </div>
+
+            <p className="mt-3 text-sm text-[#4d6652]">สแกนด้วยแอปธนาคาร (ยอดและรหัสอ้างอิงอยู่ใน QR แล้ว)</p>
+            <p className="mt-1 text-xs text-[#6b7f6f]">
+              รหัสอ้างอิง <span className="font-mono font-bold text-[#14402c]">{pay.ref}</span>
+            </p>
+            {pay.qrUrl && (
+              <a
+                href={pay.qrUrl}
+                download={`payday-${pay.ref}.png`}
+                className="mt-3 inline-block rounded-full border border-[#14402c] px-4 py-2 text-xs font-semibold"
+              >
+                บันทึก QR ลงเครื่อง (สำหรับสแกนจากรูป)
+              </a>
+            )}
+            <p className="mt-3 text-sm font-bold">
+              {secsLeft > 0 ? `ส่งสลีปภายใน ${fmtCountdown(secsLeft)}` : "หมดเวลาแล้ว กำลังตรวจสอบ..."}
+            </p>
+          </div>
+
+          <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-5">
+            <h2 className="text-base font-bold">ส่งสลีปโอนเงิน</h2>
+            <p className="mt-1 text-xs text-[#6b7f6f]">
+              ใช้สลีปจากแอปธนาคาร ต้องเห็น QR บนสลีปชัด ไม่ครอป ไม่ตัดขอบ สลีป 1 ใบใช้ได้ครั้งเดียว
+            </p>
+
+            <label className="mt-3 flex min-h-40 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-[#b9cba6] bg-[#f1f7e9] p-3 text-center text-sm font-semibold text-[#4d6652] focus-within:ring-2 focus-within:ring-[#14402c]">
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="sr-only"
+                onChange={(e) => {
+                  setFile(e.target.files?.[0] ?? null);
+                  setErr("");
+                }}
+              />
+              {preview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={preview} alt="สลีปที่เลือก" className="max-h-72 rounded-xl object-contain" />
+              ) : (
+                "แตะเพื่อเลือกรูปสลีป"
+              )}
+            </label>
+
+            {err && (
+              <p role="alert" className="mt-3 text-sm font-medium text-red-600">
+                {err}
+              </p>
+            )}
+            {loadError && <p className="mt-2 text-xs text-red-600">{loadError}</p>}
+
+            <button
+              type="button"
+              onClick={upload}
+              disabled={!file || busy || secsLeft === 0}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy ? "กำลังส่งสลีป..." : "ส่งสลีป"}
+              {!busy && <IconArrow className="h-5 w-5 text-[#d9f27a]" />}
+            </button>
+          </div>
+        </>
+      )}
+
+      {pay?.status === "reviewing" && (
+        <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-6 text-center">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#d9f27a]">
+            <IconReceipt className="h-7 w-7" />
+          </span>
+          <h2 className="mt-4 text-xl font-bold">ส่งสลีปแล้ว รอตรวจสอบ</h2>
+          <p className="mt-2 text-sm text-[#4d6652]">
+            {baht(pay.amount)} · รหัส <span className="font-mono font-bold">{pay.ref}</span>
+          </p>
+          <p className="mt-2 text-sm text-[#4d6652]">
+            เจ้าหน้าที่อนุมัติแล้วตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” ปิดหน้านี้ได้เลย ไม่ต้องรอ
+          </p>
+          <button
+            type="button"
+            onClick={onBack}
+            className="mt-5 rounded-full bg-[#14402c] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+          >
+            ไปหน้าตั๋วของฉัน
+          </button>
+        </div>
+      )}
+
+      {pay?.status === "expired" && (
+        <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-6 text-center">
+          <h2 className="text-xl font-bold">หมดเวลาแล้ว</h2>
+          <p className="mt-2 text-sm text-[#4d6652]">
+            ถ้าโอนเงินไปแล้ว ติดต่อเจ้าหน้าที่พร้อมรหัสอ้างอิง <span className="font-mono font-bold">{pay.ref}</span>
+          </p>
+          <button
+            type="button"
+            onClick={onBack}
+            className="mt-5 rounded-full bg-[#14402c] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+          >
+            กลับ
+          </button>
+        </div>
+      )}
+
+      <div className="mt-4">
+        <InfoBox
+          icon={<IconInfo className="h-5 w-5" />}
+          title="ส่งสลีปแล้วรอสักครู่"
+          text="ปิดหน้านี้ได้ ตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” เมื่อเจ้าหน้าที่อนุมัติ"
+        />
+      </div>
+    </section>
+  );
+}
+
 /* ---------- หน้าหลัก ---------- */
 export default function Home() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -693,12 +1077,10 @@ export default function Home() {
   const [payError, setPayError] = useState("");
   const [payBusy, setPayBusy] = useState(false);
 
-  // QR พร้อมเพย์: รายการที่รอจ่าย + สถานะ + นาฬิกานับถอยหลัง
-  const [payment, setPayment] = useState<Payment | null>(null);
-  const [payStatus, setPayStatus] = useState<"pending" | "expired" | "failed">("pending");
-  const [pollNote, setPollNote] = useState("");
-  const [qrFailed, setQrFailed] = useState(false);
-  const [now, setNow] = useState(0);
+  // รายการโอนเงิน: id ของรายการที่เปิดอยู่ + รายการค้างทั้งหมด
+  const [paymentId, setPaymentId] = useState<string | null>(null);
+  const [pending, setPending] = useState<Payment[]>([]);
+  const [cancelingId, setCancelingId] = useState<string | null>(null); // รายการที่กำลังลบ
 
   // เข้าสู่ระบบ / สมัครสมาชิก
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -748,69 +1130,25 @@ export default function Home() {
     window.scrollTo({ top: 0 });
   }, [view]);
 
-  // เข้าหน้า "ตั๋วของฉัน" ให้โหลดตั๋วใหม่เสมอ
-  // (กรณีจ่ายแล้วปิดหน้า QR ไป ตั๋วถูกออกโดย webhook ฝั่งเซิร์ฟเวอร์ ต้องดึงมาแสดง)
+  // เข้าหน้า "ตั๋วของฉัน" ให้โหลดตั๋วใหม่เสมอ และโหลดซ้ำทุก 10 วิ
+  // (ตั๋วถูกออกตอน admin อนุมัติสลีป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง)
   useEffect(() => {
     if (view !== "tickets" || !user) return;
     let cancelled = false;
-    (async () => {
-      const r = await api<{ orders: Order[] }>("/api/orders");
-      if (r.ok && !cancelled) setOrders(r.data.orders);
-    })();
+    const loadTickets = async () => {
+      const r = await api<{ orders: Order[]; pending?: Payment[] }>("/api/orders");
+      if (r.ok && !cancelled) {
+        setOrders(r.data.orders);
+        setPending(r.data.pending ?? []);
+      }
+    };
+    loadTickets();
+    const t = setInterval(loadTickets, 10000);
     return () => {
       cancelled = true;
+      clearInterval(t);
     };
   }, [view, user]);
-
-  // หน้า QR: เช็กสถานะการจ่ายทุก POLL_MS + เดินนาฬิกานับถอยหลัง
-  useEffect(() => {
-    if (view !== "qr" || !payment) return;
-    let stopped = false;
-    let busy = false;
-    const paymentId = payment.id;
-
-    const tick = async () => {
-      if (busy || stopped) return;
-      busy = true;
-      const r = await api<PayPoll>(`/api/payments/${paymentId}`);
-      busy = false;
-      if (stopped) return;
-
-      if (!r.ok) {
-        if (r.status === 401) {
-          stopped = true;
-          setPayment(null);
-          needLogin("pay");
-        } else if (r.status === 404) {
-          stopped = true;
-          setPayStatus("failed");
-        } else {
-          setPollNote(r.error); // เน็ตหลุดชั่วคราว ลองใหม่รอบถัดไปเอง
-        }
-        return;
-      }
-
-      setPollNote("");
-      const d = r.data;
-      if (d.status === "paid" && d.orders) {
-        stopped = true;
-        finishPaid(d.orders);
-      } else if (d.status === "expired" || d.status === "failed") {
-        stopped = true;
-        setPayStatus(d.status);
-      }
-    };
-
-    tick();
-    const poll = setInterval(tick, POLL_MS);
-    const clock = setInterval(() => setNow(Date.now()), 1000);
-    return () => {
-      stopped = true;
-      clearInterval(poll);
-      clearInterval(clock);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, payment]);
 
   const defOf = (id: TicketId) => TICKETS.find((t) => t.id === id)!;
   const cartLines = TICKETS.flatMap((t) => {
@@ -824,10 +1162,6 @@ export default function Home() {
   const usedOrders = orders
     .filter((o) => o.used)
     .sort((a, b) => (b.usedAt ?? "").localeCompare(a.usedAt ?? ""));
-
-  const secsLeft = payment
-    ? Math.max(0, Math.ceil((new Date(payment.expiresAt).getTime() - now) / 1000))
-    : 0;
 
   function go(v: View) {
     setView(v);
@@ -887,7 +1221,8 @@ export default function Home() {
     await api("/api/auth/logout", "POST");
     setUser(null);
     setOrders([]);
-    setPayment(null);
+    setPaymentId(null);
+    setPending([]);
     setAccName("");
     setAccPhone("");
     setAccSaved(false);
@@ -919,18 +1254,18 @@ export default function Home() {
     go("pay");
   }
 
-  // จ่ายสำเร็จ (เซิร์ฟเวอร์ยืนยันกับ Opn แล้ว): เก็บตั๋ว ล้างตะกร้า ไปหน้ารับตั๋ว
+  // admin อนุมัติแล้ว (หน้าโอนเงินเห็นสถานะ approved): เก็บตั๋ว ล้างตะกร้า ไปหน้ารับตั๋ว
   function finishPaid(made: Order[]) {
     const codes = new Set(made.map((o) => o.code));
     setOrders((prev) => [...made, ...prev.filter((o) => !codes.has(o.code))]);
     setCart({});
     save(CART_KEY, {});
-    setPayment(null);
+    setPaymentId(null);
     setJustBought(made);
     setView("done");
   }
 
-  // กดยืนยัน: ขอ QR จากเซิร์ฟเวอร์ ตั๋วยังไม่ถูกออกจนกว่าจะจ่ายสำเร็จ
+  // กดยืนยัน: ขอ QR จากเซิร์ฟเวอร์ ตั๋วยังไม่ถูกออกจนกว่า admin จะอนุมัติสลีป
   async function confirmPay() {
     if (cartLines.length === 0 || payBusy) return;
     if (!user) return needLogin("pay");
@@ -945,8 +1280,8 @@ export default function Home() {
       return;
     }
 
-    // เซิร์ฟเวอร์คิดราคาเอง สร้างรายการรอจ่าย + QR PromptPay ผ่าน Opn
-    // ตั๋วถูกสร้างใน MongoDB หลัง Opn ยืนยันว่าจ่ายแล้วเท่านั้น (polling หรือ webhook)
+    // เซิร์ฟเวอร์คิดราคาเอง สร้างรายการรอโอน + QR พร้อมเพย์ (ยอด + รหัสอ้างอิงอยู่ใน QR)
+    // ตั๋วถูกสร้างใน MongoDB หลัง admin อนุมัติสลีปเท่านั้น
     setPayBusy(true);
     setPayError("");
     const r = await api<{ payment: Payment }>("/api/orders", "POST", {
@@ -961,18 +1296,37 @@ export default function Home() {
       return;
     }
 
-    setPayment(r.data.payment);
-    setPayStatus("pending");
-    setPollNote("");
-    setQrFailed(false);
-    setNow(Date.now());
+    setPaymentId(r.data.payment.id);
+    setCart({}); // สร้างรายการแล้ว ล้างตะกร้า กันซื้อซ้ำ
+    save(CART_KEY, {});
     setView("qr");
   }
 
-  // ออกจากหน้า QR (ยกเลิกการรอ) กลับไปหน้าสรุปรายการ
+  // ออกจากหน้าโอนเงิน: รายการยังค้างอยู่ ไปดู/ส่งสลีปต่อได้ที่ "ตั๋วของฉัน"
   function leaveQr() {
-    setPayment(null);
-    go("pay");
+    setPaymentId(null);
+    setTab("ready");
+    go("tickets");
+  }
+
+  // ปัดซ้ายแล้วกด "ลบ": ยกเลิกรายการที่ยังไม่ส่งสลีป (เซิร์ฟเวอร์ตรวจสถานะซ้ำอีกที)
+  async function cancelPayment(id: string) {
+    if (cancelingId) return;
+    setCancelingId(id);
+    const r = await api(`/api/payments/${id}`, "DELETE");
+    setCancelingId(null);
+    if (r.ok || (!r.ok && r.status === 404)) {
+      setPending((prev) => prev.filter((p) => p.id !== id));
+      return;
+    }
+    if (r.status === 401) return needLogin("tickets");
+    alert(r.error);
+    // สถานะอาจเปลี่ยนไปแล้ว (เช่นส่งสลีปจากเครื่องอื่น) โหลดรายการใหม่
+    const o = await api<{ orders: Order[]; pending?: Payment[] }>("/api/orders");
+    if (o.ok) {
+      setOrders(o.data.orders);
+      setPending(o.data.pending ?? []);
+    }
   }
 
   async function markUsed(code: string) {
@@ -1239,7 +1593,9 @@ export default function Home() {
                   <IconCheck className="h-3.5 w-3.5" />
                 </span>
               </div>
-              <p className="mt-2 text-xs text-[#6b7f6f]">กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน มีอายุ 15 นาที</p>
+              <p className="mt-2 text-xs text-[#6b7f6f]">
+                กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน โอนแล้วส่งสลีปภายใน 60 นาที รอเจ้าหน้าที่ตรวจสอบ
+              </p>
             </div>
 
             <CheckoutBar>
@@ -1268,77 +1624,17 @@ export default function Home() {
           </section>
         )}
 
-        {/* ===== ชำระเงิน (ขั้นที่ 2): สแกน QR ===== */}
-        {view === "qr" && payment && (
-          <section aria-label="สแกน QR ชำระเงิน">
-            <SubHeader title="สแกนเพื่อชำระเงิน" onBack={leaveQr} />
-            <div className="mt-6">
-              <Steps current={2} />
-            </div>
-
-            <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-5 text-center">
-              <p className="text-xs text-[#6b7f6f]">ยอดที่ต้องชำระ</p>
-              <p className="mt-1 text-4xl font-extrabold">{baht(payment.amount)}</p>
-
-              {payStatus === "pending" ? (
-                <>
-                  <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-[#e3ecd6] bg-white p-2">
-                    {qrFailed ? (
-                      <p className="px-4 text-sm text-red-600">แสดง QR ไม่ได้ กด “สร้าง QR ใหม่” ด้านล่าง</p>
-                    ) : (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={payment.qrUrl}
-                        alt={`QR PromptPay ยอด ${baht(payment.amount)}`}
-                        className="h-full w-full object-contain"
-                        onError={() => setQrFailed(true)}
-                      />
-                    )}
-                  </div>
-                  <p className="mt-4 text-sm text-[#4d6652]">เปิดแอปธนาคาร แล้วสแกน QR นี้เพื่อจ่ายเงิน</p>
-                  {secsLeft > 0 ? (
-                    <p className="mt-2 text-sm font-bold" aria-live="off">
-                      QR หมดอายุใน {fmtCountdown(secsLeft)}
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-sm font-bold text-[#a15c00]">หมดเวลาแล้ว กำลังตรวจสอบการชำระเงิน...</p>
-                  )}
-                  <p role="status" className="mt-3 flex items-center justify-center gap-2 text-xs text-[#6b7f6f]">
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-[#2f8f5b]" />
-                    รอรับการชำระเงิน
-                  </p>
-                  {pollNote && <p className="mt-2 text-xs text-red-600">{pollNote}</p>}
-                </>
-              ) : (
-                <div className="mt-4 rounded-2xl bg-[#f1f7e9] p-5">
-                  <p role="alert" className="text-base font-bold">
-                    {payStatus === "expired" ? "QR หมดอายุแล้ว" : "สร้างรายการชำระเงินไม่สำเร็จ"}
-                  </p>
-                  <p className="mt-1 text-sm text-[#4d6652]">
-                    ถ้าคุณจ่ายไปแล้ว ตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” ภายในไม่กี่นาที
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {payStatus !== "pending" || qrFailed ? (
-                <button
-                  type="button"
-                  onClick={leaveQr}
-                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99]"
-                >
-                  สร้าง QR ใหม่
-                  <IconArrow className="h-5 w-5 text-[#d9f27a]" />
-                </button>
-              ) : null}
-              <InfoBox
-                icon={<IconInfo className="h-5 w-5" />}
-                title="จ่ายแล้วรอสักครู่"
-                text="ระบบจะพาไปรับตั๋วอัตโนมัติ ถ้าปิดหน้านี้ไปก่อน ตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน”"
-              />
-            </div>
-          </section>
+        {/* ===== ชำระเงิน (ขั้นที่ 2): โอน + ส่งสลีป ===== */}
+        {view === "qr" && paymentId && (
+          <SlipPay
+            paymentId={paymentId}
+            onBack={leaveQr}
+            onPaid={finishPaid}
+            onNeedLogin={() => {
+              setPaymentId(null);
+              needLogin("tickets");
+            }}
+          />
         )}
 
         {/* ===== รับตั๋ว (ขั้นที่ 3) ===== */}
@@ -1426,6 +1722,52 @@ export default function Home() {
                 </button>
               ))}
             </div>
+
+            {user && tab === "ready" && pending.length > 0 && (
+              <div className="mt-5 space-y-3">
+                {pending.map((p) => {
+                  const card = (
+                    <div className="rounded-2xl border border-dashed border-[#14402c]/40 bg-white p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold">
+                            รายการ {p.ref} · {baht(p.amount)}
+                          </p>
+                          <p className="mt-0.5 text-xs text-[#6b7f6f]">{STATUS_LABEL[p.status]}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaymentId(p.id);
+                            go("qr");
+                          }}
+                          className="shrink-0 rounded-full bg-[#14402c] px-4 py-2 text-xs font-bold text-white transition active:scale-95"
+                        >
+                          {p.status === "reviewing" ? "ดูสถานะ" : "ส่งสลีป"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+
+                  // ปัดซ้ายลบได้เฉพาะรายการที่ยังไม่ได้ส่งสลีป
+                  return p.status === "awaiting_slip" ? (
+                    <SwipeRow
+                      key={p.id}
+                      label={`ลบรายการ ${p.ref}`}
+                      deleting={cancelingId === p.id}
+                      onDelete={() => cancelPayment(p.id)}
+                    >
+                      {card}
+                    </SwipeRow>
+                  ) : (
+                    <div key={p.id}>{card}</div>
+                  );
+                })}
+                {pending.some((p) => p.status === "awaiting_slip") && (
+                  <p className="px-1 text-xs text-[#6b7f6f]">ปัดรายการที่ยังไม่ส่งสลีปไปทางซ้าย เพื่อยกเลิก</p>
+                )}
+              </div>
+            )}
 
             {ready && !user && (
               <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center">
