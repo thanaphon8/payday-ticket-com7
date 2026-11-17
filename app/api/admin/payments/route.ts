@@ -3,11 +3,13 @@ import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { requireAdmin } from "@/lib/auth";
 import { expireStale, type PaymentTicket } from "@/lib/tickets";
+import type { SlipCheck } from "@/lib/slipOcr";
 
 const LISTABLE = ["reviewing", "approved", "rejected"] as const;
 
 // รายการสำหรับหน้า admin: ?status=reviewing (ค่าเริ่มต้น) | approved | rejected
 // คืน { counts: { reviewing, approved, rejected }, payments: [...] }
+// slip.check = ผล OCR เทียบกับรายการ (null = สลีปเก่าที่ยังไม่เคยตรวจ)
 export async function GET(req: Request) {
   const guard = await requireAdmin();
   if (!guard.ok) return NextResponse.json({ error: guard.status === 401 ? "กรุณาเข้าสู่ระบบ" : "ไม่มีสิทธิ์" }, { status: guard.status });
@@ -50,7 +52,13 @@ export async function GET(req: Request) {
       booth: tickets.filter((t) => t.ticket === "booth").length,
       lucky: tickets.filter((t) => t.ticket === "lucky").length,
       rejectReason: (d.rejectReason as string | undefined) ?? null,
-      slip: slip ? { transRef: slip.transRef as string, sendingBank: slip.sendingBank as string } : null,
+      slip: slip
+        ? {
+            transRef: slip.transRef as string,
+            sendingBank: slip.sendingBank as string,
+            check: (slip.check as SlipCheck | undefined) ?? null,
+          }
+        : null,
     };
   });
 

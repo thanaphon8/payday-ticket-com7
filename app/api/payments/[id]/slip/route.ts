@@ -4,14 +4,20 @@ import { getDb } from "@/lib/mongodb";
 import { getSessionUser } from "@/lib/auth";
 import { MAX_SLIPS_PER_PAYMENT, expireStale } from "@/lib/tickets";
 import { compressSlip, readSlip } from "@/lib/slip";
+import { checkSlip, ocrSlip } from "@/lib/slipOcr";
 import { uploadSlip } from "@/lib/drive";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const OK_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
+// โหมดทดสอบ: ALLOW_DUP_SLIP=1 ใน .env = ใช้สลีปใบเดิมซ้ำได้ (ไม่เช็กว่าเคยใช้) และไม่เช็กว่าเวลาโอนต้องหลังสร้างรายการ
+// ก่อนขึ้นใช้งานจริง ลบบรรทัดนี้ออกจาก .env แล้วรีสตาร์ท ระบบจะกลับมากันสลีปซ้ำเหมือนเดิม
+const allowDupSlip = () => process.env.ALLOW_DUP_SLIP === "1";
+
 // รับสลีป (multipart field "slip"):
 // 1) อ่าน QR บนสลีป → ได้ transRef  2) กันสลีปซ้ำด้วย unique index  3) เก็บรูปลง Drive
-// 4) เปลี่ยนสถานะเป็น reviewing รอ admin อนุมัติ
+// 4) OCR อ่านยอด/ผู้รับ/เวลาโอน เทียบกับรายการ เก็บผลไว้ใน slips.check ให้ admin ดู
+// 5) เปลี่ยนสถานะเป็น reviewing รอ admin อนุมัติ
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionUser().catch(() => null);
   if (!user) return NextResponse.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
@@ -52,12 +58,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     );
 
   // จองเลขอ้างอิงสลีปก่อน (unique index ชนกัน = สลีปนี้เคยถูกใช้ ไม่ว่าของรายการไหน)
+  // โหมดทดสอบ: ต่อ slipId ท้าย key ให้ไม่ชนกัน
+  const dup = allowDupSlip();
   const slipId = new ObjectId();
   const nowIso = new Date().toISOString();
   try {
     await slips.insertOne({
       _id: slipId,
-      key: `${info.sendingBank}-${info.transRef}`,
+      key: dup ? `${info.sendingBank}-${info.transRef}-${slipId.toString()}` : `${info.sendingBank}-${info.transRef}`,
       sendingBank: info.sendingBank,
       transRef: info.transRef,
       paymentId,
@@ -73,9 +81,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   try {
-    const jpg = await compressSlip(raw);
-    const fileId = await uploadSlip(db, `${pay.ref}-${slipId.toString()}.jpg`, jpg);
-    await slips.updateOne({ _id: slipId }, { $set: { fileId } });
+    // เก็บรูปลง Drive กับ OCR ทำพร้อมกัน (ocrSlip ไม่โยน error ถ้าอ่านไม่ได้จะได้ค่าว่าง)
+    const [fileId, ocr] = await Promise.all([
+      (async () => {
+        const jpg = await compressSlip(raw);
+        return uploadSlip(db, `${pay.ref}-${slipId.toString()}.jpg`, jpg);
+      })(),
+      ocrSlip(raw),
+    ]);
+    const check = checkSlip(ocr, {
+      amount: pay.amount as number,
+      since: dup ? "1970-01-01T00:00:00.000Z" : (pay.createdAt as string),
+    });
+    await slips.updateOne({ _id: slipId }, { $set: { fileId, check } });
   } catch (e) {
     console.error("อัปสลีปขึ้น Drive ไม่สำเร็จ:", e);
     await slips.deleteOne({ _id: slipId }); // ปล่อยให้ผู้ใช้ส่งใบเดิมซ้ำได้

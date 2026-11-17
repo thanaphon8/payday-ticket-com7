@@ -343,7 +343,7 @@ function HeroArt() {
   return (
     <svg
       viewBox="0 0 967 496"
-      className="absolute inset-x-0 bottom-0 h-auto w-full"
+      className="absolute inset-x-0 bottom-0 h-auto w-full md:left-auto md:w-1/2"
       aria-hidden
     >
       {/* ดาวและจุดประดับ */}
@@ -681,7 +681,7 @@ function Steps({ current }: { current: 1 | 2 | 3 }) {
             >
               {done ? <IconCheck className="h-3.5 w-3.5" /> : n}
             </span>
-            <span className={`text-xs ${active ? "font-bold text-[#14402c]" : "text-[#6b7f6f]"}`}>{s}</span>
+            <span className={`text-xs md:text-sm ${active ? "font-bold text-[#14402c]" : "text-[#6b7f6f]"}`}>{s}</span>
           </li>
         );
       })}
@@ -705,7 +705,7 @@ function SubHeader({ title, onBack }: { title: string; onBack?: () => void }) {
       ) : (
         <span className="h-11 w-0" />
       )}
-      <h1 className="text-xl font-semibold text-[#14402c]">{title}</h1>
+      <h1 className="text-xl font-semibold text-[#14402c] md:text-2xl">{title}</h1>
     </div>
   );
 }
@@ -722,7 +722,7 @@ function InfoBox({ icon, title, text }: { icon: ReactNode; title: string; text: 
   );
 }
 
-/* ---------- Bottom nav ---------- */
+/* ---------- เมนูหลัก ---------- */
 type Badges = Partial<Record<View, number>>;
 
 const NAV: { id: View; label: string; icon: ReactNode }[] = [
@@ -732,6 +732,7 @@ const NAV: { id: View; label: string; icon: ReactNode }[] = [
   { id: "profile", label: "โปรไฟล์", icon: <IconUser /> },
 ];
 
+// มือถือ: แถบล่าง (ซ่อนบนจอ md ขึ้นไป)
 function BottomNav({
   view,
   badges,
@@ -744,7 +745,7 @@ function BottomNav({
   return (
     <nav
       aria-label="เมนูหลัก"
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-[#e3ecd6] bg-white pb-[env(safe-area-inset-bottom)]"
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-[#e3ecd6] bg-white pb-[env(safe-area-inset-bottom)] md:hidden"
     >
       <ul className="mx-auto grid max-w-md grid-cols-4 px-2 py-2">
         {NAV.map((n) => {
@@ -779,15 +780,110 @@ function BottomNav({
   );
 }
 
-/* ---------- แถบด้านล่างสำหรับหน้าขั้นตอนซื้อ ---------- */
+// คอมพิวเตอร์/แท็บเล็ต: แถบบน (แสดงตั้งแต่จอ md ขึ้นไป)
+function TopNav({
+  view,
+  badges,
+  user,
+  ready,
+  onGo,
+  onLogin,
+}: {
+  view: View;
+  badges: Badges;
+  user: User | null;
+  ready: boolean;
+  onGo: (v: View) => void;
+  onLogin: () => void;
+}) {
+  return (
+    <header className="sticky top-0 z-40 hidden border-b border-[#e3ecd6] bg-white/90 backdrop-blur md:block">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-8 py-3">
+        <button
+          type="button"
+          onClick={() => onGo("home")}
+          aria-label="ไปหน้าหลัก"
+          className="flex items-center gap-3 text-left"
+        >
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#14402c] text-[#d9f27a]">
+            <IconTicket />
+          </span>
+          <span>
+            <span className="block text-xl font-bold lowercase leading-none">{EVENT.name}</span>
+            <span className="mt-1 block text-[11px] text-[#4d6652]">{EVENT.tagline}</span>
+          </span>
+        </button>
+
+        <nav aria-label="เมนูหลักบนคอมพิวเตอร์">
+          <ul className="flex items-center gap-1">
+            {NAV.filter((n) => n.id !== "profile").map((n) => {
+              const active = view === n.id;
+              const badge = badges[n.id] ?? 0;
+              return (
+                <li key={n.id}>
+                  <button
+                    type="button"
+                    onClick={() => onGo(n.id)}
+                    aria-current={active ? "page" : undefined}
+                    className={`flex items-center gap-2 rounded-full px-4 py-2 text-sm transition ${
+                      active ? "bg-[#d9f27a] font-bold" : "font-medium text-[#4d6652] hover:bg-[#e3ecd6]"
+                    }`}
+                  >
+                    {n.label}
+                    {badge > 0 && (
+                      <span className="min-w-5 rounded-full bg-[#14402c] px-1.5 text-center text-[11px] leading-5 text-white">
+                        {badge}
+                      </span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+
+        <div className="flex min-w-[8rem] justify-end">
+          {ready && user && (
+            <button
+              type="button"
+              onClick={() => onGo("profile")}
+              aria-label="โปรไฟล์"
+              aria-current={view === "profile" ? "page" : undefined}
+              className={`flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-4 text-sm font-semibold transition ${
+                view === "profile" ? "bg-[#d9f27a]" : "bg-[#e3ecd6] hover:bg-[#d6e3c5]"
+              }`}
+            >
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#14402c] text-sm font-bold uppercase text-[#d9f27a]">
+                {(user.name || user.username).charAt(0)}
+              </span>
+              <span className="max-w-[10rem] truncate">{user.name}</span>
+            </button>
+          )}
+          {ready && !user && (
+            <button
+              type="button"
+              onClick={onLogin}
+              className="rounded-full bg-[#14402c] px-5 py-2.5 text-sm font-bold text-white transition hover:opacity-90"
+            >
+              เข้าสู่ระบบ
+            </button>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/* ---------- แถบสรุปยอด ----------
+   มือถือ: ติดขอบล่างจอ  /  จอใหญ่: เป็นการ์ดลอยอยู่คอลัมน์ขวา (sticky) */
 function CheckoutBar({ children, aboveNav = false }: { children: ReactNode; aboveNav?: boolean }) {
   return (
     <div
-      className={`fixed inset-x-0 z-40 rounded-t-3xl border-t border-[#e3ecd6] bg-white shadow-[0_-8px_24px_rgba(20,64,44,0.08)] ${
+      className={`fixed inset-x-0 z-40 rounded-t-3xl border-t border-[#e3ecd6] bg-white shadow-[0_-8px_24px_rgba(20,64,44,0.08)] md:sticky md:inset-x-auto md:bottom-auto md:top-24 md:z-10 md:rounded-3xl md:border md:pb-0 md:shadow-[0_2px_12px_rgba(20,64,44,0.08)] ${
         aboveNav ? "bottom-[calc(4rem+env(safe-area-inset-bottom))]" : "bottom-0 pb-[env(safe-area-inset-bottom)]"
       }`}
     >
-      <div className="mx-auto w-full max-w-md px-5 py-4">{children}</div>
+      <div className="mx-auto w-full max-w-md px-5 py-4 md:max-w-none md:px-6 md:py-6">{children}</div>
     </div>
   );
 }
@@ -915,7 +1011,7 @@ function SlipPay({
   const open = pay && (pay.status === "awaiting_slip" || pay.status === "rejected");
 
   return (
-    <section aria-label="โอนเงินและส่งสลีป">
+    <section aria-label="โอนเงินและส่งสลีป" className="md:mx-auto md:max-w-4xl">
       <SubHeader title="โอนเงินและส่งสลีป" onBack={onBack} />
       <div className="mt-6">
         <Steps current={2} />
@@ -924,19 +1020,19 @@ function SlipPay({
       {!pay && <p className="mt-6 text-sm text-[#4d6652]">{loadError || "กำลังโหลด..."}</p>}
 
       {open && (
-        <>
+        <div className="md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-6">
           {pay.status === "rejected" && (
-            <div role="alert" className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4">
+            <div role="alert" className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 md:col-span-2 md:mt-0">
               <p className="text-sm font-bold text-red-700">สลีปไม่ผ่าน</p>
               <p className="mt-1 text-sm text-red-700">{pay.rejectReason ?? "กรุณาตรวจสอบแล้วส่งสลีปใหม่"}</p>
             </div>
           )}
 
-          <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-5 text-center">
+          <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-5 text-center md:mt-0 md:p-6">
             <p className="text-xs text-[#6b7f6f]">โอนตามยอดนี้เป๊ะ ๆ</p>
             <p className="mt-1 text-4xl font-extrabold">{baht(pay.amount)}</p>
 
-            <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-[#e3ecd6] bg-white p-2">
+            <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-[#e3ecd6] bg-white p-2 md:max-w-[19rem]">
               {qrFailed || !pay.qrUrl ? (
                 <p className="px-4 text-sm text-red-600">แสดง QR ไม่ได้ ปิดหน้านี้แล้วเปิดใหม่</p>
               ) : (
@@ -968,13 +1064,13 @@ function SlipPay({
             </p>
           </div>
 
-          <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-5">
+          <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-5 md:mt-0 md:p-6">
             <h2 className="text-base font-bold">ส่งสลีปโอนเงิน</h2>
             <p className="mt-1 text-xs text-[#6b7f6f]">
               ใช้สลีปจากแอปธนาคาร ต้องเห็น QR บนสลีปชัด ไม่ครอป ไม่ตัดขอบ สลีป 1 ใบใช้ได้ครั้งเดียว
             </p>
 
-            <label className="mt-3 flex min-h-40 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-[#b9cba6] bg-[#f1f7e9] p-3 text-center text-sm font-semibold text-[#4d6652] focus-within:ring-2 focus-within:ring-[#14402c]">
+            <label className="mt-3 flex min-h-40 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-[#b9cba6] bg-[#f1f7e9] p-3 text-center text-sm font-semibold text-[#4d6652] focus-within:ring-2 focus-within:ring-[#14402c] md:min-h-56">
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
@@ -986,7 +1082,7 @@ function SlipPay({
               />
               {preview ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={preview} alt="สลีปที่เลือก" className="max-h-72 rounded-xl object-contain" />
+                <img src={preview} alt="สลีปที่เลือก" className="max-h-72 rounded-xl object-contain md:max-h-96" />
               ) : (
                 "แตะเพื่อเลือกรูปสลีป"
               )}
@@ -1009,11 +1105,11 @@ function SlipPay({
               {!busy && <IconArrow className="h-5 w-5 text-[#d9f27a]" />}
             </button>
           </div>
-        </>
+        </div>
       )}
 
       {pay?.status === "reviewing" && (
-        <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-6 text-center">
+        <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-6 text-center md:mx-auto md:max-w-xl md:p-8">
           <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#d9f27a]">
             <IconReceipt className="h-7 w-7" />
           </span>
@@ -1035,7 +1131,7 @@ function SlipPay({
       )}
 
       {pay?.status === "expired" && (
-        <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-6 text-center">
+        <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-6 text-center md:mx-auto md:max-w-xl md:p-8">
           <h2 className="text-xl font-bold">หมดเวลาแล้ว</h2>
           <p className="mt-2 text-sm text-[#4d6652]">
             ถ้าโอนเงินไปแล้ว ติดต่อเจ้าหน้าที่พร้อมรหัสอ้างอิง <span className="font-mono font-bold">{pay.ref}</span>
@@ -1050,7 +1146,7 @@ function SlipPay({
         </div>
       )}
 
-      <div className="mt-4">
+      <div className="mt-4 md:mx-auto md:mt-6 md:max-w-xl">
         <InfoBox
           icon={<IconInfo className="h-5 w-5" />}
           title="ส่งสลีปแล้วรอสักครู่"
@@ -1129,6 +1225,19 @@ export default function Home() {
   useEffect(() => {
     window.scrollTo({ top: 0 });
   }, [view]);
+
+  // กด Esc ปิดหน้าต่างแสดงตั๋ว (คอมพิวเตอร์)
+  useEffect(() => {
+    if (!sheet) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSheet(null);
+        setConfirmCode(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sheet]);
 
   // เข้าหน้า "ตั๋วของฉัน" ให้โหลดตั๋วใหม่เสมอ และโหลดซ้ำทุก 10 วิ
   // (ตั๋วถูกออกตอน admin อนุมัติสลีป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง)
@@ -1309,7 +1418,7 @@ export default function Home() {
     go("tickets");
   }
 
-  // ปัดซ้ายแล้วกด "ลบ": ยกเลิกรายการที่ยังไม่ส่งสลีป (เซิร์ฟเวอร์ตรวจสถานะซ้ำอีกที)
+  // ปัดซ้ายแล้วกด "ลบ" (หรือกดปุ่ม "ยกเลิก" บนคอมพิวเตอร์): ยกเลิกรายการที่ยังไม่ส่งสลีป (เซิร์ฟเวอร์ตรวจสถานะซ้ำอีกที)
   async function cancelPayment(id: string) {
     if (cancelingId) return;
     setCancelingId(id);
@@ -1380,16 +1489,28 @@ export default function Home() {
   const sheetOrders = sheet ? readyOrders.filter((o) => o.ticket === sheet) : [];
 
   return (
-    <div className={`min-h-screen bg-[#f1f7e9] text-[#14402c] ${appFont.className}`}>
+    <div
+      className={`min-h-screen bg-[#f1f7e9] text-[#14402c] [&_button:disabled]:cursor-not-allowed [&_button:not(:disabled)]:cursor-pointer ${appFont.className}`}
+    >
+      {/* แถบเมนูบน (เฉพาะแท็บเล็ต/คอมพิวเตอร์) */}
+      <TopNav
+        view={navView}
+        badges={badges}
+        user={user}
+        ready={ready}
+        onGo={go}
+        onLogin={() => needLogin("home")}
+      />
+
       <main
-        className={`mx-auto w-full max-w-md px-5 pt-6 ${
+        className={`mx-auto w-full max-w-md px-5 pt-6 md:max-w-6xl md:px-8 md:pb-16 md:pt-8 ${
           view === "buy" ? "pb-64" : showNav ? "pb-28" : view === "done" || view === "qr" ? "pb-10" : "pb-64"
         }`}
       >
         {/* ===== หน้าหลัก ===== */}
         {view === "home" && (
           <>
-            <header className="flex items-center justify-between">
+            <header className="flex items-center justify-between md:hidden">
               <div className="flex items-center gap-3">
                 <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#14402c] text-[#d9f27a]">
                   <IconTicket />
@@ -1419,21 +1540,23 @@ export default function Home() {
               )}
             </header>
 
-            <section className="relative mt-6 overflow-hidden rounded-3xl bg-[#14402c] p-5 text-white">
-              <p className="text-[11px] font-bold tracking-wider text-[#d9f27a]">PAYDAY IS PLAY DAY</p>
-              <h2 className="mt-3 text-3xl font-bold leading-tight">
-                เงินเดือนออกแล้ว
-                <br />
-                ออกมาเล่นกัน!
-              </h2>
-              <p className="mt-4 inline-flex items-center rounded-full bg-[#d9f27a] px-3 py-1.5 text-xs font-bold text-[#14402c]">
-                {EVENT.pill}
-              </p>
-              <div className="aspect-[967/496]" />
+            <section className="relative mt-6 overflow-hidden rounded-3xl bg-[#14402c] p-5 text-white md:mt-0 md:flex md:min-h-[20rem] md:items-center md:p-12">
+              <div className="md:max-w-[50%]">
+                <p className="text-[11px] font-bold tracking-wider text-[#d9f27a] md:text-xs">PAYDAY IS PLAY DAY</p>
+                <h2 className="mt-3 text-3xl font-bold leading-tight md:text-4xl lg:text-5xl">
+                  เงินเดือนออกแล้ว
+                  <br />
+                  ออกมาเล่นกัน!
+                </h2>
+                <p className="mt-4 inline-flex items-center rounded-full bg-[#d9f27a] px-3 py-1.5 text-xs font-bold text-[#14402c] md:mt-6 md:text-sm">
+                  {EVENT.pill}
+                </p>
+              </div>
+              <div className="aspect-[967/496] md:hidden" />
               <HeroArt />
             </section>
 
-            <div className="mt-3 flex items-center justify-between px-1 text-sm">
+            <div className="mt-3 flex items-center justify-between px-1 text-sm md:mt-4 md:text-base">
               <span className="flex items-center gap-2">
                 <IconPin className="h-4 w-4 text-[#2f8f5b]" />
                 {EVENT.place}
@@ -1442,41 +1565,41 @@ export default function Home() {
                 href={mapUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs font-semibold underline-offset-2 hover:underline"
+                className="text-xs font-semibold underline-offset-2 hover:underline md:text-sm"
               >
                 ดูแผนที่ ↗
               </a>
             </div>
 
-            <section aria-label="เลือกประเภทตั๋ว" className="mt-8">
-              <h2 className="text-xl font-bold">วันนี้อยากสนุกแบบไหน?</h2>
-              <p className="mt-1 text-sm text-[#4d6652]">เลือกตั๋วที่ใช่ แล้วไปสนุกกันเลย</p>
-              <div className="mt-4 grid grid-cols-2 gap-3">
+            <section aria-label="เลือกประเภทตั๋ว" className="mt-8 md:mt-12">
+              <h2 className="text-xl font-bold md:text-2xl">วันนี้อยากสนุกแบบไหน?</h2>
+              <p className="mt-1 text-sm text-[#4d6652] md:text-base">เลือกตั๋วที่ใช่ แล้วไปสนุกกันเลย</p>
+              <div className="mt-4 grid grid-cols-2 gap-3 md:mt-6 md:gap-6">
                 {TICKETS.map((t) => (
                   <button
                     key={t.id}
                     type="button"
                     onClick={() => pick(t.id)}
                     aria-label={`${t.title} ${baht(t.price)} ต่อใบ`}
-                    className="block text-left transition active:scale-[0.98]"
+                    className="block text-left transition active:scale-[0.98] md:hover:-translate-y-0.5"
                   >
                     <Perforated
                       bg={t.card}
                       dash="border-[#14402c]/35"
                       top={
-                        <div className="px-4 pb-3 pt-4">
-                          {iconOf(t.id, "h-6 w-6")}
-                          <p className="mt-2 text-lg font-bold leading-tight">{t.title}</p>
-                          <p className="mt-1 text-xs">{t.homeNote}</p>
+                        <div className="px-4 pb-3 pt-4 md:px-6 md:pb-4 md:pt-6">
+                          {iconOf(t.id, "h-6 w-6 md:h-8 md:w-8")}
+                          <p className="mt-2 text-lg font-bold leading-tight md:text-2xl">{t.title}</p>
+                          <p className="mt-1 text-xs md:text-sm">{t.homeNote}</p>
                         </div>
                       }
                       bottom={
-                        <div className="flex w-full items-end justify-between px-4 pb-4 pt-3">
-                          <p className="text-3xl font-extrabold">
+                        <div className="flex w-full items-end justify-between px-4 pb-4 pt-3 md:px-6 md:pb-6 md:pt-4">
+                          <p className="text-3xl font-extrabold md:text-4xl">
                             {baht(t.price)}
                             <span className="text-xs font-medium"> / ใบ</span>
                           </p>
-                          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#14402c] text-white">
+                          <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#14402c] text-white md:h-11 md:w-11">
                             <IconArrow className="h-5 w-5" />
                           </span>
                         </div>
@@ -1486,11 +1609,11 @@ export default function Home() {
                 ))}
               </div>
 
-              <div className="mt-3 flex items-center gap-3 rounded-2xl bg-white p-4">
+              <div className="mt-3 flex items-center gap-3 rounded-2xl bg-white p-4 md:mt-6 md:p-5">
                 <IconSpark className="h-7 w-7 shrink-0 text-[#2f8f5b]" />
                 <div>
-                  <p className="text-sm font-bold">ความโชคดีอาจเป็นของคุณ!</p>
-                  <p className="mt-0.5 text-xs text-[#4d6652]">ซื้อ Lucky Draw แล้วรอลุ้นพร้อมกัน</p>
+                  <p className="text-sm font-bold md:text-base">ความโชคดีอาจเป็นของคุณ!</p>
+                  <p className="mt-0.5 text-xs text-[#4d6652] md:text-sm">ซื้อ Lucky Draw แล้วรอลุ้นพร้อมกัน</p>
                 </div>
               </div>
             </section>
@@ -1505,49 +1628,72 @@ export default function Home() {
               <Steps current={1} />
             </div>
 
-            <h2 className="mt-8 text-2xl font-bold">พร้อมสนุกกี่ใบดี?</h2>
-            <p className="mt-1 text-sm text-[#4d6652]">เลือกจำนวนตั๋วทั้ง 2 แบบในครั้งเดียว</p>
+            <h2 className="mt-8 text-2xl font-bold md:text-3xl">พร้อมสนุกกี่ใบดี?</h2>
+            <p className="mt-1 text-sm text-[#4d6652] md:text-base">เลือกจำนวนตั๋วทั้ง 2 แบบในครั้งเดียว</p>
 
-            <div className="mt-5 space-y-4">
-              {TICKETS.map((t) => {
-                const q = cart[t.id] ?? 0;
-                return (
-                  <Perforated
-                    key={t.id}
-                    bg={t.card}
-                    dash="border-[#14402c]/35"
-                    top={
-                      <div className="p-4">
-                        <div className="flex items-center gap-3">
-                          <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
-                            {iconOf(t.id, "h-6 w-6")}
-                          </span>
-                          <div>
-                            <p className="text-lg font-bold leading-tight">{t.title}</p>
-                            <p className="text-[10px] font-semibold tracking-widest text-[#14402c]/70">{t.sub}</p>
+            <div className="md:mt-6 md:grid md:grid-cols-[minmax(0,1fr)_22rem] md:items-start md:gap-8">
+              <div className="mt-5 flex flex-col gap-4 md:mt-0 md:grid md:grid-cols-2">
+                {TICKETS.map((t) => {
+                  const q = cart[t.id] ?? 0;
+                  return (
+                    <Perforated
+                      key={t.id}
+                      bg={t.card}
+                      dash="border-[#14402c]/35"
+                      top={
+                        <div className="p-4">
+                          <div className="flex items-center gap-3">
+                            <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
+                              {iconOf(t.id, "h-6 w-6")}
+                            </span>
+                            <div>
+                              <p className="text-lg font-bold leading-tight">{t.title}</p>
+                              <p className="text-[10px] font-semibold tracking-widest text-[#14402c]/70">{t.sub}</p>
+                            </div>
                           </div>
+                          <p className="mt-4 text-sm text-[#14402c]/80">{t.blurb}</p>
                         </div>
-                        <p className="mt-4 text-sm text-[#14402c]/80">{t.blurb}</p>
-                      </div>
-                    }
-                    bottom={
-                      <div className="flex items-center justify-between px-4 pb-4 pt-3">
-                        <p className="text-3xl font-extrabold">
-                          {baht(t.price)}
-                          <span className="text-xs font-medium text-[#14402c]/70"> / ใบ</span>
-                        </p>
-                        <Stepper value={q} max={MAX_QTY} name={t.title} onChange={(n) => setQty(t.id, n)} />
-                      </div>
-                    }
-                  />
-                );
-              })}
+                      }
+                      bottom={
+                        <div className="flex items-center justify-between gap-2 px-4 pb-4 pt-3">
+                          <p className="text-3xl font-extrabold">
+                            {baht(t.price)}
+                            <span className="text-xs font-medium text-[#14402c]/70"> / ใบ</span>
+                          </p>
+                          <Stepper value={q} max={MAX_QTY} name={t.title} onChange={(n) => setQty(t.id, n)} />
+                        </div>
+                      }
+                    />
+                  );
+                })}
 
-              <InfoBox
-                icon={<IconShield className="h-5 w-5" />}
-                title="ตั๋วแต่ละประเภทใช้แทนกันไม่ได้"
-                text="ตั๋วใช้ได้เฉพาะวันงานที่ระบุเท่านั้น"
-              />
+                <div className="md:col-span-2">
+                  <InfoBox
+                    icon={<IconShield className="h-5 w-5" />}
+                    title="ตั๋วแต่ละประเภทใช้แทนกันไม่ได้"
+                    text="ตั๋วใช้ได้เฉพาะวันงานที่ระบุเท่านั้น"
+                  />
+                </div>
+              </div>
+
+              <CheckoutBar aboveNav>
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-xs text-[#6b7f6f]">ทั้งหมด {cartCount} ใบ</p>
+                    <p className="text-sm font-bold">ยอดรวม</p>
+                  </div>
+                  <p className="text-4xl font-extrabold">{baht(cartTotal)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toPay}
+                  disabled={cartCount === 0}
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-[#c7d3bb] disabled:text-white/80"
+                >
+                  {user ? "ไปชำระเงิน" : "เข้าสู่ระบบเพื่อชำระเงิน"}
+                  <IconArrow className="h-5 w-5 text-[#d9f27a]" />
+                </button>
+              </CheckoutBar>
             </div>
           </section>
         )}
@@ -1560,67 +1706,71 @@ export default function Home() {
               <Steps current={2} />
             </div>
 
-            <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-4">
-              <h2 className="text-base font-bold">สรุปรายการ</h2>
-              <p className="mt-0.5 text-xs text-[#6b7f6f]">
-                {EVENT.name} · {EVENT.date}
-              </p>
-              <ul className="mt-3 divide-y divide-[#e3ecd6]">
-                {cartLines.map(({ def, qty: q }) => (
-                  <li key={def.id} className="flex items-center justify-between gap-3 py-3">
-                    <div className="flex items-center gap-3">
-                      <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${def.card}`}>
-                        {iconOf(def.id, "h-5 w-5")}
-                      </span>
-                      <div>
-                        <p className="text-sm font-bold">{def.title}</p>
-                        <p className="text-xs text-[#6b7f6f]">
-                          {baht(def.price)} × {q}
-                        </p>
-                      </div>
-                    </div>
-                    <p className="text-base font-bold">{baht(def.price * q)}</p>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-4">
-              <h2 className="text-base font-bold">วิธีชำระเงิน</h2>
-              <div className="mt-3 flex items-center justify-between rounded-2xl border-2 border-[#14402c] bg-[#f1f7e9] px-4 py-3">
-                <span className="text-sm font-bold">PromptPay (สแกน QR)</span>
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#14402c] text-white">
-                  <IconCheck className="h-3.5 w-3.5" />
-                </span>
-              </div>
-              <p className="mt-2 text-xs text-[#6b7f6f]">
-                กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน โอนแล้วส่งสลีปภายใน 60 นาที รอเจ้าหน้าที่ตรวจสอบ
-              </p>
-            </div>
-
-            <CheckoutBar>
-              {payError && (
-                <p role="alert" className="mb-2 text-sm font-medium text-red-600">
-                  {payError}
-                </p>
-              )}
-              <div className="flex items-end justify-between">
-                <div>
-                  <p className="text-xs text-[#6b7f6f]">ทั้งหมด {cartCount} ใบ</p>
-                  <p className="text-sm font-bold">ยอดรวม</p>
+            <div className="md:mt-6 md:grid md:grid-cols-[minmax(0,1fr)_22rem] md:items-start md:gap-8">
+              <div>
+                <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-4 md:mt-0 md:p-6">
+                  <h2 className="text-base font-bold">สรุปรายการ</h2>
+                  <p className="mt-0.5 text-xs text-[#6b7f6f]">
+                    {EVENT.name} · {EVENT.date}
+                  </p>
+                  <ul className="mt-3 divide-y divide-[#e3ecd6]">
+                    {cartLines.map(({ def, qty: q }) => (
+                      <li key={def.id} className="flex items-center justify-between gap-3 py-3">
+                        <div className="flex items-center gap-3">
+                          <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${def.card}`}>
+                            {iconOf(def.id, "h-5 w-5")}
+                          </span>
+                          <div>
+                            <p className="text-sm font-bold">{def.title}</p>
+                            <p className="text-xs text-[#6b7f6f]">
+                              {baht(def.price)} × {q}
+                            </p>
+                          </div>
+                        </div>
+                        <p className="text-base font-bold">{baht(def.price * q)}</p>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                <p className="text-4xl font-extrabold">{baht(cartTotal)}</p>
+
+                <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-4 md:p-6">
+                  <h2 className="text-base font-bold">วิธีชำระเงิน</h2>
+                  <div className="mt-3 flex items-center justify-between rounded-2xl border-2 border-[#14402c] bg-[#f1f7e9] px-4 py-3">
+                    <span className="text-sm font-bold">PromptPay (สแกน QR)</span>
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#14402c] text-white">
+                      <IconCheck className="h-3.5 w-3.5" />
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-[#6b7f6f]">
+                    กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน โอนแล้วส่งสลีปภายใน 60 นาที รอเจ้าหน้าที่ตรวจสอบ
+                  </p>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={confirmPay}
-                disabled={payBusy}
-                className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
-              >
-                {payBusy ? "กำลังสร้าง QR..." : "สร้าง QR เพื่อชำระเงิน"}
-                <IconArrow className="h-5 w-5 text-[#d9f27a]" />
-              </button>
-            </CheckoutBar>
+
+              <CheckoutBar>
+                {payError && (
+                  <p role="alert" className="mb-2 text-sm font-medium text-red-600">
+                    {payError}
+                  </p>
+                )}
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-xs text-[#6b7f6f]">ทั้งหมด {cartCount} ใบ</p>
+                    <p className="text-sm font-bold">ยอดรวม</p>
+                  </div>
+                  <p className="text-4xl font-extrabold">{baht(cartTotal)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={confirmPay}
+                  disabled={payBusy}
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+                >
+                  {payBusy ? "กำลังสร้าง QR..." : "สร้าง QR เพื่อชำระเงิน"}
+                  <IconArrow className="h-5 w-5 text-[#d9f27a]" />
+                </button>
+              </CheckoutBar>
+            </div>
           </section>
         )}
 
@@ -1645,19 +1795,19 @@ export default function Home() {
               <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#d9f27a]">
                 <IconCheck className="h-9 w-9" />
               </span>
-              <h1 className="mt-4 text-2xl font-bold">ได้รับตั๋วแล้ว!</h1>
-              <p className="mt-1 text-sm text-[#4d6652]">
+              <h1 className="mt-4 text-2xl font-bold md:text-3xl">ได้รับตั๋วแล้ว!</h1>
+              <p className="mt-1 text-sm text-[#4d6652] md:text-base">
                 {justBought.length} ใบ · รวม {baht(justBought.reduce((s, o) => s + o.price, 0))}
               </p>
             </div>
 
-            <div className="mt-6 space-y-4">
+            <div className="mt-6 flex flex-col gap-4 md:mt-8 md:grid md:grid-cols-2 md:items-start md:gap-6 lg:grid-cols-3">
               {justBought.map((o) => (
                 <TicketPass key={o.code} def={defOf(o.ticket)} order={o} />
               ))}
             </div>
 
-            <div className="mt-6 flex gap-3">
+            <div className="mt-6 flex gap-3 md:mx-auto md:mt-8 md:max-w-md">
               <button
                 type="button"
                 onClick={() => {
@@ -1701,7 +1851,11 @@ export default function Home() {
               </button>
             </header>
 
-            <div role="tablist" aria-label="สถานะตั๋ว" className="mt-5 grid grid-cols-2 rounded-2xl bg-[#e3ecd6] p-1">
+            <div
+              role="tablist"
+              aria-label="สถานะตั๋ว"
+              className="mt-5 grid grid-cols-2 rounded-2xl bg-[#e3ecd6] p-1 md:max-w-md"
+            >
               {(
                 [
                   ["ready", `พร้อมใช้ (${readyOrders.length})`],
@@ -1724,7 +1878,7 @@ export default function Home() {
             </div>
 
             {user && tab === "ready" && pending.length > 0 && (
-              <div className="mt-5 space-y-3">
+              <div className="mt-5 flex flex-col gap-3 md:grid md:grid-cols-2 md:items-start md:gap-4">
                 {pending.map((p) => {
                   const card = (
                     <div className="rounded-2xl border border-dashed border-[#14402c]/40 bg-white p-4">
@@ -1735,16 +1889,30 @@ export default function Home() {
                           </p>
                           <p className="mt-0.5 text-xs text-[#6b7f6f]">{STATUS_LABEL[p.status]}</p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPaymentId(p.id);
-                            go("qr");
-                          }}
-                          className="shrink-0 rounded-full bg-[#14402c] px-4 py-2 text-xs font-bold text-white transition active:scale-95"
-                        >
-                          {p.status === "reviewing" ? "ดูสถานะ" : "ส่งสลีป"}
-                        </button>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {p.status === "awaiting_slip" && (
+                            <button
+                              type="button"
+                              disabled={cancelingId === p.id}
+                              onClick={() => {
+                                if (window.confirm(`ยกเลิกรายการ ${p.ref} ใช่ไหม?`)) cancelPayment(p.id);
+                              }}
+                              className="hidden rounded-full border border-red-300 px-4 py-2 text-xs font-bold text-red-600 transition active:scale-95 disabled:opacity-60 md:inline-block"
+                            >
+                              ยกเลิก
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPaymentId(p.id);
+                              go("qr");
+                            }}
+                            className="rounded-full bg-[#14402c] px-4 py-2 text-xs font-bold text-white transition active:scale-95"
+                          >
+                            {p.status === "reviewing" ? "ดูสถานะ" : "ส่งสลีป"}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1764,7 +1932,7 @@ export default function Home() {
                   );
                 })}
                 {pending.some((p) => p.status === "awaiting_slip") && (
-                  <p className="px-1 text-xs text-[#6b7f6f]">ปัดรายการที่ยังไม่ส่งสลีปไปทางซ้าย เพื่อยกเลิก</p>
+                  <p className="px-1 text-xs text-[#6b7f6f] md:hidden">ปัดรายการที่ยังไม่ส่งสลีปไปทางซ้าย เพื่อยกเลิก</p>
                 )}
               </div>
             )}
@@ -1796,7 +1964,7 @@ export default function Home() {
                     </button>
                   </div>
                 ) : (
-                  <div className="mt-5 space-y-4">
+                  <div className="mt-5 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
                     {TICKETS.map((t) => {
                       const count = readyOrders.filter((o) => o.ticket === t.id).length;
                       if (count === 0) return null;
@@ -1853,7 +2021,7 @@ export default function Home() {
                   </div>
                 )}
 
-                <div className="mt-4">
+                <div className="mt-4 md:mt-6">
                   <InfoBox
                     icon={<IconInfo className="h-5 w-5" />}
                     title="ใช้ตั๋วง่าย ๆ ที่หน้างาน"
@@ -1870,7 +2038,7 @@ export default function Home() {
                     <p className="text-[#4d6652]">ยังไม่มีตั๋วที่ใช้แล้ว</p>
                   </div>
                 ) : (
-                  <ul className="mt-5 space-y-3">
+                  <ul className="mt-5 flex flex-col gap-3 md:grid md:grid-cols-2 md:gap-4">
                     {usedOrders.map((o) => {
                       const d = defOf(o.ticket);
                       return (
@@ -1899,7 +2067,7 @@ export default function Home() {
 
         {/* ===== โปรไฟล์ ===== */}
         {view === "profile" && (
-          <section aria-label="โปรไฟล์">
+          <section aria-label="โปรไฟล์" className="md:mx-auto md:max-w-4xl">
             <h1 className="text-3xl font-bold">โปรไฟล์</h1>
 
             {!user ? (
@@ -1916,8 +2084,8 @@ export default function Home() {
                 )}
               </div>
             ) : (
-              <>
-                <div className="mt-6 flex items-center gap-4 rounded-3xl bg-[#14402c] p-5 text-white">
+              <div className="md:mt-6 md:grid md:grid-cols-[18rem_minmax(0,1fr)] md:items-start md:gap-6">
+                <div className="mt-6 flex items-center gap-4 rounded-3xl bg-[#14402c] p-5 text-white md:col-start-1 md:row-start-1 md:mt-0">
                   <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#d9f27a] text-2xl font-bold uppercase text-[#14402c]">
                     {(user.name || user.username).charAt(0)}
                   </span>
@@ -1927,7 +2095,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-5">
+                <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-5 md:col-start-2 md:row-span-2 md:row-start-1 md:mt-0 md:p-6">
                   <h2 className="text-lg font-bold">ข้อมูลผู้ซื้อ</h2>
                   <p className="mt-1 text-sm text-[#4d6652]">ใช้กรอกข้อมูลให้อัตโนมัติตอนซื้อตั๋ว</p>
                   <div className="mt-4 space-y-4">
@@ -1980,173 +2148,165 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={logout}
-                  className="mt-4 w-full rounded-2xl border border-[#14402c] py-3.5 font-semibold transition active:scale-[0.99]"
+                  className="mt-4 w-full rounded-2xl border border-[#14402c] py-3.5 font-semibold transition active:scale-[0.99] md:col-start-1 md:row-start-2 md:mt-0"
                 >
                   ออกจากระบบ
                 </button>
-              </>
+              </div>
             )}
           </section>
         )}
 
         {/* ===== เข้าสู่ระบบ / สมัครสมาชิก ===== */}
         {view === "auth" && (
-          <section aria-label={authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}>
-            <SubHeader title={authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"} onBack={() => go(afterAuth === "pay" ? "buy" : "home")} />
+          <section
+            aria-label={authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
+            className="md:mx-auto md:max-w-4xl"
+          >
+            <SubHeader
+              title={authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
+              onBack={() => go(afterAuth === "pay" ? "buy" : "home")}
+            />
 
-            <div className="relative mt-6 overflow-hidden rounded-3xl bg-[#14402c] p-5 text-white">
-              <p className="text-[11px] font-bold tracking-wider text-[#d9f27a]">PAYDAY IS PLAY DAY</p>
-              <h2 className="mt-2 text-2xl font-bold leading-tight">
-                {authMode === "login" ? "ยินดีต้อนรับกลับมา!" : "มาเป็นสมาชิก แล้วไปเล่นกัน!"}
-              </h2>
-              <p className="mt-1 text-xs text-white/70">
-                {afterAuth === "pay" ? "เข้าสู่ระบบก่อน เพื่อชำระเงินและรับตั๋ว" : "เข้าสู่ระบบเพื่อซื้อและดูตั๋วของคุณ"}
-              </p>
-            </div>
-
-            <div role="tablist" aria-label="โหมด" className="mt-5 grid grid-cols-2 rounded-2xl bg-[#e3ecd6] p-1">
-              {(
-                [
-                  ["login", "เข้าสู่ระบบ"],
-                  ["register", "สมัครสมาชิก"],
-                ] as const
-              ).map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  role="tab"
-                  aria-selected={authMode === id}
-                  onClick={() => {
-                    setAuthMode(id);
-                    setAuthError("");
-                  }}
-                  className={`rounded-xl py-2.5 text-sm font-bold transition ${
-                    authMode === id ? "bg-[#14402c] text-white" : "text-[#4d6652]"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <form
-              className="mt-4 space-y-4 rounded-3xl border border-[#e3ecd6] bg-white p-5"
-              onSubmit={(e) => {
-                e.preventDefault();
-                submitAuth();
-              }}
-            >
-              {authMode === "register" && (
-                <>
-                  <label className="block">
-                    <span className="text-sm font-medium">ชื่อ-นามสกุล</span>
-                    <input
-                      value={authName}
-                      onChange={(e) => setAuthName(e.target.value)}
-                      autoComplete="name"
-                      className={inputCls}
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="text-sm font-medium">เบอร์โทร</span>
-                    <input
-                      value={authPhone}
-                      onChange={(e) => setAuthPhone(e.target.value)}
-                      inputMode="numeric"
-                      autoComplete="tel"
-                      placeholder="0812345678"
-                      className={inputCls}
-                    />
-                  </label>
-                </>
-              )}
-              <label className="block">
-                <span className="text-sm font-medium">Username</span>
-                <input
-                  value={authUser}
-                  onChange={(e) => setAuthUser(e.target.value)}
-                  autoComplete="username"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  placeholder="เช่น somchai99"
-                  className={inputCls}
-                />
-                {authMode === "register" && (
-                  <span className="mt-1 block text-xs text-[#6b7f6f]">3-20 ตัว ใช้ a-z 0-9 . _ ได้</span>
-                )}
-              </label>
-              <label className="block">
-                <span className="text-sm font-medium">รหัสผ่าน</span>
-                <input
-                  type="password"
-                  value={authPass}
-                  onChange={(e) => setAuthPass(e.target.value)}
-                  autoComplete={authMode === "login" ? "current-password" : "new-password"}
-                  className={inputCls}
-                />
-                {authMode === "register" && (
-                  <span className="mt-1 block text-xs text-[#6b7f6f]">อย่างน้อย 6 ตัวอักษร</span>
-                )}
-              </label>
-
-              {authError && (
-                <p role="alert" className="text-sm font-medium text-red-600">
-                  {authError}
+            <div className="md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-8">
+              <div className="relative mt-6 overflow-hidden rounded-3xl bg-[#14402c] p-5 text-white md:mt-0 md:p-8">
+                <p className="text-[11px] font-bold tracking-wider text-[#d9f27a]">PAYDAY IS PLAY DAY</p>
+                <h2 className="mt-2 text-2xl font-bold leading-tight md:text-3xl">
+                  {authMode === "login" ? "ยินดีต้อนรับกลับมา!" : "มาเป็นสมาชิก แล้วไปเล่นกัน!"}
+                </h2>
+                <p className="mt-1 text-xs text-white/70 md:text-sm">
+                  {afterAuth === "pay" ? "เข้าสู่ระบบก่อน เพื่อชำระเงินและรับตั๋ว" : "เข้าสู่ระบบเพื่อซื้อและดูตั๋วของคุณ"}
                 </p>
-              )}
+              </div>
 
-              <button
-                type="submit"
-                disabled={authBusy}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
-              >
-                {authBusy ? "กำลังดำเนินการ..." : authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
-                {!authBusy && <IconArrow className="h-5 w-5 text-[#d9f27a]" />}
-              </button>
-            </form>
+              <div>
+                <div
+                  role="tablist"
+                  aria-label="โหมด"
+                  className="mt-5 grid grid-cols-2 rounded-2xl bg-[#e3ecd6] p-1 md:mt-0"
+                >
+                  {(
+                    [
+                      ["login", "เข้าสู่ระบบ"],
+                      ["register", "สมัครสมาชิก"],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      aria-selected={authMode === id}
+                      onClick={() => {
+                        setAuthMode(id);
+                        setAuthError("");
+                      }}
+                      className={`rounded-xl py-2.5 text-sm font-bold transition ${
+                        authMode === id ? "bg-[#14402c] text-white" : "text-[#4d6652]"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <form
+                  className="mt-4 space-y-4 rounded-3xl border border-[#e3ecd6] bg-white p-5 md:p-6"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    submitAuth();
+                  }}
+                >
+                  {authMode === "register" && (
+                    <>
+                      <label className="block">
+                        <span className="text-sm font-medium">ชื่อ-นามสกุล</span>
+                        <input
+                          value={authName}
+                          onChange={(e) => setAuthName(e.target.value)}
+                          autoComplete="name"
+                          className={inputCls}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-sm font-medium">เบอร์โทร</span>
+                        <input
+                          value={authPhone}
+                          onChange={(e) => setAuthPhone(e.target.value)}
+                          inputMode="numeric"
+                          autoComplete="tel"
+                          placeholder="0812345678"
+                          className={inputCls}
+                        />
+                      </label>
+                    </>
+                  )}
+                  <label className="block">
+                    <span className="text-sm font-medium">Username</span>
+                    <input
+                      value={authUser}
+                      onChange={(e) => setAuthUser(e.target.value)}
+                      autoComplete="username"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      placeholder="เช่น somchai99"
+                      className={inputCls}
+                    />
+                    {authMode === "register" && (
+                      <span className="mt-1 block text-xs text-[#6b7f6f]">3-20 ตัว ใช้ a-z 0-9 . _ ได้</span>
+                    )}
+                  </label>
+                  <label className="block">
+                    <span className="text-sm font-medium">รหัสผ่าน</span>
+                    <input
+                      type="password"
+                      value={authPass}
+                      onChange={(e) => setAuthPass(e.target.value)}
+                      autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                      className={inputCls}
+                    />
+                    {authMode === "register" && (
+                      <span className="mt-1 block text-xs text-[#6b7f6f]">อย่างน้อย 6 ตัวอักษร</span>
+                    )}
+                  </label>
+
+                  {authError && (
+                    <p role="alert" className="text-sm font-medium text-red-600">
+                      {authError}
+                    </p>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={authBusy}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+                  >
+                    {authBusy ? "กำลังดำเนินการ..." : authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
+                    {!authBusy && <IconArrow className="h-5 w-5 text-[#d9f27a]" />}
+                  </button>
+                </form>
+              </div>
+            </div>
           </section>
         )}
       </main>
 
-      {/* แถบด้านล่าง: หน้าเลือกตั๋ว */}
-      {view === "buy" && (
-        <CheckoutBar aboveNav>
-          <div className="flex items-end justify-between">
-            <div>
-              <p className="text-xs text-[#6b7f6f]">ทั้งหมด {cartCount} ใบ</p>
-              <p className="text-sm font-bold">ยอดรวม</p>
-            </div>
-            <p className="text-4xl font-extrabold">{baht(cartTotal)}</p>
-          </div>
-          <button
-            type="button"
-            onClick={toPay}
-            disabled={cartCount === 0}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-[#c7d3bb] disabled:text-white/80"
-          >
-            {user ? "ไปชำระเงิน" : "เข้าสู่ระบบเพื่อชำระเงิน"}
-            <IconArrow className="h-5 w-5 text-[#d9f27a]" />
-          </button>
-        </CheckoutBar>
-      )}
-
       {showNav && <BottomNav view={navView} badges={badges} onGo={go} />}
 
-      {/* ===== หน้าต่างแสดงตั๋ว ===== */}
+      {/* ===== หน้าต่างแสดงตั๋ว (มือถือ: เลื่อนขึ้นจากด้านล่าง / คอมพิวเตอร์: กลางจอ) ===== */}
       {sheet && sheetDef && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="sheet-title"
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 md:items-center md:p-6"
           onClick={() => {
             setSheet(null);
             setConfirmCode(null);
           }}
         >
           <div
-            className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-[#f1f7e9] p-5 pb-8"
+            className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-[#f1f7e9] p-5 pb-8 md:max-w-3xl md:rounded-3xl md:p-8"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -2166,7 +2326,7 @@ export default function Home() {
             </div>
             <p className="mt-1 text-xs text-[#4d6652]">ให้เจ้าหน้าที่สแกนก่อน แล้วค่อยกด “ใช้แล้ว”</p>
 
-            <div className="mt-4 space-y-4">
+            <div className="mt-4 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
               {sheetOrders.map((o) => (
                 <div key={o.code}>
                   <TicketPass def={sheetDef} order={o} />
