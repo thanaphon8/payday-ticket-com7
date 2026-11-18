@@ -7,6 +7,11 @@ export const TICKET_PRICES = { booth: 10, lucky: 10 } as const;
 export type TicketId = keyof typeof TICKET_PRICES;
 export const MAX_QTY = 20;
 
+// รหัสพนักงาน: ตัวเลขล้วน 7 หลัก (กรอกครั้งเดียวต่อการสั่งซื้อ ใช้กับตั๋ว Lucky Draw ทุกใบในรายการนั้น)
+// ต้องตรงกับ EMP_CODE_LENGTH ใน app/page.tsx
+export const EMP_CODE_LENGTH = 7;
+export const validEmpCode = (c: string) => new RegExp(`^\\d{${EMP_CODE_LENGTH}}$`).test(c);
+
 // เวลาที่ผู้ซื้อมีในการโอน + ส่งสลีป (นาที) นับใหม่ทุกครั้งที่ถูกปฏิเสธสลีป
 // พอส่งสลีปแล้ว (สถานะ reviewing) ไม่หมดอายุ รอ admin ตรวจกี่ชั่วโมงก็ได้
 export const PAYMENT_TTL_MINUTES = 60;
@@ -28,6 +33,7 @@ export function makeCode(ticket: TicketId) {
 export const makeRef = () => `PD${randomBytes(4).toString("hex").toUpperCase()}`;
 
 // แปลงเอกสารใน MongoDB เป็นรูปแบบที่หน้าเว็บใช้ (ไม่ส่ง _id / userId ออกไป)
+// empCode / won / wonAt ใช้กับตั๋ว Lucky Draw (won = ตั๋วใบนี้ถูกรางวัลแล้ว)
 export function toOrder(d: WithId<Document>) {
   return {
     code: d.code as string,
@@ -38,11 +44,23 @@ export function toOrder(d: WithId<Document>) {
     at: d.at as string,
     used: d.used === true,
     usedAt: (d.usedAt as string | undefined) ?? undefined,
+    empCode: (d.empCode as string | undefined) ?? undefined,
+    won: d.won === true,
+    wonAt: (d.wonAt as string | undefined) ?? undefined,
   };
 }
 
+// สรุปตั๋วในรายการโอนเงิน: ประเภทตั๋ว + จำนวนใบ (ให้ผู้ซื้อเห็นว่าซื้ออะไรไว้ในรายการที่รออนุมัติ)
+export type PaymentItem = { ticket: TicketId; qty: number };
+
 // รายการโอนเงินในรูปแบบที่หน้าเว็บใช้ (qrUrl ใส่เพิ่มเองตอนต้องใช้)
 export function toPaymentInfo(p: WithId<Document>) {
+  const items: PaymentItem[] = [];
+  for (const t of (p.tickets as PaymentTicket[] | undefined) ?? []) {
+    const found = items.find((i) => i.ticket === t.ticket);
+    if (found) found.qty += 1;
+    else items.push({ ticket: t.ticket, qty: 1 });
+  }
   return {
     id: p._id.toString(),
     amount: p.amount as number,
@@ -50,6 +68,7 @@ export function toPaymentInfo(p: WithId<Document>) {
     ref: p.ref as string,
     status: p.status as PaymentStatus,
     rejectReason: (p.rejectReason as string | undefined) ?? undefined,
+    items,
   };
 }
 
@@ -93,6 +112,8 @@ export async function fulfillPayment(db: Db, paymentId: ObjectId): Promise<boole
   if (pay.fulfilled === true) return true;
 
   const tickets = pay.tickets as PaymentTicket[];
+  // รหัสพนักงานของรายการนี้ (มีเฉพาะรายการที่ซื้อ Lucky Draw) ใส่ให้ตั๋ว Lucky Draw ทุกใบ
+  const empCode = typeof pay.empCode === "string" && validEmpCode(pay.empCode) ? pay.empCode : null;
   const docs = tickets.map((t) => ({
     code: t.code,
     userId: pay.userId as ObjectId,
@@ -103,6 +124,7 @@ export async function fulfillPayment(db: Db, paymentId: ObjectId): Promise<boole
     price: t.price,
     at: (pay.approvedAt as string) ?? new Date().toISOString(),
     used: false,
+    ...(t.ticket === "lucky" && empCode ? { empCode, won: false } : {}),
   }));
 
   try {

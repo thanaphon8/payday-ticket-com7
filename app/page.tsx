@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Prompt } from "next/font/google";
 
@@ -19,6 +19,17 @@ const EVENT = {
   place: "ลานกิจกรรม Payday Park", // TODO: แก้สถานที่
 };
 
+// รูปการ์ดหน้าหลัก + พื้นหลังหน้าซื้อตั๋ว (ไฟล์ใน public/img/)
+const PAYCARD_IMG = "/img/paycard.jpg";
+const PAYCARD2_IMG = "/img/paycard2.jpg"; // พื้นหลังหน้าซื้อตั๋ว
+
+// สัดส่วนกรอบรูปตั๋ว = สัดส่วนรูปจริง (p1/p2 ประมาณ 715×349) ทุกใบใช้ค่าเดียวกัน จึงเท่ากัน
+// ถ้าเปลี่ยนรูปใหม่ ให้แก้เป็น aspect-[กว้าง/สูง] ของรูปนั้น
+const TICKET_IMG_ASPECT = "aspect-[715/349]";
+
+// รหัสพนักงาน: ตัวเลขล้วน 7 หลัก (ต้องตรงกับ EMP_CODE_LENGTH ใน lib/tickets.ts)
+const EMP_CODE_LENGTH = 7;
+
 /* สีหลัก (ตามดีไซน์)
    เขียว #14402c · ไลม์ #d9f27a · เหลือง #ffcf5c · พื้นหลัง #f1f7e9 · กล่องเขียวอ่อน #e3ecd6 · midnight blue #0f1b4d · แดงเลือดหมู #6b1d24 */
 
@@ -29,7 +40,7 @@ type TicketDef = {
   title: string;
   sub: string; // ชื่ออังกฤษตัวเล็ก
   homeNote: string; // ข้อความในการ์ดหน้าหลัก
-  homeImage?: string; // ถ้าใส่: หน้าหลักแสดงรูปนี้แทนการ์ดทั้งใบ (ไฟล์ใน public/) และหน้าซื้อตั๋วใช้รูปนี้เป็นส่วนบนของตั๋ว (ราคา/ปุ่มจำนวนอยู่ส่วนล่างแยกด้วยรอยประ) ชื่อตั๋วจะอยู่เหนือกรอบ
+  homeImage?: string; // ถ้าใส่: หน้าหลัก/หน้าซื้อตั๋ว/หน้าตั๋วของฉัน แสดงรูปนี้เป็นส่วนบนของตั๋ว (ไฟล์ใน public/) ชื่อตั๋วจะอยู่เหนือกรอบ
   blurb: string; // คำอธิบายในหน้าเลือกตั๋ว
   price: number;
   layout: "banner" | "compact"; // รูปแบบการ์ดในหน้า "ตั๋วของฉัน"
@@ -61,7 +72,7 @@ const TICKETS: TicketDef[] = [
     card: "bg-[#0f1b4d]",
     fg: "text-white",
     dash: "border-white/30",
-    button: "bg-[#14402c] text-white",
+    button: "bg-[#e50914] text-white",
     soft: "bg-[#eef9c8]",
   },
   {
@@ -94,9 +105,13 @@ type Order = {
   at: string;
   used?: boolean;
   usedAt?: string;
+  empCode?: string; // รหัสพนักงาน (ตั๋ว Lucky Draw)
+  won?: boolean; // ตั๋วใบนี้ถูกรางวัลแล้ว
+  wonAt?: string;
 };
 
-type User = { id: string; username: string; name: string; phone: string };
+// empCode = รหัสพนักงานของบัญชี (null = บัญชีเก่าที่ยังไม่เคยกรอก ต้องกรอกในโปรไฟล์ก่อนซื้อ Lucky Draw)
+type User = { id: string; username: string; name: string; phone: string; empCode: string | null };
 
 type View = "home" | "buy" | "pay" | "qr" | "done" | "tickets" | "profile" | "auth";
 
@@ -114,6 +129,7 @@ type Payment = {
   status: PayStatus;
   qrUrl?: string;
   rejectReason?: string;
+  items?: { ticket: TicketId; qty: number }[]; // ตั๋วที่ซื้อในรายการนี้ (ประเภท + จำนวนใบ)
 };
 
 // ผลจาก GET /api/payments/[id]
@@ -122,14 +138,15 @@ type PayPoll = Payment & { orders?: Order[] };
 const MAX_QTY = 20; // จำนวนสูงสุดต่อตั๋ว 1 ประเภท ต่อการซื้อ 1 ครั้ง (กันกดพลาด)
 const CART_KEY = "payday-cart-v1";
 const SLIP_POLL_MS = 5000; // เช็กสถานะรายการโอนทุกกี่มิลลิวินาที
-const SWIPE_REVEAL = 88; // ความกว้างปุ่ม "ลบ" ที่โผล่ตอนปัดซ้าย (px)
+const seenKey = (userId: string) => `payday-won-seen-v1-${userId}`; // รหัสตั๋วที่ถูกรางวัลและผู้ใช้เห็นแล้ว
 
-const STATUS_LABEL: Record<PayStatus, string> = {
-  awaiting_slip: "รอโอน / ส่งสลีป",
-  reviewing: "รอเจ้าหน้าที่ตรวจสลีป",
-  rejected: "สลีปไม่ผ่าน ส่งใหม่ได้",
-  approved: "อนุมัติแล้ว",
-  expired: "หมดเวลา",
+// ป้ายสถานะรายการโอนเงิน (ข้อความ + สี) ที่แสดงบนการ์ดในแท็บ "สถานะ"
+const PAY_BADGE: Record<PayStatus, { label: string; cls: string }> = {
+  awaiting_slip: { label: "รอส่งสลีป", cls: "bg-amber-100 text-amber-800" },
+  reviewing: { label: "รออนุมัติ", cls: "bg-sky-100 text-sky-800" },
+  rejected: { label: "ถูกปฏิเสธ", cls: "bg-red-100 text-red-700" },
+  approved: { label: "อนุมัติแล้ว", cls: "bg-green-100 text-green-800" },
+  expired: { label: "หมดเวลา", cls: "bg-gray-200 text-gray-600" },
 };
 
 /* ---------- helper ---------- */
@@ -174,6 +191,8 @@ async function api<T = Record<string, unknown>>(
 const baht = (n: number) => `฿${n.toLocaleString("th-TH")}`;
 
 const validPhone = (p: string) => /^0\d{9}$/.test(p);
+
+const validEmp = (c: string) => new RegExp(`^\\d{${EMP_CODE_LENGTH}}$`).test(c);
 
 const fmtTime = (iso?: string) =>
   iso
@@ -288,165 +307,17 @@ const IconMinus = ({ className }: IconProps) => (
     <path d="M5 12h14" />
   </Icon>
 );
+const IconTrash = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M4 7h16" />
+    <path d="M10 11v6M14 11v6" />
+    <path d="M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12" />
+    <path d="M9 7V4h6v3" />
+  </Icon>
+);
 
 const iconOf = (id: TicketId, className?: string) =>
   id === "booth" ? <IconTicket className={className} /> : <IconGift className={className} />;
-
-/* ---------- ภาพประกอบ hero ---------- */
-function HeroArt() {
-  const SPARK = "M0 -1 Q.12 -.12 1 0 Q.12 .12 0 1 Q-.12 .12 -1 0 Q-.12 -.12 0 -1Z";
-  const GREEN = "#17854f";
-  const DARK = "#123f2b";
-  const LIME = "#dbf58a";
-  const CREAM = "#fff8e6";
-  const YELLOW = "#ffcf5c";
-  const PINK = "#f5afc5";
-
-  // รางรถไฟเหาะ: ผ่านจุดคีย์ แล้วใช้ cosine interpolation ให้โค้งนุ่ม
-  const keys: [number, number][] = [
-    [18, 398],
-    [150, 372],
-    [470, 462],
-    [720, 400],
-    [940, 438],
-  ];
-  const railY = (x: number) => {
-    for (let i = 0; i < keys.length - 1; i++) {
-      const [x0, y0] = keys[i];
-      const [x1, y1] = keys[i + 1];
-      if (x >= x0 && x <= x1) {
-        const t = (x - x0) / (x1 - x0);
-        const k = (1 - Math.cos(t * Math.PI)) / 2;
-        return y0 + (y1 - y0) * k;
-      }
-    }
-    return keys[keys.length - 1][1];
-  };
-  const GAP = 16;
-  const xs: number[] = [];
-  for (let x = 18; x <= 940; x += 6) xs.push(x);
-  const railPath = (dy: number) =>
-    xs.map((x, i) => `${i === 0 ? "M" : "L"}${x} ${(railY(x) + dy).toFixed(1)}`).join(" ");
-  const ties: number[] = [];
-  for (let x = 30; x <= 940; x += 28) ties.push(x);
-  const posts = [33, 117, 207, 299, 395, 497, 604, 710, 815, 917];
-
-  // กระเช้ากงล้อ (ตำแหน่งกึ่งกลาง)
-  const cabins: [number, number][] = [
-    [696, 33],
-    [824, 95],
-    [885, 238],
-    [819, 360],
-    [696, 398],
-    [571, 360],
-    [506, 238],
-    [567, 95],
-  ];
-  const cx = 696;
-  const cy = 200;
-  const spokes = Array.from({ length: 8 }, (_, i) => {
-    const a = (i / 8) * Math.PI * 2;
-    return [cx + 168 * Math.cos(a), cy + 168 * Math.sin(a)] as const;
-  });
-
-  return (
-    <svg
-      viewBox="0 0 967 496"
-      className="absolute inset-x-0 bottom-0 h-auto w-full md:left-auto md:w-1/2"
-      aria-hidden
-    >
-      {/* ดาวและจุดประดับ */}
-      <g fill={YELLOW}>
-        <path d={SPARK} transform="translate(100 230) scale(30)" />
-        <path d={SPARK} transform="translate(406 156) scale(37)" />
-        <path d={SPARK} transform="translate(464 48) scale(20)" />
-        <path d={SPARK} transform="translate(921 106) scale(24)" />
-        <circle cx="334" cy="223" r="7" />
-      </g>
-      <circle cx="146" cy="156" r="7" fill={PINK} />
-
-      {/* ธงเล็ก */}
-      <g>
-        <line x1="417" y1="306" x2="417" y2="378" stroke={DARK} strokeWidth="3" />
-        <polygon points="419,308 459,320 419,336" fill={PINK} />
-        <line x1="902" y1="283" x2="902" y2="332" stroke={DARK} strokeWidth="3" />
-        <polygon points="905,286 941,296 905,308" fill={PINK} />
-      </g>
-
-      {/* กงล้อยักษ์ */}
-      <circle cx={cx} cy={cy} r="168" fill={LIME} stroke={GREEN} strokeWidth="7" />
-      <circle cx={cx} cy={cy} r="146" fill="none" stroke={CREAM} strokeWidth="2" />
-      <g stroke={GREEN} strokeWidth="3">
-        {spokes.map(([x, y], i) => (
-          <line key={i} x1={cx} y1={cy} x2={x} y2={y} />
-        ))}
-      </g>
-      <g stroke={DARK} strokeWidth="20" strokeLinecap="round">
-        <line x1="688" y1="218" x2="612" y2="452" />
-        <line x1="706" y1="218" x2="772" y2="452" />
-      </g>
-      <rect x="586" y="448" width="70" height="18" rx="9" fill={DARK} />
-      <rect x="744" y="448" width="70" height="18" rx="9" fill={DARK} />
-      {cabins.map(([x, y], i) => (
-        <g key={i}>
-          {i !== 0 && i !== 4 && <line x1={x} y1={y - 26} x2={x} y2={y - 42} stroke={GREEN} strokeWidth="3" />}
-          <rect x={x - 28} y={y - 25} width="56" height="50" rx="14" fill={GREEN} />
-          <path
-            d={`M${x - 28} ${y - 2} V${y - 11} a14 14 0 0 1 14 -14 H${x + 14} a14 14 0 0 1 14 14 V${y - 2}Z`}
-            fill={DARK}
-          />
-          <rect x={x - 19} y={y - 18} width="38" height="15" rx="2" fill={CREAM} />
-        </g>
-      ))}
-      <circle cx={cx} cy={cy} r="28" fill={CREAM} stroke={DARK} strokeWidth="4" />
-      <circle cx={cx} cy={cy} r="11" fill={YELLOW} />
-
-      {/* พุ่มไม้ซ้าย */}
-      <circle cx="88" cy="372" r="30" fill={LIME} />
-      <circle cx="42" cy="420" r="30" fill={LIME} />
-      <circle cx="100" cy="408" r="28" fill={GREEN} />
-
-      {/* เต็นท์ */}
-      <line x1="227" y1="145" x2="227" y2="212" stroke={DARK} strokeWidth="4" />
-      <polygon points="230,148 283,160 230,182" fill={PINK} />
-      <rect x="110" y="338" width="232" height="108" fill={GREEN} />
-      <rect x="150" y="338" width="36" height="108" fill={CREAM} />
-      <rect x="270" y="338" width="30" height="108" fill={CREAM} />
-      <path d="M185 446 V382 L228 336 L270 382 V446Z" fill={DARK} />
-      <polygon points="227,210 365,316 90,316" fill={GREEN} />
-      <polygon points="227,210 160,316 204,316" fill={CREAM} />
-      <polygon points="227,210 252,316 294,316" fill={CREAM} />
-      <rect x="90" y="314" width="275" height="14" fill={DARK} />
-      <g fill={DARK}>
-        {[108, 142, 176, 210, 244, 278, 312, 346].map((x) => (
-          <circle key={x} cx={x} cy="327" r="17" />
-        ))}
-      </g>
-      <rect x="95" y="441" width="260" height="5" rx="2.5" fill={DARK} />
-
-      {/* พุ่มไม้ขวา */}
-      <circle cx="905" cy="372" r="35" fill={LIME} />
-      <circle cx="850" cy="402" r="30" fill={LIME} />
-      <circle cx="935" cy="408" r="30" fill={LIME} />
-      <circle cx="880" cy="428" r="26" fill={GREEN} />
-      <circle cx="926" cy="436" r="22" fill={GREEN} />
-
-      {/* รถไฟเหาะ */}
-      <g stroke={GREEN} strokeWidth="3" strokeLinecap="round">
-        {posts.map((x) => (
-          <line key={x} x1={x} y1={railY(x) + GAP} x2={x} y2="490" />
-        ))}
-      </g>
-      <g stroke={YELLOW} strokeWidth="3" strokeLinecap="round">
-        {ties.map((x) => (
-          <line key={x} x1={x} y1={railY(x) - 2} x2={x + 2} y2={railY(x) + GAP + 2} />
-        ))}
-      </g>
-      <path d={railPath(0)} fill="none" stroke={YELLOW} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
-      <path d={railPath(GAP)} fill="none" stroke={YELLOW} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 function Barcode({ code }: { code: string }) {
   const bars = code.split("").flatMap((ch) => {
@@ -479,7 +350,7 @@ function Perforated({
   className = "",
   bg = "bg-white",
   dash = "border-[#bfd0ab]",
-  text = "text-[#14402c]",
+  text = "text-neutral-900",
 }: {
   top: ReactNode;
   bottom: ReactNode;
@@ -503,9 +374,31 @@ function Perforated({
   );
 }
 
+/* ---------- รูปตั๋ว: กรอบสัดส่วนเดียวกับรูปจริง ทุกใบเท่ากัน ไม่ครอป ---------- */
+function TicketImage({ src, alt }: { src: string; alt: string }) {
+  return (
+    <div className={`flex w-full items-center justify-center ${TICKET_IMG_ASPECT}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={alt} className="block h-full w-full object-contain" />
+    </div>
+  );
+}
+
+// ตำแหน่งประกายบนกรอบทอง (ตั๋วที่ถูกรางวัล)
+const SPARKLES: { top: string; left: string; size: string; delay: string }[] = [
+  { top: "2%", left: "6%", size: "h-4 w-4", delay: "0s" },
+  { top: "6%", left: "48%", size: "h-3 w-3", delay: "0.5s" },
+  { top: "3%", left: "90%", size: "h-5 w-5", delay: "1.1s" },
+  { top: "48%", left: "1%", size: "h-3 w-3", delay: "0.8s" },
+  { top: "52%", left: "95%", size: "h-4 w-4", delay: "0.3s" },
+  { top: "92%", left: "10%", size: "h-5 w-5", delay: "1.4s" },
+  { top: "94%", left: "52%", size: "h-3 w-3", delay: "0.2s" },
+  { top: "90%", left: "88%", size: "h-4 w-4", delay: "0.9s" },
+];
+
 /* ---------- ตั๋ว 1 ใบ (ใช้ในหน้าซื้อสำเร็จ และตอนแสดงตั๋ว) ---------- */
 function TicketPass({ def, order }: { def: TicketDef; order: Order }) {
-  return (
+  const pass = (
     <Perforated
       top={
         <div className="p-2">
@@ -523,16 +416,46 @@ function TicketPass({ def, order }: { def: TicketDef; order: Order }) {
             <p className="mt-1 text-sm font-semibold">
               {order.name} · {order.phone}
             </p>
+            {order.empCode && (
+              <p className="mt-1 text-xs font-semibold text-neutral-600">
+                รหัสพนักงาน <span className="font-mono font-bold text-neutral-900">{order.empCode}</span>
+              </p>
+            )}
           </div>
         </div>
       }
       bottom={
-        <div className="px-5 pb-5 pt-4">
-          <Barcode code={order.code} />
-          <p className="mt-2 break-all text-center font-mono text-xs font-bold tracking-wider">{order.code}</p>
-        </div>
+        def.id === "lucky" ? (
+          // ตั๋ว Lucky Draw ไม่ใช้บาร์โค้ด: แสดงข้อความ + รหัสตั๋วเท่านั้น
+          <div className="px-5 pb-5 pt-4 text-center">
+            <p className="text-base font-extrabold tracking-wide">ตั๋วสุ่มรางวัล</p>
+            <p className="mt-2 break-all font-mono text-xs font-bold tracking-wider">{order.code}</p>
+          </div>
+        ) : (
+          <div className="px-5 pb-5 pt-4">
+            <Barcode code={order.code} />
+            <p className="mt-2 break-all text-center font-mono text-xs font-bold tracking-wider">{order.code}</p>
+          </div>
+        )
       }
     />
+  );
+
+  if (!order.won) return pass;
+
+  // ตั๋วถูกรางวัล: กรอบสีทองวิบวับ
+  return (
+    <div className="pd-gold-frame relative rounded-[2rem] p-2">
+      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[2rem]">
+        {SPARKLES.map((s, i) => (
+          <IconSpark key={i} className={`pd-twinkle absolute text-white ${s.size}`} />
+        ))}
+      </div>
+      <p className="pb-2 text-center text-sm font-extrabold tracking-wide text-[#5a3b00]">
+        ตั๋วใบนี้ถูกรางวัล! ยินดีด้วย
+      </p>
+      {pass}
+    </div>
   );
 }
 
@@ -557,7 +480,7 @@ function Stepper({
         aria-label={`ลดจำนวน${name}`}
         onClick={() => onChange(value - 1)}
         disabled={value <= 0}
-        className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#14402c] shadow-[0_1px_4px_rgba(20,64,44,0.25)] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-black shadow-[0_1px_4px_rgba(0,0,0,0.4)] transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <IconMinus className="h-5 w-5" />
       </button>
@@ -570,110 +493,11 @@ function Stepper({
         onClick={() => onChange(value + 1)}
         disabled={value >= max}
         className={`flex h-10 w-10 items-center justify-center rounded-full transition active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 ${
-          onDark ? "bg-[#d9f27a] text-[#14402c]" : "bg-[#14402c] text-white"
+          onDark ? "bg-white text-black" : "bg-[#e50914] text-white"
         }`}
       >
         <IconPlus className="h-5 w-5" />
       </button>
-    </div>
-  );
-}
-
-/* ---------- แถวที่ปัดซ้ายเพื่อลบ ----------
-   ปัดไปทางซ้ายจนปุ่มแดง "ลบ" โผล่ แล้วกดปุ่มเพื่อยืนยัน
-   แตะที่การ์ดตอนเปิดอยู่ = ปิดกลับ  ใช้ pointer events จึงลากด้วยเมาส์ได้เหมือนกัน */
-function SwipeRow({
-  children,
-  onDelete,
-  deleting = false,
-  label,
-}: {
-  children: ReactNode;
-  onDelete: () => void;
-  deleting?: boolean;
-  label: string;
-}) {
-  const [dx, setDx] = useState(0);
-  const [drag, setDrag] = useState(false);
-  const st = useRef({ x: 0, y: 0, base: 0, active: false, horizontal: false, moved: false });
-
-  const end = () => {
-    const s = st.current;
-    if (!s.active) return;
-    s.active = false;
-    setDrag(false);
-    if (s.horizontal) setDx((cur) => (cur <= -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0));
-  };
-
-  return (
-    <div className="relative overflow-hidden rounded-2xl">
-      <button
-        type="button"
-        onClick={onDelete}
-        disabled={deleting}
-        tabIndex={dx < 0 ? 0 : -1}
-        aria-hidden={dx >= 0}
-        aria-label={label}
-        style={{ width: SWIPE_REVEAL, opacity: dx < 0 ? (deleting ? 0.6 : 1) : 0 }}
-        className="absolute inset-y-0 right-0 flex items-center justify-center bg-red-600 text-sm font-bold text-white"
-      >
-        {deleting ? "กำลังลบ..." : "ลบ"}
-      </button>
-
-      <div
-        style={{
-          transform: `translateX(${dx}px)`,
-          transition: drag ? "none" : "transform 200ms ease",
-          touchAction: "pan-y",
-        }}
-        className="relative select-none"
-        onPointerDown={(e) => {
-          if (deleting) return;
-          const s = st.current;
-          s.x = e.clientX;
-          s.y = e.clientY;
-          s.base = dx <= -SWIPE_REVEAL / 2 ? -SWIPE_REVEAL : 0;
-          s.active = true;
-          s.horizontal = false;
-          s.moved = false;
-        }}
-        onPointerMove={(e) => {
-          const s = st.current;
-          if (!s.active) return;
-          const mx = e.clientX - s.x;
-          const my = e.clientY - s.y;
-          if (!s.horizontal) {
-            if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
-            if (Math.abs(my) > Math.abs(mx)) {
-              s.active = false; // เลื่อนหน้าจอขึ้นลง ไม่ใช่การปัด
-              return;
-            }
-            s.horizontal = true;
-            s.moved = true;
-            setDrag(true);
-            e.currentTarget.setPointerCapture(e.pointerId);
-          }
-          setDx(Math.max(-SWIPE_REVEAL, Math.min(0, s.base + mx)));
-        }}
-        onPointerUp={end}
-        onPointerCancel={end}
-        onClickCapture={(e) => {
-          const s = st.current;
-          if (s.moved) {
-            // เพิ่งลากเสร็จ ไม่นับเป็นการกด
-            s.moved = false;
-            e.preventDefault();
-            e.stopPropagation();
-          } else if (dx < 0) {
-            // เปิดอยู่แล้วแตะที่การ์ด = ปิด
-            e.preventDefault();
-            e.stopPropagation();
-            setDx(0);
-          }
-        }}
-      >
-        {children}
-      </div>
     </div>
   );
 }
@@ -691,12 +515,12 @@ function Steps({ current }: { current: 1 | 2 | 3 }) {
           <li key={s} className="flex items-center gap-1.5" aria-current={active ? "step" : undefined}>
             <span
               className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${
-                active || done ? "bg-[#14402c] text-white" : "bg-[#dfe9d2] text-[#6b7f6f]"
+                active || done ? "bg-[#e50914] text-white" : "bg-white/15 text-white/60"
               }`}
             >
               {done ? <IconCheck className="h-3.5 w-3.5" /> : n}
             </span>
-            <span className={`text-xs md:text-sm ${active ? "font-bold text-[#14402c]" : "text-[#6b7f6f]"}`}>{s}</span>
+            <span className={`text-xs md:text-sm ${active ? "font-bold text-white" : "text-white/50"}`}>{s}</span>
           </li>
         );
       })}
@@ -713,25 +537,25 @@ function SubHeader({ title, onBack }: { title: string; onBack?: () => void }) {
           type="button"
           onClick={onBack}
           aria-label="ย้อนกลับ"
-          className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#14402c] shadow-[0_1px_4px_rgba(20,64,44,0.15)]"
+          className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/10 text-white backdrop-blur-md"
         >
           <IconBack />
         </button>
       ) : (
         <span className="h-11 w-0" />
       )}
-      <h1 className="text-xl font-semibold text-[#14402c] md:text-2xl">{title}</h1>
+      <h1 className="text-xl font-semibold text-white md:text-2xl">{title}</h1>
     </div>
   );
 }
 
 function InfoBox({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
   return (
-    <div className="flex items-start gap-3 rounded-2xl bg-[#e3ecd6] p-4 text-[#14402c]">
+    <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-[#1f1f1f] p-4 text-white">
       <span className="mt-0.5 shrink-0">{icon}</span>
       <div>
         <p className="text-sm font-bold">{title}</p>
-        <p className="mt-0.5 text-xs text-[#4d6652]">{text}</p>
+        <p className="mt-0.5 text-xs text-white/60">{text}</p>
       </div>
     </div>
   );
@@ -747,58 +571,87 @@ const NAV: { id: View; label: string; icon: ReactNode }[] = [
   { id: "profile", label: "โปรไฟล์", icon: <IconUser /> },
 ];
 
-// มือถือ: แถบล่าง (ซ่อนบนจอ md ขึ้นไป)
+// มือถือ: แถบล่างลอย สไตล์ Liquid Glass แบบ iOS 26 (ซ่อนบนจอ md ขึ้นไป)
+// ชั้นกระจก: เบลอ+เพิ่มสี+เพิ่มความสว่างของพื้นหลัง → ขอบสะท้อนแสง → ประกายแสงทแยง
+// ถ้าผู้ใช้เปิด "ลดความโปร่งใส" หรือเบราว์เซอร์ไม่รองรับ backdrop-filter จะตกกลับเป็นพื้นทึบ
+// golden = มีตั๋วถูกรางวัลที่ผู้ใช้ยังไม่เคยเปิดดู: ปุ่ม "ตั๋วของฉัน" เป็นสีทองวิบวับ จนกว่าจะกดเข้าไปดู
 function BottomNav({
   view,
   badges,
+  golden,
   onGo,
 }: {
   view: View;
   badges: Badges;
+  golden: boolean;
   onGo: (v: View) => void;
 }) {
   return (
     <nav
       aria-label="เมนูหลัก"
-      className="fixed inset-x-0 bottom-0 z-40 border-t border-[#e3ecd6] bg-white pb-[env(safe-area-inset-bottom)] md:hidden"
+      className="fixed inset-x-4 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-40 md:hidden"
     >
-      <ul className="mx-auto grid max-w-md grid-cols-4 px-2 py-2">
-        {NAV.map((n) => {
-          const active = view === n.id;
-          const badge = badges[n.id] ?? 0;
-          return (
-            <li key={n.id} className="flex justify-center">
-              <button
-                type="button"
-                onClick={() => onGo(n.id)}
-                aria-label={n.label}
-                aria-current={active ? "page" : undefined}
-                className={`relative flex min-w-[4.5rem] flex-col items-center gap-0.5 rounded-2xl px-3 py-2 transition ${
-                  active ? "bg-[#d9f27a] text-[#14402c]" : "text-[#4d6652]"
-                }`}
-              >
-                <span className="relative">
-                  {n.icon}
-                  {badge > 0 && (
-                    <span className="absolute -right-2.5 -top-1.5 min-w-4 rounded-full bg-[#14402c] px-1 text-center text-[10px] leading-4 text-white">
-                      {badge}
-                    </span>
+      <div className="relative isolate overflow-hidden rounded-full border border-white/25 bg-white/[0.07] shadow-[0_12px_40px_rgba(0,0,0,0.55),0_2px_8px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.5),inset_0_-1px_0_rgba(255,255,255,0.1),inset_0_0_20px_rgba(255,255,255,0.07)] backdrop-blur-[28px] backdrop-brightness-110 backdrop-saturate-[180%] supports-[not(backdrop-filter:blur(1px))]:bg-[#2a2a2a]/95 [@media(prefers-reduced-transparency:reduce)]:bg-[#2a2a2a]/95 [@media(prefers-reduced-transparency:reduce)]:backdrop-blur-none">
+        {/* ประกายแสงด้านบนของกระจก */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-1/2 rounded-t-full bg-gradient-to-b from-white/20 to-transparent"
+        />
+        {/* ประกายแสงทแยง (specular highlight) */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 rounded-full bg-[linear-gradient(120deg,rgba(255,255,255,0.22)_0%,rgba(255,255,255,0)_35%,rgba(255,255,255,0)_65%,rgba(255,255,255,0.14)_100%)]"
+        />
+        <ul className="relative mx-auto grid max-w-md grid-cols-4 gap-1 p-1.5">
+          {NAV.map((n) => {
+            const active = view === n.id;
+            const badge = badges[n.id] ?? 0;
+            const gold = golden && n.id === "tickets" && !active;
+            return (
+              <li key={n.id}>
+                <button
+                  type="button"
+                  onClick={() => onGo(n.id)}
+                  aria-label={gold ? `${n.label} (มีตั๋วที่ถูกรางวัล)` : n.label}
+                  aria-current={active ? "page" : undefined}
+                  className={`relative flex w-full flex-col items-center gap-0.5 rounded-full px-1 py-2 transition duration-300 active:scale-95 ${
+                    active
+                      ? "bg-white/[0.2] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.55),inset_0_0_0_1px_rgba(255,255,255,0.25),inset_0_-6px_12px_rgba(255,255,255,0.08),0_2px_10px_rgba(0,0,0,0.3)] backdrop-blur-md"
+                      : gold
+                        ? "pd-gold-frame text-[#5a3b00]"
+                        : "text-white/70"
+                  }`}
+                >
+                  <span className="relative">
+                    {n.icon}
+                    {badge > 0 && (
+                      <span className="absolute -right-2.5 -top-1.5 min-w-4 rounded-full bg-[#e50914] px-1 text-center text-[10px] leading-4 text-white shadow-[0_1px_4px_rgba(0,0,0,0.4)]">
+                        {badge}
+                      </span>
+                    )}
+                  </span>
+                  <span className={`text-[11px] ${active || gold ? "font-bold" : "font-medium"}`}>{n.label}</span>
+                  {gold && (
+                    <>
+                      <IconSpark className="pd-spark pointer-events-none absolute left-1 top-0.5 h-3 w-3 text-white" />
+                      <IconSpark className="pd-spark pointer-events-none absolute bottom-1 right-1 h-2.5 w-2.5 text-white [animation-delay:0.7s]" />
+                    </>
                   )}
-                </span>
-                <span className={`text-[11px] ${active ? "font-bold" : "font-medium"}`}>{n.label}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </nav>
   );
 }
 
-// คอมพิวเตอร์/แท็บเล็ต: แถบบน (แสดงตั้งแต่จอ md ขึ้นไป)
+// คอมพิวเตอร์/แท็บเล็ต: แถบบน (แสดงตั้งแต่จอ md ขึ้นไป) พื้นกระจกเบลอ
 function TopNav({
   view,
   badges,
+  golden,
   user,
   ready,
   onGo,
@@ -806,13 +659,14 @@ function TopNav({
 }: {
   view: View;
   badges: Badges;
+  golden: boolean;
   user: User | null;
   ready: boolean;
   onGo: (v: View) => void;
   onLogin: () => void;
 }) {
   return (
-    <header className="sticky top-0 z-40 hidden border-b border-[#e3ecd6] bg-white/90 backdrop-blur md:block">
+    <header className="sticky top-0 z-40 hidden border-b border-white/10 bg-black/50 backdrop-blur-xl md:block">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-8 py-3">
         <button
           type="button"
@@ -820,12 +674,12 @@ function TopNav({
           aria-label="ไปหน้าหลัก"
           className="flex items-center gap-3 text-left"
         >
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#14402c] text-[#d9f27a]">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#e50914] text-white">
             <IconTicket />
           </span>
           <span>
             <span className="block text-xl font-bold lowercase leading-none">{EVENT.name}</span>
-            <span className="mt-1 block text-[11px] text-[#4d6652]">{EVENT.tagline}</span>
+            <span className="mt-1 block text-[11px] text-white/60">{EVENT.tagline}</span>
           </span>
         </button>
 
@@ -834,21 +688,33 @@ function TopNav({
             {NAV.filter((n) => n.id !== "profile").map((n) => {
               const active = view === n.id;
               const badge = badges[n.id] ?? 0;
+              const gold = golden && n.id === "tickets" && !active;
               return (
                 <li key={n.id}>
                   <button
                     type="button"
                     onClick={() => onGo(n.id)}
                     aria-current={active ? "page" : undefined}
-                    className={`flex items-center gap-2 rounded-full px-4 py-2 text-sm transition ${
-                      active ? "bg-[#d9f27a] font-bold" : "font-medium text-[#4d6652] hover:bg-[#e3ecd6]"
+                    aria-label={gold ? `${n.label} (มีตั๋วที่ถูกรางวัล)` : undefined}
+                    className={`relative flex items-center gap-2 rounded-full px-4 py-2 text-sm transition ${
+                      active
+                        ? "bg-[#1f1f1f] font-bold text-black"
+                        : gold
+                          ? "pd-gold-frame font-bold text-[#5a3b00]"
+                          : "font-medium text-white/70 hover:bg-white/10"
                     }`}
                   >
                     {n.label}
                     {badge > 0 && (
-                      <span className="min-w-5 rounded-full bg-[#14402c] px-1.5 text-center text-[11px] leading-5 text-white">
+                      <span className="min-w-5 rounded-full bg-[#e50914] px-1.5 text-center text-[11px] leading-5 text-white">
                         {badge}
                       </span>
+                    )}
+                    {gold && (
+                      <>
+                        <IconSpark className="pd-spark pointer-events-none absolute -left-1 -top-1 h-3.5 w-3.5 text-white" />
+                        <IconSpark className="pd-spark pointer-events-none absolute -bottom-1 -right-1 h-3 w-3 text-white [animation-delay:0.7s]" />
+                      </>
                     )}
                   </button>
                 </li>
@@ -865,10 +731,10 @@ function TopNav({
               aria-label="โปรไฟล์"
               aria-current={view === "profile" ? "page" : undefined}
               className={`flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-4 text-sm font-semibold transition ${
-                view === "profile" ? "bg-[#d9f27a]" : "bg-[#e3ecd6] hover:bg-[#d6e3c5]"
+                view === "profile" ? "bg-[#1f1f1f] text-black" : "bg-white/10 hover:bg-white/20"
               }`}
             >
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#14402c] text-sm font-bold uppercase text-[#d9f27a]">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#e50914] text-sm font-bold uppercase text-white">
                 {(user.name || user.username).charAt(0)}
               </span>
               <span className="max-w-[10rem] truncate">{user.name}</span>
@@ -878,7 +744,7 @@ function TopNav({
             <button
               type="button"
               onClick={onLogin}
-              className="rounded-full bg-[#14402c] px-5 py-2.5 text-sm font-bold text-white transition hover:opacity-90"
+              className="rounded-full bg-[#e50914] px-5 py-2.5 text-sm font-bold text-white transition hover:opacity-90"
             >
               เข้าสู่ระบบ
             </button>
@@ -890,15 +756,15 @@ function TopNav({
 }
 
 /* ---------- แถบสรุปยอด ----------
-   ติดขอบล่างจอทั้งมือถือและคอมพิวเตอร์
-   มือถือ: aboveNav = วางเหนือแถบเมนูล่าง / คอมพิวเตอร์: ไม่มีแถบเมนูล่าง จึงชิดขอบล่างเลย */
+   ติดขอบล่างจอ พื้นกระจกเบลอ
+   มือถือ: aboveNav = ลอยเหนือแถบเมนูล่าง / คอมพิวเตอร์: ชิดขอบล่างเลย */
 function CheckoutBar({ children, aboveNav = false }: { children: ReactNode; aboveNav?: boolean }) {
   return (
     <div
-      className={`fixed inset-x-0 z-40 rounded-t-3xl border-t border-[#e3ecd6] bg-white shadow-[0_-8px_24px_rgba(20,64,44,0.08)] ${
+      className={`fixed z-40 border border-white/15 bg-black/55 shadow-[0_-8px_32px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.15)] backdrop-blur-2xl backdrop-saturate-150 ${
         aboveNav
-          ? "bottom-[calc(4rem+env(safe-area-inset-bottom))] md:bottom-0"
-          : "bottom-0 pb-[env(safe-area-inset-bottom)]"
+          ? "inset-x-3 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] rounded-[2rem] md:inset-x-0 md:bottom-0 md:rounded-b-none md:rounded-t-3xl md:border-x-0 md:border-b-0"
+          : "inset-x-0 bottom-0 rounded-t-3xl border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]"
       }`}
     >
       <div className="mx-auto w-full max-w-md px-5 py-4 md:max-w-6xl md:px-8 md:py-5">{children}</div>
@@ -1035,7 +901,7 @@ function SlipPay({
         <Steps current={2} />
       </div>
 
-      {!pay && <p className="mt-6 text-sm text-[#4d6652]">{loadError || "กำลังโหลด..."}</p>}
+      {!pay && <p className="mt-6 text-sm text-white/60">{loadError || "กำลังโหลด..."}</p>}
 
       {open && (
         <div className="md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-6">
@@ -1046,11 +912,11 @@ function SlipPay({
             </div>
           )}
 
-          <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-5 text-center md:mt-0 md:p-6">
-            <p className="text-xs text-[#6b7f6f]">โอนตามยอดนี้เป๊ะ ๆ</p>
+          <div className="mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center md:mt-0 md:p-6">
+            <p className="text-xs text-white/50">โอนตามยอดนี้เป๊ะ ๆ</p>
             <p className="mt-1 text-4xl font-extrabold">{baht(pay.amount)}</p>
 
-            <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-[#e3ecd6] bg-white p-2 md:max-w-[19rem]">
+            <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-white p-2 md:max-w-[19rem]">
               {qrFailed || !pay.qrUrl ? (
                 <p className="px-4 text-sm text-red-600">แสดง QR ไม่ได้ ปิดหน้านี้แล้วเปิดใหม่</p>
               ) : (
@@ -1064,15 +930,15 @@ function SlipPay({
               )}
             </div>
 
-            <p className="mt-3 text-sm text-[#4d6652]">สแกนด้วยแอปธนาคาร (ยอดและรหัสอ้างอิงอยู่ใน QR แล้ว)</p>
-            <p className="mt-1 text-xs text-[#6b7f6f]">
-              รหัสอ้างอิง <span className="font-mono font-bold text-[#14402c]">{pay.ref}</span>
+            <p className="mt-3 text-sm text-white/60">สแกนด้วยแอปธนาคาร (ยอดและรหัสอ้างอิงอยู่ใน QR แล้ว)</p>
+            <p className="mt-1 text-xs text-white/50">
+              รหัสอ้างอิง <span className="font-mono font-bold text-white">{pay.ref}</span>
             </p>
             {pay.qrUrl && (
               <a
                 href={pay.qrUrl}
                 download={`payday-${pay.ref}.png`}
-                className="mt-3 inline-block rounded-full border border-[#14402c] px-4 py-2 text-xs font-semibold"
+                className="mt-3 inline-block rounded-full border border-white/40 px-4 py-2 text-xs font-semibold"
               >
                 บันทึก QR ลงเครื่อง (สำหรับสแกนจากรูป)
               </a>
@@ -1082,13 +948,13 @@ function SlipPay({
             </p>
           </div>
 
-          <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-5 md:mt-0 md:p-6">
+          <div className="mt-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:mt-0 md:p-6">
             <h2 className="text-base font-bold">ส่งสลีปโอนเงิน</h2>
-            <p className="mt-1 text-xs text-[#6b7f6f]">
+            <p className="mt-1 text-xs text-white/50">
               ใช้สลีปจากแอปธนาคาร ต้องเห็น QR บนสลีปชัด ไม่ครอป ไม่ตัดขอบ สลีป 1 ใบใช้ได้ครั้งเดียว
             </p>
 
-            <label className="mt-3 flex min-h-40 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-[#b9cba6] bg-[#f1f7e9] p-3 text-center text-sm font-semibold text-[#4d6652] focus-within:ring-2 focus-within:ring-[#14402c] md:min-h-56">
+            <label className="mt-3 flex min-h-40 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-white/20 bg-[#2a2a2a] p-3 text-center text-sm font-semibold text-white/60 focus-within:ring-2 focus-within:ring-white md:min-h-56">
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
@@ -1117,31 +983,31 @@ function SlipPay({
               type="button"
               onClick={upload}
               disabled={!file || busy || secsLeft === 0}
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e50914] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {busy ? "กำลังส่งสลีป..." : "ส่งสลีป"}
-              {!busy && <IconArrow className="h-5 w-5 text-[#d9f27a]" />}
+              {!busy && <IconArrow className="h-5 w-5 text-white" />}
             </button>
           </div>
         </div>
       )}
 
       {pay?.status === "reviewing" && (
-        <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-6 text-center md:mx-auto md:max-w-xl md:p-8">
-          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#d9f27a]">
+        <div className="mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-6 text-center md:mx-auto md:max-w-xl md:p-8">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-white text-black">
             <IconReceipt className="h-7 w-7" />
           </span>
           <h2 className="mt-4 text-xl font-bold">ส่งสลีปแล้ว รอตรวจสอบ</h2>
-          <p className="mt-2 text-sm text-[#4d6652]">
+          <p className="mt-2 text-sm text-white/60">
             {baht(pay.amount)} · รหัส <span className="font-mono font-bold">{pay.ref}</span>
           </p>
-          <p className="mt-2 text-sm text-[#4d6652]">
+          <p className="mt-2 text-sm text-white/60">
             เจ้าหน้าที่อนุมัติแล้วตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” ปิดหน้านี้ได้เลย ไม่ต้องรอ
           </p>
           <button
             type="button"
             onClick={onBack}
-            className="mt-5 rounded-full bg-[#14402c] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+            className="mt-5 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
           >
             ไปหน้าตั๋วของฉัน
           </button>
@@ -1149,15 +1015,15 @@ function SlipPay({
       )}
 
       {pay?.status === "expired" && (
-        <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-6 text-center md:mx-auto md:max-w-xl md:p-8">
+        <div className="mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-6 text-center md:mx-auto md:max-w-xl md:p-8">
           <h2 className="text-xl font-bold">หมดเวลาแล้ว</h2>
-          <p className="mt-2 text-sm text-[#4d6652]">
+          <p className="mt-2 text-sm text-white/60">
             ถ้าโอนเงินไปแล้ว ติดต่อเจ้าหน้าที่พร้อมรหัสอ้างอิง <span className="font-mono font-bold">{pay.ref}</span>
           </p>
           <button
             type="button"
             onClick={onBack}
-            className="mt-5 rounded-full bg-[#14402c] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+            className="mt-5 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
           >
             กลับ
           </button>
@@ -1195,6 +1061,7 @@ export default function Home() {
   const [paymentId, setPaymentId] = useState<string | null>(null);
   const [pending, setPending] = useState<Payment[]>([]);
   const [cancelingId, setCancelingId] = useState<string | null>(null); // รายการที่กำลังลบ
+  const [cancelTarget, setCancelTarget] = useState<Payment | null>(null); // รายการที่รอยืนยันการยกเลิก (popup)
 
   // เข้าสู่ระบบ / สมัครสมาชิก
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
@@ -1202,6 +1069,7 @@ export default function Home() {
   const [authPass, setAuthPass] = useState("");
   const [authName, setAuthName] = useState("");
   const [authPhone, setAuthPhone] = useState("");
+  const [authEmp, setAuthEmp] = useState("");
   const [authError, setAuthError] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [afterAuth, setAfterAuth] = useState<View>("home");
@@ -1209,13 +1077,17 @@ export default function Home() {
   // บัญชี/โปรไฟล์
   const [accName, setAccName] = useState("");
   const [accPhone, setAccPhone] = useState("");
+  const [accEmp, setAccEmp] = useState("");
   const [accError, setAccError] = useState("");
   const [accSaved, setAccSaved] = useState(false);
+  const [returnToPay, setReturnToPay] = useState(false); // ถูกส่งมากรอกรหัสพนักงานจากการกดชำระเงิน: บันทึกแล้วกลับไปหน้าชำระเงิน
 
   // ตั๋วของฉัน
-  const [tab, setTab] = useState<"ready" | "used">("ready");
+  const [tab, setTab] = useState<"ready" | "used" | "status">("ready");
   const [sheet, setSheet] = useState<TicketId | null>(null);
-  const [confirmCode, setConfirmCode] = useState<string | null>(null);
+  const [seenWon, setSeenWon] = useState<string[]>([]); // ตั๋วถูกรางวัลที่ผู้ใช้เห็นแล้ว
+
+  const userId = user?.id ?? null;
 
   useEffect(() => {
     // ตะกร้า: กรองให้เหลือเฉพาะค่าที่ถูกต้อง
@@ -1244,23 +1116,49 @@ export default function Home() {
     window.scrollTo({ top: 0 });
   }, [view]);
 
+  // โหลดรายการตั๋วถูกรางวัลที่เคยเห็นแล้ว (แยกตามผู้ใช้)
+  useEffect(() => {
+    setSeenWon(userId ? load<string[]>(seenKey(userId), []) : []);
+  }, [userId]);
+
+  // เข้าหน้า "ตั๋วของฉัน" = เห็นตั๋วที่ถูกรางวัลแล้ว: ปุ่มเมนูกลับเป็นปกติ
+  useEffect(() => {
+    if (view !== "tickets" || !userId) return;
+    const won = orders.filter((o) => o.won).map((o) => o.code);
+    if (won.length === 0) return;
+    setSeenWon((prev) => {
+      if (won.every((c) => prev.includes(c))) return prev;
+      const next = Array.from(new Set([...prev, ...won]));
+      save(seenKey(userId), next);
+      return next;
+    });
+  }, [view, orders, userId]);
+
   // กด Esc ปิดหน้าต่างแสดงตั๋ว (คอมพิวเตอร์)
   useEffect(() => {
     if (!sheet) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setSheet(null);
-        setConfirmCode(null);
-      }
+      if (e.key === "Escape") setSheet(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [sheet]);
 
-  // เข้าหน้า "ตั๋วของฉัน" ให้โหลดตั๋วใหม่เสมอ และโหลดซ้ำทุก 10 วิ
-  // (ตั๋วถูกออกตอน admin อนุมัติสลีป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง)
+  // กด Esc ปิด popup ยืนยันการยกเลิกรายการ
   useEffect(() => {
-    if (view !== "tickets" || !user) return;
+    if (!cancelTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCancelTarget(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cancelTarget]);
+
+  // โหลดตั๋วใหม่ทุก 10 วิ ตลอดที่ login อยู่ (เข้าหน้า "ตั๋วของฉัน" โหลดทันที)
+  // (ตั๋วถูกออกตอน admin อนุมัติสลีป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง
+  //  และสถานะถูกรางวัลก็มาทางนี้ด้วย ปุ่มเมนูสีทองจะขึ้นแม้อยู่หน้าอื่น)
+  useEffect(() => {
+    if (!user) return;
     let cancelled = false;
     const loadTickets = async () => {
       const r = await api<{ orders: Order[]; pending?: Payment[] }>("/api/orders");
@@ -1269,7 +1167,7 @@ export default function Home() {
         setPending(r.data.pending ?? []);
       }
     };
-    loadTickets();
+    if (view === "tickets") loadTickets();
     const t = setInterval(loadTickets, 10000);
     return () => {
       cancelled = true;
@@ -1284,21 +1182,27 @@ export default function Home() {
   });
   const cartCount = cartLines.reduce((s, l) => s + l.qty, 0);
   const cartTotal = cartLines.reduce((s, l) => s + l.qty * l.def.price, 0);
+  const cartHasLucky = cartLines.some((l) => l.def.id === "lucky");
 
   const readyOrders = orders.filter((o) => !o.used);
   const usedOrders = orders
     .filter((o) => o.used)
     .sort((a, b) => (b.usedAt ?? "").localeCompare(a.usedAt ?? ""));
 
+  // มีตั๋วถูกรางวัลที่ผู้ใช้ยังไม่เคยเปิดดู
+  const hasNewWin = orders.some((o) => o.won && !seenWon.includes(o.code));
+
   function go(v: View) {
     setView(v);
     setPayError("");
+    if (v !== "profile") setReturnToPay(false);
   }
 
   function applyUser(u: User) {
     setUser(u);
     setAccName(u.name);
     setAccPhone(u.phone);
+    setAccEmp(u.empCode ?? "");
   }
 
   // ไปหน้า login แล้วเมื่อสำเร็จให้เด้งกลับมาหน้าที่ต้องการ
@@ -1309,11 +1213,20 @@ export default function Home() {
     setView("auth");
   }
 
+  // บัญชีเก่ายังไม่มีรหัสพนักงาน: พาไปกรอกในโปรไฟล์ก่อนซื้อ Lucky Draw
+  function needEmpCode() {
+    setReturnToPay(true);
+    setAccError("");
+    setAccSaved(false);
+    go("profile");
+  }
+
   async function submitAuth() {
     const username = authUser.trim();
     if (authMode === "register") {
       if (authName.trim().length < 2) return setAuthError("กรอกชื่อ-นามสกุลให้ครบ");
       if (!validPhone(authPhone.replace(/\D/g, ""))) return setAuthError("เบอร์โทรต้องมี 10 หลัก ขึ้นต้นด้วย 0");
+      if (!validEmp(authEmp.replace(/\D/g, ""))) return setAuthError(`รหัสพนักงานต้องเป็นตัวเลข ${EMP_CODE_LENGTH} หลัก`);
       if (!/^[a-zA-Z0-9._]{3,20}$/.test(username)) return setAuthError("username ต้องยาว 3-20 ตัว ใช้ได้เฉพาะ a-z 0-9 . _");
       if (authPass.length < 6) return setAuthError("รหัสผ่านต้องยาวอย่างน้อย 6 ตัวอักษร");
     } else if (!username || !authPass) {
@@ -1327,7 +1240,7 @@ export default function Home() {
       "POST",
       authMode === "login"
         ? { username, password: authPass }
-        : { username, password: authPass, name: authName, phone: authPhone },
+        : { username, password: authPass, name: authName, phone: authPhone, empCode: authEmp.replace(/\D/g, "") },
     );
     if (!r.ok) {
       setAuthBusy(false);
@@ -1340,6 +1253,7 @@ export default function Home() {
     setAuthPass("");
     setAuthName("");
     setAuthPhone("");
+    setAuthEmp("");
     setAuthUser("");
     go(afterAuth);
   }
@@ -1350,8 +1264,10 @@ export default function Home() {
     setOrders([]);
     setPaymentId(null);
     setPending([]);
+    setCancelTarget(null);
     setAccName("");
     setAccPhone("");
+    setAccEmp("");
     setAccSaved(false);
     setAccError("");
     setSheet(null);
@@ -1376,6 +1292,7 @@ export default function Home() {
   function toPay() {
     if (cartCount === 0) return;
     if (!user) return needLogin("pay"); // ซื้อตั๋วต้อง login ก่อน
+    if (cartHasLucky && !user.empCode) return needEmpCode(); // ซื้อ Lucky Draw ต้องมีรหัสพนักงานในบัญชี
     setPayName(user.name);
     setPayPhone(user.phone);
     go("pay");
@@ -1396,6 +1313,7 @@ export default function Home() {
   async function confirmPay() {
     if (cartLines.length === 0 || payBusy) return;
     if (!user) return needLogin("pay");
+    if (cartHasLucky && !user.empCode) return needEmpCode();
     const buyerName = payName.trim();
     const cleanPhone = payPhone.replace(/\D/g, "");
     if (buyerName.length < 2) {
@@ -1408,7 +1326,7 @@ export default function Home() {
     }
 
     // เซิร์ฟเวอร์คิดราคาเอง สร้างรายการรอโอน + QR พร้อมเพย์ (ยอด + รหัสอ้างอิงอยู่ใน QR)
-    // ตั๋วถูกสร้างใน MongoDB หลัง admin อนุมัติสลีปเท่านั้น
+    // รหัสพนักงานเซิร์ฟเวอร์ดึงจากบัญชีเอง ตั๋วถูกสร้างใน MongoDB หลัง admin อนุมัติสลีปเท่านั้น
     setPayBusy(true);
     setPayError("");
     const r = await api<{ payment: Payment }>("/api/orders", "POST", {
@@ -1429,19 +1347,20 @@ export default function Home() {
     setView("qr");
   }
 
-  // ออกจากหน้าโอนเงิน: รายการยังค้างอยู่ ไปดู/ส่งสลีปต่อได้ที่ "ตั๋วของฉัน"
+  // ออกจากหน้าโอนเงิน: รายการยังค้างอยู่ ไปดู/ส่งสลีปต่อได้ที่แท็บ "สถานะ" ใน "ตั๋วของฉัน"
   function leaveQr() {
     setPaymentId(null);
-    setTab("ready");
+    setTab("status");
     go("tickets");
   }
 
-  // ปัดซ้ายแล้วกด "ลบ" (หรือกดปุ่ม "ยกเลิก" บนคอมพิวเตอร์): ยกเลิกรายการที่ยังไม่ส่งสลีป (เซิร์ฟเวอร์ตรวจสถานะซ้ำอีกที)
+  // กดไอคอนถังขยะแล้วยืนยันใน popup: ยกเลิกรายการที่ยังไม่ส่งสลีป (เซิร์ฟเวอร์ตรวจสถานะซ้ำอีกที)
   async function cancelPayment(id: string) {
     if (cancelingId) return;
     setCancelingId(id);
     const r = await api(`/api/payments/${id}`, "DELETE");
     setCancelingId(null);
+    setCancelTarget(null);
     if (r.ok || (!r.ok && r.status === 404)) {
       setPending((prev) => prev.filter((p) => p.id !== id));
       return;
@@ -1456,23 +1375,9 @@ export default function Home() {
     }
   }
 
-  async function markUsed(code: string) {
-    const target = orders.find((o) => o.code === code);
-    const r = await api<{ usedAt: string }>(`/api/orders/${encodeURIComponent(code)}/use`, "POST");
-    setConfirmCode(null);
-    if (!r.ok) {
-      if (r.status === 401) setSheet(null), needLogin("tickets");
-      else alert(r.error);
-      return;
-    }
-    const next = orders.map((o) => (o.code === code ? { ...o, used: true, usedAt: r.data.usedAt } : o));
-    setOrders(next);
-    // ปิดหน้าต่างเมื่อไม่เหลือตั๋วประเภทนั้นที่พร้อมใช้
-    if (target && !next.some((o) => o.ticket === target.ticket && !o.used)) setSheet(null);
-  }
-
   async function saveProfile() {
     const cleanPhone = accPhone.replace(/\D/g, "");
+    const cleanEmp = accEmp.replace(/\D/g, "");
     setAccSaved(false);
     if (accName.trim().length < 2) {
       setAccError("กรอกชื่อ-นามสกุลให้ครบ");
@@ -1482,7 +1387,21 @@ export default function Home() {
       setAccError("เบอร์โทรต้องมี 10 หลัก ขึ้นต้นด้วย 0");
       return;
     }
-    const r = await api<{ user: User }>("/api/auth/me", "PATCH", { name: accName.trim(), phone: cleanPhone });
+    // รหัสพนักงานตั้งได้ครั้งเดียว (เฉพาะบัญชีที่ยังไม่มีรหัส) ตั้งแล้วแก้ไม่ได้
+    const settingEmp = !user?.empCode && cleanEmp.length > 0;
+    if (settingEmp && !validEmp(cleanEmp)) {
+      setAccError(`รหัสพนักงานต้องเป็นตัวเลข ${EMP_CODE_LENGTH} หลัก`);
+      return;
+    }
+    if (returnToPay && !user?.empCode && !settingEmp) {
+      setAccError(`กรอกรหัสพนักงาน ${EMP_CODE_LENGTH} หลักก่อนซื้อ Lucky Draw`);
+      return;
+    }
+    const r = await api<{ user: User }>("/api/auth/me", "PATCH", {
+      name: accName.trim(),
+      phone: cleanPhone,
+      ...(settingEmp ? { empCode: cleanEmp } : {}),
+    });
     if (!r.ok) {
       setAccError(r.error);
       return;
@@ -1490,6 +1409,13 @@ export default function Home() {
     applyUser(r.data.user);
     setAccError("");
     setAccSaved(true);
+    // มากรอกรหัสพนักงานจากการกดชำระเงิน: ได้รหัสแล้วกลับไปหน้าชำระเงินต่อ
+    if (returnToPay && r.data.user.empCode && cartCount > 0) {
+      setReturnToPay(false);
+      setPayName(r.data.user.name);
+      setPayPhone(r.data.user.phone);
+      go("pay");
+    }
   }
 
   const badges: Badges = { tickets: readyOrders.length };
@@ -1499,12 +1425,15 @@ export default function Home() {
     view === "pay" || view === "qr" || view === "done" ? "buy" : view === "auth" ? "profile" : view;
 
   const inputCls =
-    "mt-1 w-full rounded-xl border border-[#cfdcc0] bg-white px-4 py-3 text-base outline-none focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a]";
+    "mt-1 w-full rounded-xl border border-white/15 bg-[#2a2a2a] px-4 py-3 text-base text-white outline-none focus:border-white/60 focus:ring-2 focus:ring-white/20";
 
   const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(EVENT.place)}`;
 
   const sheetDef = sheet ? defOf(sheet) : null;
-  const sheetOrders = sheet ? readyOrders.filter((o) => o.ticket === sheet) : [];
+  // ตั๋วที่ถูกรางวัลขึ้นก่อน
+  const sheetOrders = sheet
+    ? readyOrders.filter((o) => o.ticket === sheet).sort((a, b) => Number(b.won === true) - Number(a.won === true))
+    : [];
 
   // ระยะเว้นด้านล่างของหน้า: หน้าซื้อ/ชำระเงินมีแถบสรุปยอดติดขอบล่าง ต้องเว้นที่ให้ทั้งมือถือและคอมพิวเตอร์
   const mainPad =
@@ -1518,66 +1447,118 @@ export default function Home() {
 
   return (
     <div
-      className={`min-h-screen bg-[#f1f7e9] text-[#14402c] [&_button:disabled]:cursor-not-allowed [&_button:not(:disabled)]:cursor-pointer ${appFont.className}`}
+      className={`min-h-screen overflow-x-clip bg-[#141414] text-white [color-scheme:dark] [&_button:disabled]:cursor-not-allowed [&_button:not(:disabled)]:cursor-pointer ${appFont.className}`}
     >
+      {/* แอนิเมชันกรอบทองวิบวับ (ตั๋วที่ถูกรางวัล + ปุ่มเมนู "ตั๋วของฉัน") */}
+      <style>{`
+        @keyframes pdGold {
+          0% { background-position: 0% 50%; }
+          100% { background-position: 200% 50%; }
+        }
+        @keyframes pdGlow {
+          0%, 100% { box-shadow: 0 0 16px 2px rgba(255, 200, 40, 0.55), 0 0 36px 6px rgba(255, 170, 0, 0.3); }
+          50% { box-shadow: 0 0 28px 6px rgba(255, 228, 100, 0.95), 0 0 64px 14px rgba(255, 190, 0, 0.55); }
+        }
+        @keyframes pdTwinkle {
+          0%, 100% { opacity: 0; transform: scale(0.3) rotate(0deg); }
+          50% { opacity: 1; transform: scale(1.15) rotate(25deg); }
+        }
+        .pd-gold-frame {
+          background: linear-gradient(110deg, #b8860b, #ffe27a, #fff6c9, #ffd54a, #b8860b, #ffe27a, #b8860b);
+          background-size: 200% 100%;
+          animation: pdGold 2.2s linear infinite, pdGlow 1.5s ease-in-out infinite;
+        }
+        .pd-twinkle { animation: pdTwinkle 1.6s ease-in-out infinite; }
+        .pd-spark { animation: pdTwinkle 1.6s ease-in-out infinite; }
+        .pd-twinkle:nth-child(1) { top: 2%; left: 6%; width: 1rem; height: 1rem; animation-delay: 0s; }
+        .pd-twinkle:nth-child(2) { top: 5%; left: 48%; width: 0.75rem; height: 0.75rem; animation-delay: 0.5s; }
+        .pd-twinkle:nth-child(3) { top: 3%; left: 90%; width: 1.25rem; height: 1.25rem; animation-delay: 1.1s; }
+        .pd-twinkle:nth-child(4) { top: 48%; left: 1%; width: 0.75rem; height: 0.75rem; animation-delay: 0.8s; }
+        .pd-twinkle:nth-child(5) { top: 52%; left: 94%; width: 1rem; height: 1rem; animation-delay: 0.3s; }
+        .pd-twinkle:nth-child(6) { top: 92%; left: 9%; width: 1.25rem; height: 1.25rem; animation-delay: 1.4s; }
+        .pd-twinkle:nth-child(7) { top: 94%; left: 52%; width: 0.75rem; height: 0.75rem; animation-delay: 0.2s; }
+        .pd-twinkle:nth-child(8) { top: 90%; left: 88%; width: 1rem; height: 1rem; animation-delay: 0.9s; }
+        @media (prefers-reduced-motion: reduce) {
+          .pd-gold-frame, .pd-twinkle, .pd-spark { animation: none; }
+          .pd-twinkle, .pd-spark { opacity: 1; }
+        }
+      `}</style>
+
+      {/* พื้นหลังหน้าซื้อตั๋ว: รูปอยู่ด้านบน ติดจอ ไม่เลื่อนตาม ด้านล่างไล่เป็นสีเข้มมาชนรูป */}
+      {view === "buy" && (
+        <div aria-hidden className="pointer-events-none fixed inset-0 z-0 bg-[#141414]">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={PAYCARD2_IMG} alt="" className="h-[60vh] w-full object-cover object-top" />
+          <div
+            className="absolute inset-0"
+            style={{
+              background:
+                "linear-gradient(to bottom, rgba(20,20,20,0) 0%, rgba(20,20,20,0.15) 20%, rgba(20,20,20,0.75) 45%, #141414 62%)",
+            }}
+          />
+        </div>
+      )}
+
       {/* แถบเมนูบน (เฉพาะแท็บเล็ต/คอมพิวเตอร์) */}
       <TopNav
         view={navView}
         badges={badges}
+        golden={hasNewWin}
         user={user}
         ready={ready}
         onGo={go}
         onLogin={() => needLogin("home")}
       />
 
-      <main className={`mx-auto w-full max-w-md px-5 pt-6 md:max-w-6xl md:px-8 md:pt-8 ${mainPad}`}>
+      <main className={`relative z-10 mx-auto w-full max-w-md px-5 pt-6 md:max-w-6xl md:px-8 md:pt-8 ${mainPad}`}>
         {/* ===== หน้าหลัก ===== */}
         {view === "home" && (
           <>
-            <header className="flex items-center justify-between md:hidden">
-              <div className="flex items-center gap-3">
-                <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#14402c] text-[#d9f27a]">
-                  <IconTicket />
-                </span>
-                <div>
-                  <h1 className="text-2xl font-bold lowercase leading-none">{EVENT.name}</h1>
-                  <p className="mt-1 text-[11px] text-[#4d6652]">{EVENT.tagline}</p>
+            <section className="relative -mt-6 ml-[calc(50%-50vw)] w-screen md:-mt-8">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={PAYCARD_IMG}
+                alt={`${EVENT.name} ${EVENT.tagline}`}
+                className="block h-auto min-h-[15rem] w-full object-cover object-center md:h-[18rem] lg:h-[22rem]"
+              />
+              {/* ไล่สีเข้มจากด้านล่างขึ้นบน กลืนกับพื้นหลังเว็บ */}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#141414] via-[#141414]/50 to-transparent"
+              />
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/60 to-transparent md:hidden"
+              />
+              <header className="absolute inset-x-0 top-0 flex items-center justify-between px-5 pt-6 md:hidden">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e50914] text-white">
+                    <IconTicket />
+                  </span>
+                  <div>
+                    <h1 className="text-2xl font-bold lowercase leading-none">{EVENT.name}</h1>
+                    <p className="mt-1 text-[11px] text-white/60">{EVENT.tagline}</p>
+                  </div>
                 </div>
-              </div>
-              {user ? (
-                <button
-                  type="button"
-                  onClick={() => go("profile")}
-                  aria-label="โปรไฟล์"
-                  className="flex h-11 w-11 items-center justify-center rounded-full bg-[#14402c] text-base font-bold uppercase text-[#d9f27a]"
-                >
-                  {(user.name || user.username).charAt(0)}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => needLogin("home")}
-                  className="rounded-full bg-white px-4 py-2.5 text-sm font-bold shadow-[0_1px_4px_rgba(20,64,44,0.15)] transition active:scale-95"
-                >
-                  เข้าสู่ระบบ
-                </button>
-              )}
-            </header>
-
-            <section className="relative mt-6 overflow-hidden rounded-3xl bg-[#14402c] p-5 text-white md:mt-0 md:flex md:min-h-[20rem] md:items-center md:p-12">
-              <div className="md:max-w-[50%]">
-                <p className="text-[11px] font-bold tracking-wider text-[#d9f27a] md:text-xs">PAYDAY IS PLAY DAY</p>
-                <h2 className="mt-3 text-3xl font-bold leading-tight md:text-4xl lg:text-5xl">
-                  เงินเดือนออกแล้ว
-                  <br />
-                  ออกมาเล่นกัน!
-                </h2>
-                <p className="mt-4 inline-flex items-center rounded-full bg-[#d9f27a] px-3 py-1.5 text-xs font-bold text-[#14402c] md:mt-6 md:text-sm">
-                  {EVENT.pill}
-                </p>
-              </div>
-              <div className="aspect-[967/496] md:hidden" />
-              <HeroArt />
+                {user ? (
+                  <button
+                    type="button"
+                    onClick={() => go("profile")}
+                    aria-label="โปรไฟล์"
+                    className="flex h-11 w-11 items-center justify-center rounded-full bg-[#e50914] text-base font-bold uppercase text-white"
+                  >
+                    {(user.name || user.username).charAt(0)}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => needLogin("home")}
+                    className="rounded-full border border-white/25 bg-black/40 px-4 py-2.5 text-sm font-bold backdrop-blur-md transition active:scale-95"
+                  >
+                    เข้าสู่ระบบ
+                  </button>
+                )}
+              </header>
             </section>
 
             <div className="mt-3 flex items-center justify-between px-1 text-sm md:mt-4 md:text-base">
@@ -1597,7 +1578,7 @@ export default function Home() {
 
             <section aria-label="เลือกประเภทตั๋ว" className="mt-8 md:mt-12">
               <h2 className="text-xl font-bold md:text-2xl">วันนี้อยากสนุกแบบไหน?</h2>
-              <p className="mt-1 text-sm text-[#4d6652] md:text-base">เลือกตั๋วที่ใช่ แล้วไปสนุกกันเลย</p>
+              <p className="mt-1 text-sm text-white/60 md:text-base">เลือกตั๋วที่ใช่ แล้วไปสนุกกันเลย</p>
               <div className="mt-4 grid grid-cols-2 gap-3 md:mt-6 md:gap-6">
                 {TICKETS.map((t) => (
                   <button
@@ -1609,7 +1590,7 @@ export default function Home() {
                   >
                     {/* ชื่อตั๋ว (ตั๋วที่มีรูป): อยู่เหนือกรอบ */}
                     {t.homeImage && (
-                      <p className="px-1 pb-2 text-lg font-bold text-[#14402c] md:pb-3 md:text-2xl">{t.title}</p>
+                      <p className="px-1 pb-2 text-lg font-bold text-white md:pb-3 md:text-2xl">{t.title}</p>
                     )}
                     <Perforated
                       bg={t.card}
@@ -1617,12 +1598,7 @@ export default function Home() {
                       dash={t.dash}
                       top={
                         t.homeImage ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={t.homeImage}
-                            alt={`${t.title} ${baht(t.price)} ต่อใบ`}
-                            className="block h-auto w-full"
-                          />
+                          <TicketImage src={t.homeImage} alt={`${t.title} ${baht(t.price)} ต่อใบ`} />
                         ) : (
                           <div className="px-4 pb-3 pt-4 md:px-6 md:pb-4 md:pt-6">
                             {iconOf(t.id, "h-6 w-6 md:h-8 md:w-8")}
@@ -1639,7 +1615,7 @@ export default function Home() {
                           </p>
                           <span
                             className={`flex h-9 w-9 items-center justify-center rounded-full md:h-11 md:w-11 ${
-                              t.homeImage ? "bg-[#d9f27a] text-[#14402c]" : "bg-[#14402c] text-white"
+                              t.homeImage ? "bg-white text-black" : "bg-[#e50914] text-white"
                             }`}
                           >
                             <IconArrow className="h-5 w-5" />
@@ -1651,11 +1627,11 @@ export default function Home() {
                 ))}
               </div>
 
-              <div className="mt-3 flex items-center gap-3 rounded-2xl bg-white p-4 md:mt-6 md:p-5">
+              <div className="mt-3 flex items-center gap-3 rounded-2xl bg-[#1f1f1f] p-4 md:mt-6 md:p-5">
                 <IconSpark className="h-7 w-7 shrink-0 text-[#2f8f5b]" />
                 <div>
                   <p className="text-sm font-bold md:text-base">ความโชคดีอาจเป็นของคุณ!</p>
-                  <p className="mt-0.5 text-xs text-[#4d6652] md:text-sm">ซื้อ Lucky Draw แล้วรอลุ้นพร้อมกัน</p>
+                  <p className="mt-0.5 text-xs text-white/60 md:text-sm">ซื้อ Lucky Draw แล้วรอลุ้นพร้อมกัน</p>
                 </div>
               </div>
             </section>
@@ -1670,8 +1646,8 @@ export default function Home() {
               <Steps current={1} />
             </div>
 
-            <h2 className="mt-8 text-2xl font-bold md:text-3xl">พร้อมสนุกกี่ใบดี?</h2>
-            <p className="mt-1 text-sm text-[#4d6652] md:text-base">เลือกจำนวนตั๋วทั้ง 2 แบบในครั้งเดียว</p>
+            <h2 className="mt-8 text-2xl font-bold text-white md:text-3xl">พร้อมสนุกกี่ใบดี?</h2>
+            <p className="mt-1 text-sm text-white/70 md:text-base">เลือกจำนวนตั๋วทั้ง 2 แบบในครั้งเดียว</p>
 
             {/* มือถือ: เรียงลง / คอมพิวเตอร์: 2 ตั๋วเรียงซ้ายขวา */}
             <div className="mt-5 flex flex-col gap-4 md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-6">
@@ -1682,15 +1658,14 @@ export default function Home() {
                 // ส่วนล่าง (หลังรอยประ): ราคา + ปุ่ม + - แยกจากตัวตั๋วเหมือนกันทุกใบ
                 return (
                   <div key={t.id}>
-                    {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-[#14402c]">{t.title}</p>}
+                    {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-white">{t.title}</p>}
                     <Perforated
                       bg={t.card}
                       text={t.fg}
                       dash={t.dash}
                       top={
                         t.homeImage ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={t.homeImage} alt={t.title} className="block h-auto w-full" />
+                          <TicketImage src={t.homeImage} alt={t.title} />
                         ) : (
                           <div className="p-4">
                             <div className="flex items-center gap-3">
@@ -1735,12 +1710,12 @@ export default function Home() {
               </div>
             </div>
 
-            {/* แถบสรุปยอดติดขอบล่าง (มือถือ: เหนือแถบเมนู / คอมพิวเตอร์: ชิดล่างสุด) */}
+            {/* แถบสรุปยอดติดขอบล่าง (มือถือ: เหนือแถบเมนู / คอมพิวเตอร์: ชิดล่างสุด) พื้นกระจกเบลอ */}
             <CheckoutBar aboveNav>
               <div className="md:flex md:items-center md:justify-between md:gap-8">
                 <div className="flex items-end justify-between md:items-center md:gap-8">
                   <div>
-                    <p className="text-xs text-[#6b7f6f]">ทั้งหมด {cartCount} ใบ</p>
+                    <p className="text-xs text-white/70">ทั้งหมด {cartCount} ใบ</p>
                     <p className="text-sm font-bold">ยอดรวม</p>
                   </div>
                   <p className="text-4xl font-extrabold">{baht(cartTotal)}</p>
@@ -1749,10 +1724,10 @@ export default function Home() {
                   type="button"
                   onClick={toPay}
                   disabled={cartCount === 0}
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-[#c7d3bb] disabled:text-white/80 md:mt-0 md:w-80 md:shrink-0"
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e50914] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-white/15 disabled:text-white/50 md:mt-0 md:w-80 md:shrink-0"
                 >
-                  {user ? "ไปชำระเงิน" : "เข้าสู่ระบบเพื่อชำระเงิน"}
-                  <IconArrow className="h-5 w-5 text-[#d9f27a]" />
+                  {user ? "ชำระเงิน" : "เข้าสู่ระบบเพื่อชำระเงิน"}
+                  <IconArrow className="h-5 w-5 text-white" />
                 </button>
               </div>
             </CheckoutBar>
@@ -1767,21 +1742,32 @@ export default function Home() {
               <Steps current={2} />
             </div>
 
-            <div className="mt-6 rounded-3xl border border-[#e3ecd6] bg-white p-4 md:p-6">
+            <div className="mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-4 md:p-6">
               <h2 className="text-base font-bold">สรุปรายการ</h2>
-              <p className="mt-0.5 text-xs text-[#6b7f6f]">
+              <p className="mt-0.5 text-xs text-white/50">
                 {EVENT.name} · {EVENT.date}
               </p>
-              <ul className="mt-3 divide-y divide-[#e3ecd6]">
+              <ul className="mt-3 divide-y divide-white/10">
                 {cartLines.map(({ def, qty: q }) => (
                   <li key={def.id} className="flex items-center justify-between gap-3 py-3">
                     <div className="flex items-center gap-3">
-                      <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${def.card} ${def.fg}`}>
-                        {iconOf(def.id, "h-5 w-5")}
-                      </span>
+                      {def.homeImage ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={def.homeImage}
+                          alt={def.title}
+                          className="h-12 w-auto shrink-0 object-contain md:h-14"
+                        />
+                      ) : (
+                        <span
+                          className={`flex h-10 w-10 items-center justify-center rounded-xl ${def.card} ${def.fg}`}
+                        >
+                          {iconOf(def.id, "h-5 w-5")}
+                        </span>
+                      )}
                       <div>
                         <p className="text-sm font-bold">{def.title}</p>
-                        <p className="text-xs text-[#6b7f6f]">
+                        <p className="text-xs text-white/50">
                           {baht(def.price)} × {q}
                         </p>
                       </div>
@@ -1790,17 +1776,24 @@ export default function Home() {
                   </li>
                 ))}
               </ul>
+              {/* รหัสพนักงานมาจากบัญชี (ตั้งตอนสมัคร) ไม่ต้องกรอกซ้ำ */}
+              {cartHasLucky && user?.empCode && (
+                <p className="mt-3 border-t border-white/10 pt-3 text-xs text-white/60">
+                  รหัสพนักงานสำหรับลุ้น Lucky Draw:{" "}
+                  <span className="font-mono font-bold text-white">{user.empCode}</span>
+                </p>
+              )}
             </div>
 
-            <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-4 md:p-6">
+            <div className="mt-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-4 md:p-6">
               <h2 className="text-base font-bold">วิธีชำระเงิน</h2>
-              <div className="mt-3 flex items-center justify-between rounded-2xl border-2 border-[#14402c] bg-[#f1f7e9] px-4 py-3">
+              <div className="mt-3 flex items-center justify-between rounded-2xl border-2 border-white/40 bg-[#2a2a2a] px-4 py-3">
                 <span className="text-sm font-bold">PromptPay (สแกน QR)</span>
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#14402c] text-white">
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#e50914] text-white">
                   <IconCheck className="h-3.5 w-3.5" />
                 </span>
               </div>
-              <p className="mt-2 text-xs text-[#6b7f6f]">
+              <p className="mt-2 text-xs text-white/50">
                 กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน โอนแล้วส่งสลีปภายใน 60 นาที รอเจ้าหน้าที่ตรวจสอบ
               </p>
             </div>
@@ -1814,7 +1807,7 @@ export default function Home() {
               <div className="md:flex md:items-center md:justify-between md:gap-8">
                 <div className="flex items-end justify-between md:items-center md:gap-8">
                   <div>
-                    <p className="text-xs text-[#6b7f6f]">ทั้งหมด {cartCount} ใบ</p>
+                    <p className="text-xs text-white/50">ทั้งหมด {cartCount} ใบ</p>
                     <p className="text-sm font-bold">ยอดรวม</p>
                   </div>
                   <p className="text-4xl font-extrabold">{baht(cartTotal)}</p>
@@ -1823,10 +1816,10 @@ export default function Home() {
                   type="button"
                   onClick={confirmPay}
                   disabled={payBusy}
-                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60 md:mt-0 md:w-80 md:shrink-0"
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e50914] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60 md:mt-0 md:w-80 md:shrink-0"
                 >
                   {payBusy ? "กำลังสร้าง QR..." : "สร้าง QR เพื่อชำระเงิน"}
-                  <IconArrow className="h-5 w-5 text-[#d9f27a]" />
+                  <IconArrow className="h-5 w-5 text-white" />
                 </button>
               </div>
             </CheckoutBar>
@@ -1851,11 +1844,11 @@ export default function Home() {
           <section aria-label="ซื้อตั๋วสำเร็จ">
             <Steps current={3} />
             <div className="mt-8 flex flex-col items-center text-center">
-              <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#d9f27a]">
+              <span className="flex h-16 w-16 items-center justify-center rounded-full bg-white text-black">
                 <IconCheck className="h-9 w-9" />
               </span>
               <h1 className="mt-4 text-2xl font-bold md:text-3xl">ได้รับตั๋วแล้ว!</h1>
-              <p className="mt-1 text-sm text-[#4d6652] md:text-base">
+              <p className="mt-1 text-sm text-white/60 md:text-base">
                 {justBought.length} ใบ · รวม {baht(justBought.reduce((s, o) => s + o.price, 0))}
               </p>
             </div>
@@ -1873,7 +1866,7 @@ export default function Home() {
                   setJustBought(null);
                   go("buy");
                 }}
-                className="flex-1 rounded-2xl border border-[#14402c] px-5 py-3.5 font-semibold transition active:scale-[0.99]"
+                className="flex-1 rounded-2xl border border-white/40 px-5 py-3.5 font-semibold transition active:scale-[0.99]"
               >
                 ซื้อเพิ่ม
               </button>
@@ -1884,7 +1877,7 @@ export default function Home() {
                   setTab("ready");
                   go("tickets");
                 }}
-                className="flex-1 rounded-2xl bg-[#14402c] px-5 py-3.5 font-semibold text-white transition active:scale-[0.99]"
+                className="flex-1 rounded-2xl bg-[#e50914] px-5 py-3.5 font-semibold text-white transition active:scale-[0.99]"
               >
                 ดูตั๋วของฉัน
               </button>
@@ -1898,13 +1891,13 @@ export default function Home() {
             <header className="flex items-start justify-between">
               <div>
                 <h1 className="text-3xl font-bold">ตั๋วของฉัน</h1>
-                <p className="mt-1 text-sm text-[#4d6652]">ความสนุกรอบนี้ พร้อมแล้ว!</p>
+                <p className="mt-1 text-sm text-white/60">ความสนุกรอบนี้ พร้อมแล้ว!</p>
               </div>
               <button
                 type="button"
                 onClick={() => setTab("used")}
                 aria-label="ดูตั๋วที่ใช้แล้ว"
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white shadow-[0_1px_4px_rgba(20,64,44,0.15)]"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-[#1f1f1f] shadow-[0_1px_4px_rgba(20,64,44,0.15)]"
               >
                 <IconReceipt />
               </button>
@@ -1913,11 +1906,12 @@ export default function Home() {
             <div
               role="tablist"
               aria-label="สถานะตั๋ว"
-              className="mt-5 grid grid-cols-2 rounded-2xl bg-[#e3ecd6] p-1 md:max-w-md"
+              className="mt-5 grid grid-cols-3 rounded-2xl bg-[#2a2a2a] p-1 md:max-w-lg"
             >
               {(
                 [
                   ["ready", `พร้อมใช้ (${readyOrders.length})`],
+                  ["status", `สถานะ (${pending.length})`],
                   ["used", `ใช้แล้ว (${usedOrders.length})`],
                 ] as const
               ).map(([id, label]) => (
@@ -1927,8 +1921,8 @@ export default function Home() {
                   role="tab"
                   aria-selected={tab === id}
                   onClick={() => setTab(id)}
-                  className={`rounded-xl py-2.5 text-sm font-bold transition ${
-                    tab === id ? "bg-[#14402c] text-white" : "text-[#4d6652]"
+                  className={`rounded-xl px-1 py-2.5 text-sm font-bold transition ${
+                    tab === id ? "bg-[#e50914] text-white" : "text-white/60"
                   }`}
                 >
                   {label}
@@ -1936,73 +1930,116 @@ export default function Home() {
               ))}
             </div>
 
-            {user && tab === "ready" && pending.length > 0 && (
-              <div className="mt-5 flex flex-col gap-3 md:grid md:grid-cols-2 md:items-start md:gap-4">
-                {pending.map((p) => {
-                  const card = (
-                    <div className="rounded-2xl border border-dashed border-[#14402c]/40 bg-white p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-bold">
-                            รายการ {p.ref} · {baht(p.amount)}
-                          </p>
-                          <p className="mt-0.5 text-xs text-[#6b7f6f]">{STATUS_LABEL[p.status]}</p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {p.status === "awaiting_slip" && (
-                            <button
-                              type="button"
-                              disabled={cancelingId === p.id}
-                              onClick={() => {
-                                if (window.confirm(`ยกเลิกรายการ ${p.ref} ใช่ไหม?`)) cancelPayment(p.id);
-                              }}
-                              className="hidden rounded-full border border-red-300 px-4 py-2 text-xs font-bold text-red-600 transition active:scale-95 disabled:opacity-60 md:inline-block"
-                            >
-                              ยกเลิก
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPaymentId(p.id);
-                              go("qr");
-                            }}
-                            className="rounded-full bg-[#14402c] px-4 py-2 text-xs font-bold text-white transition active:scale-95"
-                          >
-                            {p.status === "reviewing" ? "ดูสถานะ" : "ส่งสลีป"}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
+            {user && tab === "status" && (
+              <>
+                {pending.length === 0 ? (
+                  <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
+                    <p className="text-white/60">ไม่มีรายการที่รอดำเนินการ</p>
+                  </div>
+                ) : (
+                  <div className="mt-5 flex flex-col gap-3 md:grid md:grid-cols-2 md:items-start md:gap-4">
+                    {pending.map((p) => {
+                      const badge = PAY_BADGE[p.status];
+                      const openPayment = () => {
+                        setPaymentId(p.id);
+                        go("qr");
+                      };
 
-                  // ปัดซ้ายลบได้เฉพาะรายการที่ยังไม่ได้ส่งสลีป
-                  return p.status === "awaiting_slip" ? (
-                    <SwipeRow
-                      key={p.id}
-                      label={`ลบรายการ ${p.ref}`}
-                      deleting={cancelingId === p.id}
-                      onDelete={() => cancelPayment(p.id)}
-                    >
-                      {card}
-                    </SwipeRow>
-                  ) : (
-                    <div key={p.id}>{card}</div>
-                  );
-                })}
-                {pending.some((p) => p.status === "awaiting_slip") && (
-                  <p className="px-1 text-xs text-[#6b7f6f] md:hidden">ปัดรายการที่ยังไม่ส่งสลีปไปทางซ้าย เพื่อยกเลิก</p>
+                      // กดที่การ์ด = เปิดหน้าโอนเงิน/ส่งสลีป/ดูสถานะ (หน้าเดียวกับเดิม)
+                      return (
+                        <div
+                          key={p.id}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`ดูรายการ ${p.ref} สถานะ ${badge.label}`}
+                          onClick={openPayment}
+                          onKeyDown={(e) => {
+                            if (e.target !== e.currentTarget) return;
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openPayment();
+                            }
+                          }}
+                          className="cursor-pointer rounded-2xl border border-dashed border-white/25 bg-[#1f1f1f] p-4 transition active:scale-[0.99] md:hover:border-white/40"
+                        >
+                          {/* ตั๋วที่ซื้อในรายการนี้: รูป + ชื่อ + จำนวนใบ */}
+                          {p.items && p.items.length > 0 && (
+                            <ul className="mb-3 flex flex-col gap-2 border-b border-white/10 pb-3">
+                              {p.items.map((it) => {
+                                const d = defOf(it.ticket);
+                                return (
+                                  <li key={it.ticket} className="flex items-center gap-3">
+                                    {d.homeImage ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={d.homeImage}
+                                        alt={d.title}
+                                        className="h-14 w-auto shrink-0 object-contain"
+                                      />
+                                    ) : (
+                                      <span
+                                        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${d.card} ${d.fg}`}
+                                      >
+                                        {iconOf(d.id, "h-5 w-5")}
+                                      </span>
+                                    )}
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-bold">{d.title}</p>
+                                      <p className="text-xs text-white/50">{it.qty} ใบ</p>
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold">
+                                รายการ {p.ref} · {baht(p.amount)}
+                              </p>
+                              <span
+                                className={`mt-1.5 inline-block rounded-full px-2.5 py-1 text-xs font-bold ${badge.cls}`}
+                              >
+                                {badge.label}
+                              </span>
+                              {p.status === "rejected" && p.rejectReason && (
+                                <p className="mt-1 text-xs text-red-600">{p.rejectReason}</p>
+                              )}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {/* ยกเลิกได้เฉพาะรายการที่ยังไม่ได้ส่งสลีป */}
+                              {p.status === "awaiting_slip" && (
+                                <button
+                                  type="button"
+                                  disabled={cancelingId === p.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCancelTarget(p);
+                                  }}
+                                  aria-label={`ยกเลิกรายการ ${p.ref}`}
+                                  className="flex h-10 w-10 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-600 transition active:scale-95 disabled:opacity-60"
+                                >
+                                  <IconTrash className="h-5 w-5" />
+                                </button>
+                              )}
+                              <IconArrow className="h-5 w-5 text-white/50" />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
-              </div>
+              </>
             )}
 
             {ready && !user && (
-              <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center">
-                <p className="text-[#4d6652]">เข้าสู่ระบบเพื่อดูตั๋วของคุณ</p>
+              <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
+                <p className="text-white/60">เข้าสู่ระบบเพื่อดูตั๋วของคุณ</p>
                 <button
                   type="button"
                   onClick={() => needLogin("tickets")}
-                  className="mt-4 rounded-full bg-[#14402c] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+                  className="mt-4 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
                 >
                   เข้าสู่ระบบ
                 </button>
@@ -2012,12 +2049,12 @@ export default function Home() {
             {(user || !ready) && tab === "ready" && (
               <>
                 {!ready || readyOrders.length === 0 ? (
-                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center">
-                    <p className="text-[#4d6652]">ยังไม่มีตั๋วที่พร้อมใช้</p>
+                  <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
+                    <p className="text-white/60">ยังไม่มีตั๋วที่พร้อมใช้</p>
                     <button
                       type="button"
                       onClick={() => go("buy")}
-                      className="mt-4 rounded-full bg-[#14402c] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+                      className="mt-4 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
                     >
                       ไปซื้อตั๋ว
                     </button>
@@ -2027,55 +2064,59 @@ export default function Home() {
                     {TICKETS.map((t) => {
                       const count = readyOrders.filter((o) => o.ticket === t.id).length;
                       if (count === 0) return null;
-                      const btn = (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setConfirmCode(null);
-                            setSheet(t.id);
-                          }}
-                          className="flex w-full items-center justify-between rounded-2xl bg-[#14402c] px-5 py-3.5 text-sm font-bold text-white transition active:scale-[0.99]"
-                        >
-                          {t.showLabel}
-                          <IconArrow className="h-5 w-5" />
-                        </button>
-                      );
+                      const wonCount = readyOrders.filter((o) => o.ticket === t.id && o.won).length;
 
+                      // หน้าตาเหมือนหน้า "ซื้อตั๋ว" แต่ไม่มีราคา: ส่วนล่างเป็นจำนวนใบ + ปุ่มแสดงตั๋ว
                       return (
-                        <Perforated
-                          key={t.id}
-                          bg={t.card}
-                          text={t.fg}
-                          dash={t.dash}
-                          top={
-                            <div className="p-4">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex items-center gap-3">
-                                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/50">
-                                    {iconOf(t.id, "h-6 w-6")}
-                                  </span>
-                                  <div>
-                                    <p className="text-[10px] font-bold tracking-widest opacity-70">{t.sub}</p>
-                                    <p className="text-xl font-bold leading-tight">{t.title}</p>
+                        <div key={t.id}>
+                          {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-white">{t.title}</p>}
+                          <Perforated
+                            bg={t.card}
+                            text={t.fg}
+                            dash={t.dash}
+                            top={
+                              t.homeImage ? (
+                                <TicketImage src={t.homeImage} alt={t.title} />
+                              ) : (
+                                <div className="p-4">
+                                  <div className="flex items-center gap-3">
+                                    <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
+                                      {iconOf(t.id, "h-6 w-6")}
+                                    </span>
+                                    <div>
+                                      <p className="text-lg font-bold leading-tight">{t.title}</p>
+                                      <p className="text-[10px] font-semibold tracking-widest opacity-70">{t.sub}</p>
+                                    </div>
                                   </div>
+                                  <p className="mt-4 text-sm opacity-80">{t.groupNote}</p>
                                 </div>
-                                <div className="shrink-0 text-right">
-                                  <p className="text-3xl font-extrabold leading-none">{count}</p>
-                                  <p className="mt-0.5 text-xs font-semibold">ใบ</p>
+                              )
+                            }
+                            bottom={
+                              <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-3">
+                                <div>
+                                  <p className="text-3xl font-extrabold">
+                                    {count}
+                                    <span className="text-xs font-medium opacity-70"> ใบ</span>
+                                  </p>
+                                  {wonCount > 0 && (
+                                    <span className="pd-gold-frame mt-1 inline-block rounded-full px-3 py-1 text-xs font-extrabold text-[#5a3b00]">
+                                      ถูกรางวัล {wonCount} ใบ
+                                    </span>
+                                  )}
                                 </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setSheet(t.id)}
+                                  className="flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-bold text-black transition active:scale-[0.99]"
+                                >
+                                  {t.showLabel}
+                                  <IconArrow className="h-5 w-5" />
+                                </button>
                               </div>
-                              <p className="mt-4 text-sm font-semibold">{t.groupNote}</p>
-                              {t.meta && <p className="mt-1 text-xs opacity-70">{t.meta}</p>}
-                              {t.chips && (
-                                <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
-                                  <span className="rounded-full bg-white/20 px-3 py-1.5">{t.chips[0]}</span>
-                                  <span className="rounded-full bg-black/20 px-3 py-1.5">{t.chips[1]}</span>
-                                </div>
-                              )}
-                            </div>
-                          }
-                          bottom={<div className="px-4 pb-4 pt-4">{btn}</div>}
-                        />
+                            }
+                          />
+                        </div>
                       );
                     })}
                   </div>
@@ -2094,23 +2135,29 @@ export default function Home() {
             {user && tab === "used" && (
               <>
                 {usedOrders.length === 0 ? (
-                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center">
-                    <p className="text-[#4d6652]">ยังไม่มีตั๋วที่ใช้แล้ว</p>
+                  <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
+                    <p className="text-white/60">ยังไม่มีตั๋วที่ใช้แล้ว</p>
                   </div>
                 ) : (
                   <ul className="mt-5 flex flex-col gap-3 md:grid md:grid-cols-2 md:gap-4">
                     {usedOrders.map((o) => {
                       const d = defOf(o.ticket);
                       return (
-                        <li key={o.code} className="flex items-center gap-3 rounded-2xl bg-white p-4 opacity-80">
-                          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#e3ecd6]">
-                            {iconOf(o.ticket, "h-5 w-5")}
-                          </span>
+                        <li key={o.code} className="flex items-center gap-3 rounded-2xl bg-[#1f1f1f] p-4 opacity-80">
+                          {d.homeImage ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={d.homeImage} alt={d.title} className="h-12 w-auto shrink-0 object-contain" />
+                          ) : (
+                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#2a2a2a]">
+                              {iconOf(o.ticket, "h-5 w-5")}
+                            </span>
+                          )}
                           <div className="min-w-0 flex-1">
                             <p className="text-sm font-bold">{d.title}</p>
-                            <p className="truncate font-mono text-xs text-[#6b7f6f]">{o.code}</p>
+                            <p className="truncate font-mono text-xs text-white/50">{o.code}</p>
+                            {o.won && <p className="text-xs font-bold text-[#ffd54a]">ถูกรางวัล</p>}
                           </div>
-                          <p className="shrink-0 text-right text-xs text-[#6b7f6f]">
+                          <p className="shrink-0 text-right text-xs text-white/50">
                             ใช้แล้ว
                             <br />
                             {fmtTime(o.usedAt)}
@@ -2131,13 +2178,13 @@ export default function Home() {
             <h1 className="text-3xl font-bold">โปรไฟล์</h1>
 
             {!user ? (
-              <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center">
-                <p className="text-[#4d6652]">{ready ? "ยังไม่ได้เข้าสู่ระบบ" : "กำลังโหลด..."}</p>
+              <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
+                <p className="text-white/60">{ready ? "ยังไม่ได้เข้าสู่ระบบ" : "กำลังโหลด..."}</p>
                 {ready && (
                   <button
                     type="button"
                     onClick={() => needLogin("profile")}
-                    className="mt-4 rounded-full bg-[#14402c] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+                    className="mt-4 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
                   >
                     เข้าสู่ระบบ / สมัครสมาชิก
                   </button>
@@ -2145,19 +2192,24 @@ export default function Home() {
               </div>
             ) : (
               <div className="md:mt-6 md:grid md:grid-cols-[18rem_minmax(0,1fr)] md:items-start md:gap-6">
-                <div className="mt-6 flex items-center gap-4 rounded-3xl bg-[#14402c] p-5 text-white md:col-start-1 md:row-start-1 md:mt-0">
-                  <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#d9f27a] text-2xl font-bold uppercase text-[#14402c]">
+                <div className="mt-6 flex items-center gap-4 rounded-3xl bg-gradient-to-br from-[#e50914] to-[#7a0a10] p-5 text-white md:col-start-1 md:row-start-1 md:mt-0">
+                  <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white text-2xl font-bold uppercase text-black">
                     {(user.name || user.username).charAt(0)}
                   </span>
                   <div className="min-w-0">
                     <p className="truncate text-lg font-bold">{user.name}</p>
-                    <p className="truncate text-sm text-[#d9f27a]">@{user.username}</p>
+                    <p className="truncate text-sm text-white">@{user.username}</p>
                   </div>
                 </div>
 
-                <div className="mt-4 rounded-3xl border border-[#e3ecd6] bg-white p-5 md:col-start-2 md:row-span-2 md:row-start-1 md:mt-0 md:p-6">
+                <div className="mt-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:col-start-2 md:row-span-2 md:row-start-1 md:mt-0 md:p-6">
                   <h2 className="text-lg font-bold">ข้อมูลผู้ซื้อ</h2>
-                  <p className="mt-1 text-sm text-[#4d6652]">ใช้กรอกข้อมูลให้อัตโนมัติตอนซื้อตั๋ว</p>
+                  <p className="mt-1 text-sm text-white/60">ใช้กรอกข้อมูลให้อัตโนมัติตอนซื้อตั๋ว</p>
+                  {returnToPay && !user.empCode && (
+                    <p role="alert" className="mt-3 rounded-xl bg-amber-100 px-4 py-3 text-sm font-semibold text-amber-800">
+                      กรอกรหัสพนักงานก่อนซื้อ Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้ บันทึกแล้วระบบพากลับไปชำระเงินต่อ
+                    </p>
+                  )}
                   <div className="mt-4 space-y-4">
                     <label className="block">
                       <span className="text-sm font-medium">ชื่อ-นามสกุล</span>
@@ -2185,6 +2237,27 @@ export default function Home() {
                         className={inputCls}
                       />
                     </label>
+                    <label className="block">
+                      <span className="text-sm font-medium">รหัสพนักงาน ({EMP_CODE_LENGTH} หลัก)</span>
+                      <input
+                        value={user.empCode ?? accEmp}
+                        onChange={(e) => {
+                          setAccEmp(e.target.value.replace(/\D/g, "").slice(0, EMP_CODE_LENGTH));
+                          setAccSaved(false);
+                        }}
+                        disabled={!!user.empCode}
+                        inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={EMP_CODE_LENGTH}
+                        placeholder={"0".repeat(EMP_CODE_LENGTH)}
+                        className={`${inputCls} font-mono tracking-[0.3em] disabled:opacity-60`}
+                      />
+                      <span className="mt-1 block text-xs text-white/50">
+                        {user.empCode
+                          ? "แก้ไขเองไม่ได้ ถ้าผิดให้แจ้งเจ้าหน้าที่"
+                          : "ใช้ลุ้นรางวัล Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้"}
+                      </span>
+                    </label>
                     {accError && (
                       <p role="alert" className="text-sm font-medium text-red-600">
                         {accError}
@@ -2198,7 +2271,7 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={saveProfile}
-                      className="rounded-full bg-[#14402c] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+                      className="rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
                     >
                       บันทึกข้อมูล
                     </button>
@@ -2208,7 +2281,7 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={logout}
-                  className="mt-4 w-full rounded-2xl border border-[#14402c] py-3.5 font-semibold transition active:scale-[0.99] md:col-start-1 md:row-start-2 md:mt-0"
+                  className="mt-4 w-full rounded-2xl border border-white/40 py-3.5 font-semibold transition active:scale-[0.99] md:col-start-1 md:row-start-2 md:mt-0"
                 >
                   ออกจากระบบ
                 </button>
@@ -2229,8 +2302,8 @@ export default function Home() {
             />
 
             <div className="md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-8">
-              <div className="relative mt-6 overflow-hidden rounded-3xl bg-[#14402c] p-5 text-white md:mt-0 md:p-8">
-                <p className="text-[11px] font-bold tracking-wider text-[#d9f27a]">PAYDAY IS PLAY DAY</p>
+              <div className="relative mt-6 overflow-hidden rounded-3xl bg-gradient-to-br from-[#e50914] to-[#7a0a10] p-5 text-white md:mt-0 md:p-8">
+                <p className="text-[11px] font-bold tracking-wider text-white">PAYDAY IS PLAY DAY</p>
                 <h2 className="mt-2 text-2xl font-bold leading-tight md:text-3xl">
                   {authMode === "login" ? "ยินดีต้อนรับกลับมา!" : "มาเป็นสมาชิก แล้วไปเล่นกัน!"}
                 </h2>
@@ -2243,7 +2316,7 @@ export default function Home() {
                 <div
                   role="tablist"
                   aria-label="โหมด"
-                  className="mt-5 grid grid-cols-2 rounded-2xl bg-[#e3ecd6] p-1 md:mt-0"
+                  className="mt-5 grid grid-cols-2 rounded-2xl bg-[#2a2a2a] p-1 md:mt-0"
                 >
                   {(
                     [
@@ -2261,7 +2334,7 @@ export default function Home() {
                         setAuthError("");
                       }}
                       className={`rounded-xl py-2.5 text-sm font-bold transition ${
-                        authMode === id ? "bg-[#14402c] text-white" : "text-[#4d6652]"
+                        authMode === id ? "bg-[#e50914] text-white" : "text-white/60"
                       }`}
                     >
                       {label}
@@ -2270,7 +2343,7 @@ export default function Home() {
                 </div>
 
                 <form
-                  className="mt-4 space-y-4 rounded-3xl border border-[#e3ecd6] bg-white p-5 md:p-6"
+                  className="mt-4 space-y-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:p-6"
                   onSubmit={(e) => {
                     e.preventDefault();
                     submitAuth();
@@ -2298,6 +2371,21 @@ export default function Home() {
                           className={inputCls}
                         />
                       </label>
+                      <label className="block">
+                        <span className="text-sm font-medium">รหัสพนักงาน ({EMP_CODE_LENGTH} หลัก)</span>
+                        <input
+                          value={authEmp}
+                          onChange={(e) => setAuthEmp(e.target.value.replace(/\D/g, "").slice(0, EMP_CODE_LENGTH))}
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={EMP_CODE_LENGTH}
+                          placeholder={"0".repeat(EMP_CODE_LENGTH)}
+                          className={`${inputCls} font-mono tracking-[0.3em]`}
+                        />
+                        <span className="mt-1 block text-xs text-white/50">
+                          ใช้ลุ้นรางวัล Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้
+                        </span>
+                      </label>
                     </>
                   )}
                   <label className="block">
@@ -2313,7 +2401,7 @@ export default function Home() {
                       className={inputCls}
                     />
                     {authMode === "register" && (
-                      <span className="mt-1 block text-xs text-[#6b7f6f]">3-20 ตัว ใช้ a-z 0-9 . _ ได้</span>
+                      <span className="mt-1 block text-xs text-white/50">3-20 ตัว ใช้ a-z 0-9 . _ ได้</span>
                     )}
                   </label>
                   <label className="block">
@@ -2326,7 +2414,7 @@ export default function Home() {
                       className={inputCls}
                     />
                     {authMode === "register" && (
-                      <span className="mt-1 block text-xs text-[#6b7f6f]">อย่างน้อย 6 ตัวอักษร</span>
+                      <span className="mt-1 block text-xs text-white/50">อย่างน้อย 6 ตัวอักษร</span>
                     )}
                   </label>
 
@@ -2339,10 +2427,10 @@ export default function Home() {
                   <button
                     type="submit"
                     disabled={authBusy}
-                    className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#14402c] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e50914] py-4 text-base font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
                   >
                     {authBusy ? "กำลังดำเนินการ..." : authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
-                    {!authBusy && <IconArrow className="h-5 w-5 text-[#d9f27a]" />}
+                    {!authBusy && <IconArrow className="h-5 w-5 text-white" />}
                   </button>
                 </form>
               </div>
@@ -2351,7 +2439,54 @@ export default function Home() {
         )}
       </main>
 
-      {showNav && <BottomNav view={navView} badges={badges} onGo={go} />}
+      {showNav && <BottomNav view={navView} badges={badges} golden={hasNewWin} onGo={go} />}
+
+      {/* ===== popup ยืนยันการยกเลิกรายการโอนเงิน ===== */}
+      {cancelTarget && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="cancel-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => {
+            if (!cancelingId) setCancelTarget(null);
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl bg-[#1f1f1f] p-6 text-center text-white"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-50 text-red-600">
+              <IconTrash className="h-7 w-7" />
+            </span>
+            <h2 id="cancel-title" className="mt-4 text-lg font-bold">
+              ยกเลิกรายการนี้ใช่ไหม?
+            </h2>
+            <p className="mt-1 text-sm text-white/60">
+              รายการ <span className="font-mono font-bold">{cancelTarget.ref}</span> · {baht(cancelTarget.amount)}
+            </p>
+            <p className="mt-1 text-xs text-white/50">ยกเลิกแล้วกู้คืนไม่ได้ ถ้าโอนเงินไปแล้วอย่ายกเลิก</p>
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setCancelTarget(null)}
+                disabled={cancelingId !== null}
+                className="flex-1 rounded-2xl border border-white/40 py-3 text-sm font-semibold transition active:scale-[0.99] disabled:opacity-60"
+              >
+                ไม่ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={() => cancelPayment(cancelTarget.id)}
+                disabled={cancelingId !== null}
+                className="flex-1 rounded-2xl bg-red-600 py-3 text-sm font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+              >
+                {cancelingId ? "กำลังยกเลิก..." : "ยืนยันยกเลิก"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ===== หน้าต่างแสดงตั๋ว (มือถือ: เลื่อนขึ้นจากด้านล่าง / คอมพิวเตอร์: กลางจอ) ===== */}
       {sheet && sheetDef && (
@@ -2360,13 +2495,10 @@ export default function Home() {
           aria-modal="true"
           aria-labelledby="sheet-title"
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 md:items-center md:p-6"
-          onClick={() => {
-            setSheet(null);
-            setConfirmCode(null);
-          }}
+          onClick={() => setSheet(null)}
         >
           <div
-            className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-[#f1f7e9] p-5 pb-8 md:max-w-3xl md:rounded-3xl md:p-8"
+            className="max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-[#1f1f1f] p-5 pb-8 text-white md:max-w-3xl md:rounded-3xl md:p-8"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -2375,48 +2507,17 @@ export default function Home() {
               </h2>
               <button
                 type="button"
-                onClick={() => {
-                  setSheet(null);
-                  setConfirmCode(null);
-                }}
-                className="rounded-full bg-white px-4 py-1.5 text-sm font-semibold"
+                onClick={() => setSheet(null)}
+                className="rounded-full bg-[#1f1f1f] px-4 py-1.5 text-sm font-semibold"
               >
                 ปิด
               </button>
             </div>
-            <p className="mt-1 text-xs text-[#4d6652]">ให้เจ้าหน้าที่สแกนก่อน แล้วค่อยกด “ใช้แล้ว”</p>
+            <p className="mt-1 text-xs text-white/60">แสดงตั๋วนี้ให้เจ้าหน้าที่สแกนที่หน้างาน</p>
 
             <div className="mt-4 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
               {sheetOrders.map((o) => (
-                <div key={o.code}>
-                  <TicketPass def={sheetDef} order={o} />
-                  {confirmCode === o.code ? (
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setConfirmCode(null)}
-                        className="flex-1 rounded-2xl border border-[#14402c] py-3 text-sm font-semibold"
-                      >
-                        ยกเลิก
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => markUsed(o.code)}
-                        className="flex-1 rounded-2xl bg-red-600 py-3 text-sm font-bold text-white"
-                      >
-                        ยืนยัน ใช้แล้ว
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmCode(o.code)}
-                      className="mt-2 w-full rounded-2xl border border-[#14402c] py-3 text-sm font-semibold transition active:scale-[0.99]"
-                    >
-                      ทำเครื่องหมายว่าใช้แล้ว
-                    </button>
-                  )}
-                </div>
+                <TicketPass key={o.code} def={sheetDef} order={o} />
               ))}
             </div>
           </div>

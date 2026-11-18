@@ -1,4 +1,4 @@
-    import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { createSession, verifyPassword } from "@/lib/auth";
 
@@ -19,7 +19,15 @@ export async function POST(req: Request) {
 
     const id = u._id.toString();
     await createSession(id);
-    return NextResponse.json({ user: { id, username: u.username, name: u.name, phone: u.phone } });
+    return NextResponse.json({
+      user: {
+        id,
+        username: u.username,
+        name: u.name,
+        phone: u.phone,
+        empCode: typeof u.empCode === "string" ? u.empCode : null,
+      },
+    });
   } catch (e) {
     console.error(e);
     return NextResponse.json({ error: "เข้าสู่ระบบไม่สำเร็จ ลองใหม่อีกครั้ง" }, { status: 500 });

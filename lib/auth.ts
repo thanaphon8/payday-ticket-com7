@@ -12,7 +12,15 @@ const MAX_AGE = 60 * 60 * 24 * 30; // 30 วัน
 export const ADMIN_COOKIE = "payday-admin";
 export const ADMIN_MAX_AGE = 60 * 60 * 12; // 12 ชั่วโมง
 
-export type SessionUser = { id: string; username: string; name: string; phone: string; isAdmin?: boolean };
+// empCode = รหัสพนักงาน 7 หลัก (null = บัญชีเก่าที่ยังไม่เคยกรอก ต้องกรอกในโปรไฟล์ก่อนซื้อ Lucky Draw)
+export type SessionUser = {
+  id: string;
+  username: string;
+  name: string;
+  phone: string;
+  empCode: string | null;
+  isAdmin?: boolean;
+};
 
 /* ---------- validate ---------- */
 export const validUsername = (u: string) => /^[a-zA-Z0-9._]{3,20}$/.test(u);
@@ -88,7 +96,14 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   const db = await getDb();
   const u = await db.collection("users").findOne({ _id: new ObjectId(userId) });
   if (!u) return null;
-  return { id: u._id.toString(), username: u.username, name: u.name, phone: u.phone, isAdmin: isAdminUser(u) };
+  return {
+    id: u._id.toString(),
+    username: u.username,
+    name: u.name,
+    phone: u.phone,
+    empCode: typeof u.empCode === "string" ? u.empCode : null,
+    isAdmin: isAdminUser(u),
+  };
 }
 
 /* ---------- รหัสผ่าน admin (ADMIN_PASSWORD ใน .env.local) ---------- */

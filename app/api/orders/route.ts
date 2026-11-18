@@ -12,6 +12,7 @@ import {
   makeRef,
   toOrder,
   toPaymentInfo,
+  validEmpCode,
   type TicketId,
 } from "@/lib/tickets";
 import { makeQrDataUrl } from "@/lib/billerQr";
@@ -40,6 +41,8 @@ export async function GET() {
 }
 
 // เริ่มซื้อ: body = { items: [{ ticket, qty }], name, phone }
+// รหัสพนักงานดึงจากบัญชีผู้ใช้ (ตั้งตอนสมัคร / ในโปรไฟล์) ไม่รับจากหน้าเว็บ
+// ซื้อ Lucky Draw แล้วบัญชียังไม่มีรหัสพนักงาน = ปฏิเสธ
 // ยังไม่ออกตั๋ว สร้างรายการรอโอน + QR พร้อมเพย์ (ยอด + Ref1 ฝังใน QR)
 // ตั๋วถูกออกเมื่อ admin อนุมัติสลีปเท่านั้น (ดู /api/admin/payments/[id])
 export async function POST(req: Request) {
@@ -64,6 +67,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "รายการตั๋วไม่ถูกต้อง" }, { status: 400 });
     wanted.push({ ticket: it.ticket, qty });
   }
+
+  // ซื้อ Lucky Draw ต้องมีรหัสพนักงานในบัญชี
+  const hasLucky = wanted.some((w) => w.ticket === "lucky");
+  const empCode = user.empCode ?? "";
+  if (hasLucky && !validEmpCode(empCode))
+    return NextResponse.json(
+      { error: "บัญชียังไม่มีรหัสพนักงาน กรุณากรอกในหน้าโปรไฟล์ก่อนซื้อ Lucky Draw" },
+      { status: 400 },
+    );
 
   const db = await getDb();
   const payments = db.collection("payments");
@@ -99,6 +111,7 @@ export async function POST(req: Request) {
     userId,
     name,
     phone,
+    ...(hasLucky ? { empCode } : {}), // รหัสพนักงานจากบัญชี (ใส่ให้ตั๋ว Lucky Draw ตอน admin อนุมัติ)
     tickets, // รหัสตั๋วถูกล็อกไว้ตั้งแต่ตอนนี้
     amount, // หน่วยบาท
     ref,
