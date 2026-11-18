@@ -57,6 +57,7 @@ export default function TicketScanPage() {
   const [result, setResult] = useState<ScanResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [camOn, setCamOn] = useState(true); // ปุ่มเปิด/ปิดกล้อง
   const [camErr, setCamErr] = useState("");
   const [manual, setManual] = useState("");
   const [history, setHistory] = useState<HistoryRow[]>([]);
@@ -138,11 +139,13 @@ export default function TicketScanPage() {
     return () => clearTimeout(t);
   }, [result, dismiss]);
 
-  // เปิดกล้องหลังจากปลดล็อก: อ่านเฉพาะ Code128
+  // เปิดกล้องหลังปลดล็อก (และเมื่อกดปุ่มเปิดกล้อง): อ่านเฉพาะ Code128
+  // ปิดกล้อง = หยุดสตรีมและปล่อยกล้องคืนเครื่องจริง ๆ
   useEffect(() => {
-    if (gate !== "ok") return;
+    if (gate !== "ok" || !camOn) return;
     let cancelled = false;
     let controls: { stop: () => void } | null = null;
+    setCamErr("");
 
     (async () => {
       try {
@@ -160,7 +163,7 @@ export default function TicketScanPage() {
 
         const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 80 });
         const video = videoRef.current;
-        if (!video) return;
+        if (!video || cancelled) return;
         const c = await reader.decodeFromConstraints(
           { audio: false, video: { facingMode: { ideal: "environment" } } },
           video,
@@ -171,10 +174,11 @@ export default function TicketScanPage() {
         if (cancelled) c.stop();
         else controls = c;
       } catch (e) {
+        if (cancelled) return;
         const name = e instanceof Error ? e.name : "";
         setCamErr(
           name === "NotAllowedError"
-            ? "ไม่ได้อนุญาตใช้กล้อง กดอนุญาตในเบราว์เซอร์แล้วโหลดหน้านี้ใหม่"
+            ? "ไม่ได้อนุญาตใช้กล้อง กดอนุญาตในเบราว์เซอร์แล้วกดเปิดกล้องใหม่"
             : "เปิดกล้องไม่สำเร็จ ใช้ช่องกรอกรหัสด้านล่างแทนได้",
         );
       }
@@ -183,8 +187,10 @@ export default function TicketScanPage() {
     return () => {
       cancelled = true;
       controls?.stop();
+      const v = videoRef.current;
+      if (v) v.srcObject = null;
     };
-  }, [gate]);
+  }, [gate, camOn]);
 
   async function unlock(e: FormEvent) {
     e.preventDefault();
@@ -214,10 +220,12 @@ export default function TicketScanPage() {
     showResult(null);
     setHistory([]);
     setOkCount(0);
+    setCamOn(true);
     setGate("locked");
   }
 
   const shell = `min-h-screen bg-[#141414] text-white [color-scheme:dark] ${appFont.className}`;
+  // ช่องกรอกต้องใช้ตัวอักษรอย่างน้อย 16px (text-base) ไม่งั้น iOS Safari จะซูมหน้าจอตอนแตะช่อง
   const inputCls =
     "min-h-12 w-full rounded-xl border border-white/15 bg-[#2a2a2a] px-4 py-3 text-base text-white outline-none focus:border-white/60 focus:ring-2 focus:ring-white/20";
 
@@ -283,8 +291,18 @@ export default function TicketScanPage() {
 
         <div className="relative mt-4 aspect-[4/3] w-full overflow-hidden rounded-3xl border border-white/10 bg-black">
           <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
-          <div aria-hidden className="pointer-events-none absolute inset-x-[8%] top-1/2 h-[34%] -translate-y-1/2 rounded-2xl border-2 border-white/70" />
-          {camErr && (
+          {camOn && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-[8%] top-1/2 h-[34%] -translate-y-1/2 rounded-2xl border-2 border-white/70"
+            />
+          )}
+          {!camOn && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black p-6 text-center text-sm text-white/60">
+              ปิดกล้องอยู่ กดปุ่ม “เปิดกล้อง” เพื่อสแกน
+            </div>
+          )}
+          {camOn && camErr && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-6 text-center text-sm text-white/80">
               {camErr}
             </div>
@@ -293,7 +311,20 @@ export default function TicketScanPage() {
             <div className="absolute inset-x-0 bottom-0 bg-black/60 py-2 text-center text-sm font-semibold">กำลังตรวจสอบ...</div>
           )}
         </div>
-        <p className="mt-2 text-center text-xs text-white/50">เล็งบาร์โค้ดในตั๋วให้อยู่ในกรอบ</p>
+
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <p className="text-xs text-white/50">{camOn ? "เล็งบาร์โค้ดในตั๋วให้อยู่ในกรอบ" : "กล้องปิดอยู่"}</p>
+          <button
+            type="button"
+            onClick={() => setCamOn((v) => !v)}
+            aria-pressed={camOn}
+            className={`min-h-11 shrink-0 rounded-full px-5 py-2.5 text-sm font-bold ${
+              camOn ? "border border-white/40 text-white" : "bg-[#e50914] text-white"
+            }`}
+          >
+            {camOn ? "ปิดกล้อง" : "เปิดกล้อง"}
+          </button>
+        </div>
 
         {note && (
           <p role="alert" className="mt-3 text-center text-sm font-medium text-red-500">
@@ -312,12 +343,15 @@ export default function TicketScanPage() {
           <input
             value={manual}
             onChange={(e) => setManual(e.target.value.toUpperCase())}
-            placeholder="หรือกรอกรหัสตั๋ว PD-BT-XXXXXXXX"
+            placeholder="PD-BT-XXXXXXXX"
+            aria-label="กรอกรหัสตั๋ว"
             autoCapitalize="characters"
             autoComplete="off"
+            autoCorrect="off"
             spellCheck={false}
+            enterKeyHint="go"
             maxLength={30}
-            className={`${inputCls} font-mono text-sm`}
+            className={`${inputCls} font-mono`}
           />
           <button
             type="submit"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { Prompt } from "next/font/google";
 
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
@@ -16,7 +16,8 @@ const STRIP = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; // �
 
 type PoolTicket = { code: string; empCode: string };
 type Winner = { code: string; empCode: string; name: string; wonAt: string | null };
-type Gate = "loading" | "ok" | "unauth" | "forbidden" | "locked";
+// เข้าด้วยรหัสผ่าน admin อย่างเดียว (ไม่ต้อง login บัญชีผู้ใช้) ใช้ cookie ปลดล็อกเดียวกับหน้า /admin
+type Gate = "loading" | "ok" | "locked";
 
 const fmt = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "-";
@@ -45,6 +46,9 @@ function ticketStyle(code: string) {
 export default function SpinPage() {
   const [gate, setGate] = useState<Gate>("loading");
   const [note, setNote] = useState("");
+  const [pw, setPw] = useState("");
+  const [pwErr, setPwErr] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
   const [pool, setPool] = useState<PoolTicket[]>([]);
   const [total, setTotal] = useState(0);
   const [winners, setWinners] = useState<Winner[]>([]);
@@ -66,14 +70,8 @@ export default function SpinPage() {
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/spin", { cache: "no-store" });
-      if (res.status === 401) return setGate("unauth");
-      if (res.status === 403) {
-        // เป็น admin แต่ยังไม่กรอกรหัส admin (หรือหมดอายุ 12 ชั่วโมง)
-        const st = (await fetch("/api/admin/login", { cache: "no-store" })
-          .then((r) => r.json())
-          .catch(() => null)) as { isAdmin?: boolean; unlocked?: boolean } | null;
-        return setGate(st?.isAdmin && !st.unlocked ? "locked" : "forbidden");
-      }
+      // ยังไม่กรอกรหัส admin (หรือหมดอายุ 12 ชั่วโมง) → หน้ากรอกรหัส
+      if (res.status === 401 || res.status === 403) return setGate("locked");
       if (!res.ok) return setNote("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง");
       const data = (await res.json()) as { total: number; pool: PoolTicket[]; winners: Winner[] };
       setGate("ok");
@@ -92,6 +90,10 @@ export default function SpinPage() {
     const seq = seqRef.current;
     try {
       const res = await fetch("/api/spin", { cache: "no-store" });
+      if (res.status === 401 || res.status === 403) {
+        if (!spinningRef.current) setGate("locked"); // cookie หมดอายุระหว่างเปิดหน้า
+        return;
+      }
       if (!res.ok) return;
       const data = (await res.json()) as { total: number; pool: PoolTicket[]; winners: Winner[] };
       if (spinningRef.current || seq !== seqRef.current) return;
@@ -122,6 +124,49 @@ export default function SpinPage() {
       cancelAnimationFrame(fwRaf.current);
     };
   }, []);
+
+  async function unlock(e: FormEvent) {
+    e.preventDefault();
+    if (!pw || pwBusy) return;
+    setPwBusy(true);
+    setPwErr("");
+    try {
+      const res = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pw }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPwErr(data.error ?? "เข้าสู่ระบบไม่สำเร็จ");
+      } else {
+        setPw("");
+        await load();
+      }
+    } catch {
+      setPwErr("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้");
+    }
+    setPwBusy(false);
+  }
+
+  // ล็อก = ลบ cookie รหัส admin (หน้า /admin จะถูกล็อกด้วย เพราะใช้ cookie เดียวกัน)
+  async function lock() {
+    if (spinning) return;
+    await fetch("/api/admin/login", { method: "DELETE" }).catch(() => {});
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+    cancelAnimationFrame(fwRaf.current);
+    initialRef.current = null;
+    seqRef.current += 1;
+    setPool([]);
+    setTotal(0);
+    setWinners([]);
+    setWinner(null);
+    setDigits(Array(EMP_LEN).fill("-"));
+    setStopped(Array(EMP_LEN).fill(false));
+    setNote("");
+    setGate("locked");
+  }
 
   /* ---------- พลุ ---------- */
   const fireworks = useCallback(() => {
@@ -231,8 +276,7 @@ export default function SpinPage() {
       setSpinning(false);
       setDigits(Array(EMP_LEN).fill("-"));
       setNote(data.error ?? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
-      if (res?.status === 401) setGate("unauth");
-      if (res?.status === 403) load();
+      if (res?.status === 401 || res?.status === 403) setGate("locked");
       if (res?.status === 404) load();
       return;
     }
@@ -268,27 +312,47 @@ export default function SpinPage() {
 
   const shell = `min-h-screen overflow-x-clip bg-[#141414] text-white [color-scheme:dark] ${appFont.className}`;
 
+  if (gate === "locked") {
+    return (
+      <div className={shell}>
+        <main className="mx-auto max-w-md px-5 py-16 text-center">
+          <h1 className="text-2xl font-bold">Lucky Draw</h1>
+          <p className="mt-3 text-sm text-white/60">กรอกรหัสผ่าน admin เพื่อเข้าใช้งาน</p>
+          <form onSubmit={unlock} className="mt-5">
+            <input
+              type="password"
+              value={pw}
+              onChange={(e) => setPw(e.target.value)}
+              placeholder="รหัสผ่าน admin"
+              autoComplete="current-password"
+              autoFocus
+              maxLength={200}
+              className="min-h-12 w-full rounded-xl border border-white/15 bg-[#2a2a2a] px-4 py-3 text-base text-white outline-none focus:border-white/60 focus:ring-2 focus:ring-white/20"
+            />
+            {pwErr && (
+              <p role="alert" className="mt-3 text-sm font-medium text-red-500">
+                {pwErr}
+              </p>
+            )}
+            <button
+              type="submit"
+              disabled={pwBusy || pw.length === 0}
+              className="mt-4 min-h-12 w-full rounded-2xl bg-[#e50914] py-3 text-sm font-bold text-white disabled:opacity-60"
+            >
+              {pwBusy ? "กำลังตรวจสอบ..." : "เข้าสู่หน้าสุ่มรางวัล"}
+            </button>
+          </form>
+        </main>
+      </div>
+    );
+  }
+
   if (gate !== "ok") {
     return (
       <div className={shell}>
         <main className="mx-auto max-w-md px-5 py-16 text-center">
           <h1 className="text-2xl font-bold">Lucky Draw</h1>
-          <p className="mt-3 text-sm text-white/60">
-            {gate === "loading" && (note || "กำลังโหลด...")}
-            {gate === "unauth" && "เข้าสู่ระบบด้วยบัญชี admin ที่หน้าแรกก่อน แล้วกลับมาหน้านี้"}
-            {gate === "forbidden" && "บัญชีนี้ไม่มีสิทธิ์ admin"}
-            {gate === "locked" && "ไปกรอกรหัสผ่าน admin ที่หน้า /admin ก่อน แล้วกลับมาหน้านี้"}
-          </p>
-          {gate === "locked" && (
-            <a href="/admin" className="mt-5 inline-block rounded-full bg-[#e50914] px-6 py-3 font-semibold text-white">
-              ไปหน้า admin
-            </a>
-          )}
-          {(gate === "unauth" || gate === "forbidden") && (
-            <a href="/" className="mt-5 inline-block rounded-full bg-[#e50914] px-6 py-3 font-semibold text-white">
-              ไปหน้าแรก
-            </a>
-          )}
+          <p className="mt-3 text-sm text-white/60">{note || "กำลังโหลด..."}</p>
         </main>
       </div>
     );
@@ -381,6 +445,14 @@ export default function SpinPage() {
             >
               หน้า admin
             </a>
+            <button
+              type="button"
+              onClick={lock}
+              disabled={spinning}
+              className="min-h-11 rounded-full border border-white/40 px-3 py-2 text-xs font-bold disabled:opacity-40 sm:px-4 sm:text-sm"
+            >
+              ล็อก
+            </button>
           </div>
         </header>
 
