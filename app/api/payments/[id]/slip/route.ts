@@ -18,6 +18,7 @@ const allowDupSlip = () => process.env.ALLOW_DUP_SLIP === "1";
 // 1) อ่าน QR บนสลีป → ได้ transRef  2) กันสลีปซ้ำด้วย unique index  3) เก็บรูปลง Drive
 // 4) OCR อ่านยอด/ผู้รับ/เวลาโอน เทียบกับรายการ เก็บผลไว้ใน slips.check ให้ admin ดู
 // 5) เปลี่ยนสถานะเป็น reviewing รอ admin อนุมัติ
+// เร็วขึ้น: OCR + บีบรูปเริ่มทำพร้อมกับอ่าน QR เลย (ไม่รอกัน) ส่วนอัปโหลด Drive เริ่มหลังจองเลขสลีปได้แล้ว
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionUser().catch(() => null);
   if (!user) return NextResponse.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
@@ -50,6 +51,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const raw = Buffer.from(await file.arrayBuffer());
 
+  // เริ่ม OCR + บีบรูปทันที ทำคู่กับการอ่าน QR (ไม่มีผลข้างเคียง ถ้าอ่าน QR ไม่ได้ก็ทิ้งผลไป)
+  const ocrP = ocrSlip(raw);
+  const jpgP = compressSlip(raw);
+  jpgP.catch(() => {}); // กัน unhandled rejection กรณีออกก่อนถึงจุดที่รอผล
+
   const info = await readSlip(raw);
   if (!info)
     return NextResponse.json(
@@ -81,13 +87,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   try {
-    // เก็บรูปลง Drive กับ OCR ทำพร้อมกัน (ocrSlip ไม่โยน error ถ้าอ่านไม่ได้จะได้ค่าว่าง)
+    // อัปโหลด Drive กับ OCR (เริ่มไปแล้ว) รอผลพร้อมกัน (ocrSlip ไม่โยน error ถ้าอ่านไม่ได้จะได้ค่าว่าง)
     const [fileId, ocr] = await Promise.all([
-      (async () => {
-        const jpg = await compressSlip(raw);
-        return uploadSlip(db, `${pay.ref}-${slipId.toString()}.jpg`, jpg);
-      })(),
-      ocrSlip(raw),
+      jpgP.then((jpg) => uploadSlip(db, `${pay.ref}-${slipId.toString()}.jpg`, jpg)),
+      ocrP,
     ]);
     const check = checkSlip(ocr, {
       amount: pay.amount as number,

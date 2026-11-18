@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Prompt } from "next/font/google";
 import { code128Bars } from "@/lib/code128";
@@ -139,6 +139,7 @@ type PayPoll = Payment & { orders?: Order[] };
 const MAX_QTY = 20; // จำนวนสูงสุดต่อตั๋ว 1 ประเภท ต่อการซื้อ 1 ครั้ง (กันกดพลาด)
 const CART_KEY = "payday-cart-v1";
 const SLIP_POLL_MS = 5000; // เช็กสถานะรายการโอนทุกกี่มิลลิวินาที
+const SCANNED_SHOW_MS = 3200; // ตั๋วที่เพิ่งถูกสแกน ค้างโชว์ตราประทับ "รับแล้ว" แล้วเฟดหายในหน้าต่างแสดงตั๋วกี่มิลลิวินาที (ต้องไม่น้อยกว่า 2.2s delay + 1s เฟด ใน CSS .pd-scan-out)
 const seenKey = (userId: string) => `payday-won-seen-v1-${userId}`; // รหัสตั๋วที่ถูกรางวัลและผู้ใช้เห็นแล้ว
 
 // ป้ายสถานะรายการโอนเงิน (ข้อความ + สี) ที่แสดงบนการ์ดในแท็บ "สถานะ"
@@ -408,8 +409,9 @@ const SPARKLES: { top: string; left: string; size: string; delay: string }[] = [
   { top: "90%", left: "88%", size: "h-4 w-4", delay: "0.9s" },
 ];
 
-/* ---------- ตั๋ว 1 ใบ (ใช้ในหน้าซื้อสำเร็จ และตอนแสดงตั๋ว) ---------- */
-function TicketPass({ def, order }: { def: TicketDef; order: Order }) {
+/* ---------- ตั๋ว 1 ใบ (ใช้ในหน้าซื้อสำเร็จ และตอนแสดงตั๋ว) ----------
+   scanned = ตั๋วใบนี้เพิ่งถูกเจ้าหน้าที่สแกนรับแล้ว: ตั๋วเป็นสีเทา + ตราประทับ "รับแล้ว" เฉียงทับตั๋ว แล้วเฟดหายไปอย่างนุ่มนวล */
+function TicketPass({ def, order, scanned = false }: { def: TicketDef; order: Order; scanned?: boolean }) {
   const pass = (
     <Perforated
       top={
@@ -453,10 +455,8 @@ function TicketPass({ def, order }: { def: TicketDef; order: Order }) {
     />
   );
 
-  if (!order.won) return pass;
-
   // ตั๋วถูกรางวัล: กรอบสีทองวิบวับ
-  return (
+  const shown = order.won ? (
     <div className="pd-gold-frame relative rounded-[2rem] p-2">
       <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[2rem]">
         {SPARKLES.map((s, i) => (
@@ -467,6 +467,25 @@ function TicketPass({ def, order }: { def: TicketDef; order: Order }) {
         ตั๋วใบนี้ถูกรางวัล! ยินดีด้วย
       </p>
       {pass}
+    </div>
+  ) : (
+    pass
+  );
+
+  if (!scanned) return shown;
+
+  // ตั๋วถูกสแกนแล้ว: ตัวตั๋วค่อย ๆ เป็นสีเทา แล้วมีตราประทับ "รับแล้ว" ตกลงมาทับเฉียง ๆ จากนั้นทั้งใบ (ตั๋ว + ตราประทับ) เฟดหายไปเบา ๆ
+  return (
+    <div className="pd-scan-out relative">
+      <div className="pd-scanned">{shown}</div>
+      <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <span className="pd-stamp rounded-2xl border-4 border-red-500 bg-black/40 px-6 py-2 text-4xl font-extrabold tracking-widest text-red-500 shadow-[0_4px_20px_rgba(0,0,0,0.5)]">
+          รับแล้ว
+        </span>
+      </div>
+      <span role="status" className="sr-only">
+        ตั๋วใบนี้รับแล้ว
+      </span>
     </div>
   );
 }
@@ -518,7 +537,7 @@ function Stepper({
 function Steps({ current }: { current: 1 | 2 | 3 }) {
   const steps = ["เลือกตั๋ว", "ชำระเงิน", "รับตั๋ว"];
   return (
-    <ol className="flex items-center gap-4" aria-label="ขั้นตอนการซื้อ">
+    <ol className="flex items-center justify-center gap-4" aria-label="ขั้นตอนการซื้อ">
       {steps.map((s, i) => {
         const n = i + 1;
         const active = n === current;
@@ -583,9 +602,7 @@ const NAV: { id: View; label: string; icon: ReactNode }[] = [
   { id: "profile", label: "โปรไฟล์", icon: <IconUser /> },
 ];
 
-// มือถือ: แถบล่างลอย สไตล์ Liquid Glass แบบ iOS 26 (ซ่อนบนจอ md ขึ้นไป)
-// ชั้นกระจก: เบลอ+เพิ่มสี+เพิ่มความสว่างของพื้นหลัง → ขอบสะท้อนแสง → ประกายแสงทแยง
-// ถ้าผู้ใช้เปิด "ลดความโปร่งใส" หรือเบราว์เซอร์ไม่รองรับ backdrop-filter จะตกกลับเป็นพื้นทึบ
+// มือถือ: แถบล่างลอย ธีมเดียวกับแอป (พื้นดำ #1f1f1f ขอบบาง ปุ่มที่เลือกเป็นแดง #e50914) ซ่อนบนจอ md ขึ้นไป
 // golden = มีตั๋วถูกรางวัลที่ผู้ใช้ยังไม่เคยเปิดดู: ปุ่ม "ตั๋วของฉัน" เป็นสีทองวิบวับ จนกว่าจะกดเข้าไปดู
 function BottomNav({
   view,
@@ -603,17 +620,7 @@ function BottomNav({
       aria-label="เมนูหลัก"
       className="fixed inset-x-4 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-40 md:hidden"
     >
-      <div className="relative isolate overflow-hidden rounded-full border border-white/25 bg-white/[0.07] shadow-[0_12px_40px_rgba(0,0,0,0.55),0_2px_8px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.5),inset_0_-1px_0_rgba(255,255,255,0.1),inset_0_0_20px_rgba(255,255,255,0.07)] backdrop-blur-[28px] backdrop-brightness-110 backdrop-saturate-[180%] supports-[not(backdrop-filter:blur(1px))]:bg-[#2a2a2a]/95 [@media(prefers-reduced-transparency:reduce)]:bg-[#2a2a2a]/95 [@media(prefers-reduced-transparency:reduce)]:backdrop-blur-none">
-        {/* ประกายแสงด้านบนของกระจก */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-1/2 rounded-t-full bg-gradient-to-b from-white/20 to-transparent"
-        />
-        {/* ประกายแสงทแยง (specular highlight) */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-full bg-[linear-gradient(120deg,rgba(255,255,255,0.22)_0%,rgba(255,255,255,0)_35%,rgba(255,255,255,0)_65%,rgba(255,255,255,0.14)_100%)]"
-        />
+      <div className="relative overflow-hidden rounded-full border border-white/10 bg-[#1f1f1f]/90 shadow-[0_10px_30px_rgba(0,0,0,0.6)] backdrop-blur-xl supports-[not(backdrop-filter:blur(1px))]:bg-[#1f1f1f]">
         <ul className="relative mx-auto grid max-w-md grid-cols-4 gap-1 p-1.5">
           {NAV.map((n) => {
             const active = view === n.id;
@@ -628,16 +635,16 @@ function BottomNav({
                   aria-current={active ? "page" : undefined}
                   className={`relative flex w-full flex-col items-center gap-0.5 rounded-full px-1 py-2 transition duration-300 active:scale-95 ${
                     active
-                      ? "bg-white/[0.2] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.55),inset_0_0_0_1px_rgba(255,255,255,0.25),inset_0_-6px_12px_rgba(255,255,255,0.08),0_2px_10px_rgba(0,0,0,0.3)] backdrop-blur-md"
+                      ? "bg-[#e50914] text-white shadow-[0_4px_14px_rgba(229,9,20,0.45)]"
                       : gold
                         ? "pd-gold-frame text-[#5a3b00]"
-                        : "text-white/70"
+                        : "text-white/60"
                   }`}
                 >
                   <span className="relative">
                     {n.icon}
                     {badge > 0 && (
-                      <span className="absolute -right-2.5 -top-1.5 min-w-4 rounded-full bg-[#e50914] px-1 text-center text-[10px] leading-4 text-white shadow-[0_1px_4px_rgba(0,0,0,0.4)]">
+                      <span className="absolute -right-2.5 -top-1.5 min-w-4 rounded-full bg-white px-1 text-center text-[10px] font-bold leading-4 text-black shadow-[0_1px_4px_rgba(0,0,0,0.4)]">
                         {badge}
                       </span>
                     )}
@@ -659,7 +666,7 @@ function BottomNav({
   );
 }
 
-// คอมพิวเตอร์/แท็บเล็ต: แถบบน (แสดงตั้งแต่จอ md ขึ้นไป) พื้นกระจกเบลอ
+// คอมพิวเตอร์/แท็บเล็ต: แถบบน (แสดงตั้งแต่จอ md ขึ้นไป) พื้นดำเบลอ ปุ่มที่เลือกเป็นแดง
 function TopNav({
   view,
   badges,
@@ -678,7 +685,7 @@ function TopNav({
   onLogin: () => void;
 }) {
   return (
-    <header className="sticky top-0 z-40 hidden border-b border-white/10 bg-black/50 backdrop-blur-xl md:block">
+    <header className="sticky top-0 z-40 hidden border-b border-white/10 bg-[#141414]/85 backdrop-blur-xl md:block">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-8 py-3">
         <button
           type="button"
@@ -696,7 +703,7 @@ function TopNav({
         </button>
 
         <nav aria-label="เมนูหลักบนคอมพิวเตอร์">
-          <ul className="flex items-center gap-1">
+          <ul className="flex items-center gap-1 rounded-full border border-white/10 bg-[#1f1f1f] p-1">
             {NAV.filter((n) => n.id !== "profile").map((n) => {
               const active = view === n.id;
               const badge = badges[n.id] ?? 0;
@@ -710,15 +717,15 @@ function TopNav({
                     aria-label={gold ? `${n.label} (มีตั๋วที่ถูกรางวัล)` : undefined}
                     className={`relative flex items-center gap-2 rounded-full px-4 py-2 text-sm transition ${
                       active
-                        ? "bg-[#1f1f1f] font-bold text-black"
+                        ? "bg-[#e50914] font-bold text-white"
                         : gold
                           ? "pd-gold-frame font-bold text-[#5a3b00]"
-                          : "font-medium text-white/70 hover:bg-white/10"
+                          : "font-medium text-white/70 hover:bg-white/10 hover:text-white"
                     }`}
                   >
                     {n.label}
                     {badge > 0 && (
-                      <span className="min-w-5 rounded-full bg-[#e50914] px-1.5 text-center text-[11px] leading-5 text-white">
+                      <span className="min-w-5 rounded-full bg-white px-1.5 text-center text-[11px] font-bold leading-5 text-black">
                         {badge}
                       </span>
                     )}
@@ -742,11 +749,17 @@ function TopNav({
               onClick={() => onGo("profile")}
               aria-label="โปรไฟล์"
               aria-current={view === "profile" ? "page" : undefined}
-              className={`flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-4 text-sm font-semibold transition ${
-                view === "profile" ? "bg-[#1f1f1f] text-black" : "bg-white/10 hover:bg-white/20"
+              className={`flex items-center gap-2 rounded-full border py-1.5 pl-1.5 pr-4 text-sm font-semibold transition ${
+                view === "profile"
+                  ? "border-[#e50914] bg-[#e50914] text-white"
+                  : "border-white/10 bg-[#1f1f1f] text-white hover:bg-white/10"
               }`}
             >
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#e50914] text-sm font-bold uppercase text-white">
+              <span
+                className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold uppercase ${
+                  view === "profile" ? "bg-white text-[#e50914]" : "bg-[#e50914] text-white"
+                }`}
+              >
                 {(user.name || user.username).charAt(0)}
               </span>
               <span className="max-w-[10rem] truncate">{user.name}</span>
@@ -770,7 +783,15 @@ function TopNav({
 /* ---------- แถบสรุปยอด ----------
    ติดขอบล่างจอ พื้นกระจกเบลอ
    มือถือ: aboveNav = ลอยเหนือแถบเมนูล่าง / คอมพิวเตอร์: ชิดขอบล่างเลย */
-function CheckoutBar({ children, aboveNav = false }: { children: ReactNode; aboveNav?: boolean }) {
+function CheckoutBar({
+  children,
+  aboveNav = false,
+  compact = false,
+}: {
+  children: ReactNode;
+  aboveNav?: boolean;
+  compact?: boolean; // มือถือ: แถบเตี้ยลง (ยอด + ปุ่มอยู่แถวเดียว) จะได้ไม่บังตั๋ว
+}) {
   return (
     <div
       className={`fixed z-40 border border-white/15 bg-black/55 shadow-[0_-8px_32px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.15)] backdrop-blur-2xl backdrop-saturate-150 ${
@@ -786,18 +807,19 @@ function CheckoutBar({ children, aboveNav = false }: { children: ReactNode; abov
 
 /* ---------- โอนเงิน + ส่งสลีป ---------- */
 
-// ย่อรูปใหญ่ก่อนส่ง (กันไฟล์ใหญ่เกินลิมิตของโฮสต์) รูปเล็กอยู่แล้วส่งตามเดิม
+// ย่อรูปใหญ่ก่อนส่ง (ส่งไวขึ้น + กันไฟล์ใหญ่เกินลิมิตของโฮสต์) รูปเล็กอยู่แล้วส่งตามเดิม
+// 1600px ยังอ่าน QR บนสลีปได้ชัด
 async function shrinkImage(file: File): Promise<File> {
-  if (file.size <= 2.5 * 1024 * 1024) return file;
+  if (file.size <= 1024 * 1024) return file;
   try {
     const bmp = await createImageBitmap(file);
-    const scale = Math.min(1, 2200 / Math.max(bmp.width, bmp.height));
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(bmp.width * scale);
     canvas.height = Math.round(bmp.height * scale);
     canvas.getContext("2d")?.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.9));
-    return blob ? new File([blob], "slip.jpg", { type: "image/jpeg" }) : file;
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.85));
+    return blob && blob.size < file.size ? new File([blob], "slip.jpg", { type: "image/jpeg" }) : file;
   } catch {
     return file;
   }
@@ -818,6 +840,7 @@ function SlipPay({
   const [loadError, setLoadError] = useState("");
   const [now, setNow] = useState(0);
   const [file, setFile] = useState<File | null>(null);
+  const [shrunk, setShrunk] = useState<File | null>(null); // รูปที่ย่อเตรียมไว้แล้ว (ย่อตั้งแต่เลือกรูป กดส่งแล้วไม่ต้องรอ)
   const [preview, setPreview] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -871,15 +894,23 @@ function SlipPay({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paymentId]);
 
-  // พรีวิวรูปที่เลือก
+  // พรีวิวรูปที่เลือก + ย่อรูปเตรียมไว้เบื้องหลังทันที
   useEffect(() => {
+    setShrunk(null);
     if (!file) {
       setPreview("");
       return;
     }
     const url = URL.createObjectURL(file);
     setPreview(url);
-    return () => URL.revokeObjectURL(url);
+    let cancelled = false;
+    shrinkImage(file).then((f) => {
+      if (!cancelled) setShrunk(f);
+    });
+    return () => {
+      cancelled = true;
+      URL.revokeObjectURL(url);
+    };
   }, [file]);
 
   async function upload() {
@@ -889,7 +920,7 @@ function SlipPay({
     setErr("");
     try {
       const fd = new FormData();
-      fd.append("slip", await shrinkImage(file));
+      fd.append("slip", shrunk ?? (await shrinkImage(file)));
       const res = await fetch(`/api/payments/${paymentId}/slip`, { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (res.status === 401) return onNeedLogin();
@@ -1098,6 +1129,8 @@ export default function Home() {
   const [tab, setTab] = useState<"ready" | "used" | "status">("ready");
   const [sheet, setSheet] = useState<TicketId | null>(null);
   const [seenWon, setSeenWon] = useState<string[]>([]); // ตั๋วถูกรางวัลที่ผู้ใช้เห็นแล้ว
+  const [scanned, setScanned] = useState<string[]>([]); // รหัสตั๋วที่เพิ่งถูกสแกนขณะเปิดหน้าต่างแสดงตั๋วอยู่ (ค้างโชว์ตราประทับ "รับแล้ว" ชั่วคราว)
+  const prevSheetRef = useRef<string[]>([]); // รหัสตั๋วที่ยังพร้อมใช้ในหน้าต่างแสดงตั๋วรอบก่อน ไว้เทียบหาใบที่เพิ่งถูกสแกน
 
   const userId = user?.id ?? null;
 
@@ -1170,7 +1203,7 @@ export default function Home() {
   // (ตั๋วถูกออกตอน admin อนุมัติสลีป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง
   //  และสถานะถูกรางวัลก็มาทางนี้ด้วย ปุ่มเมนูสีทองจะขึ้นแม้อยู่หน้าอื่น)
   // ตอนเปิดหน้าต่างแสดงตั๋วอยู่ = ใกล้ถูกเจ้าหน้าที่ยิงที่หน้างาน: โหลดทุก 3 วิ
-  // ตั๋วที่ถูกยิงแล้วจะย้ายไปแท็บ "ใช้แล้ว" (ขึ้น "รับแล้ว") ทันที
+  // ตั๋วที่ถูกยิงแล้วจะขึ้นตราประทับ "รับแล้ว" ค้างไว้แล้วเฟดหายไป (SCANNED_SHOW_MS) แล้วย้ายไปแท็บ "ใช้แล้ว" (ขึ้น "รับแล้ว")
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
@@ -1297,9 +1330,8 @@ export default function Home() {
     save(CART_KEY, next);
   }
 
-  // กดลูกศรจากการ์ดหน้าหลัก: ไปหน้าเลือกตั๋ว และใส่ตั๋วนั้นอย่างน้อย 1 ใบ
-  function pick(id: TicketId) {
-    if ((cart[id] ?? 0) === 0) setQty(id, 1);
+  // กดตั๋วจากการ์ดหน้าหลัก: ไปหน้าเลือกตั๋วเฉย ๆ (ไม่เพิ่มจำนวนให้ ผู้ใช้กด + เองในหน้าซื้อตั๋ว)
+  function pick() {
     go("buy");
   }
 
@@ -1444,15 +1476,38 @@ export default function Home() {
   const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(EVENT.place)}`;
 
   const sheetDef = sheet ? defOf(sheet) : null;
-  // ตั๋วที่ถูกรางวัลขึ้นก่อน
+  // ตั๋วที่พร้อมใช้ + ตั๋วที่เพิ่งถูกสแกน (ค้างโชว์ตราประทับชั่วคราว) ตั๋วที่ถูกรางวัลขึ้นก่อน
   const sheetOrders = sheet
-    ? readyOrders.filter((o) => o.ticket === sheet).sort((a, b) => Number(b.won === true) - Number(a.won === true))
+    ? orders
+        .filter((o) => o.ticket === sheet && (!o.used || scanned.includes(o.code)))
+        .sort((a, b) => Number(b.won === true) - Number(a.won === true))
     : [];
+  const sheetReadyCount = sheetOrders.filter((o) => !o.used).length;
 
-  // ตั๋วในหน้าต่างแสดงตั๋วถูกยิงจนหมด (ย้ายไป "ใช้แล้ว") = ปิดหน้าต่างเอง
+  // เทียบรอบก่อน: ตั๋วที่หายจาก "พร้อมใช้" เพราะถูกสแกน (used) → ค้างโชว์ตราประทับแล้วเฟดหาย SCANNED_SHOW_MS
+  // ตั๋วในหน้าต่างหมดแล้ว และไม่มีใบที่กำลังโชว์ตราประทับ = ปิดหน้าต่างเอง
   useEffect(() => {
-    if (sheet && sheetOrders.length === 0) setSheet(null);
-  }, [sheet, sheetOrders.length]);
+    if (!sheet) {
+      prevSheetRef.current = [];
+      setScanned((prev) => (prev.length ? [] : prev));
+      return;
+    }
+    const readyCodes = orders.filter((o) => o.ticket === sheet && !o.used).map((o) => o.code);
+    const newlyUsed = prevSheetRef.current.filter(
+      (c) => !readyCodes.includes(c) && orders.some((o) => o.code === c && o.used),
+    );
+    prevSheetRef.current = readyCodes;
+
+    if (newlyUsed.length > 0) {
+      setScanned((prev) => Array.from(new Set([...prev, ...newlyUsed])));
+      setTimeout(() => {
+        setScanned((prev) => prev.filter((c) => !newlyUsed.includes(c)));
+      }, SCANNED_SHOW_MS);
+      return;
+    }
+
+    if (readyCodes.length === 0 && scanned.length === 0) setSheet(null);
+  }, [sheet, orders, scanned]);
 
   // ระยะเว้นด้านล่างของหน้า: หน้าซื้อ/ชำระเงินมีแถบสรุปยอดติดขอบล่าง ต้องเว้นที่ให้ทั้งมือถือและคอมพิวเตอร์
   const mainPad =
@@ -1468,7 +1523,7 @@ export default function Home() {
     <div
       className={`min-h-screen overflow-x-clip bg-[#141414] text-white [color-scheme:dark] [&_button:disabled]:cursor-not-allowed [&_button:not(:disabled)]:cursor-pointer ${appFont.className}`}
     >
-      {/* แอนิเมชันกรอบทองวิบวับ (ตั๋วที่ถูกรางวัล + ปุ่มเมนู "ตั๋วของฉัน") */}
+      {/* แอนิเมชันกรอบทองวิบวับ (ตั๋วที่ถูกรางวัล + ปุ่มเมนู "ตั๋วของฉัน") และเอฟเฟคตั๋วถูกสแกน (สีเทา + ตราประทับ "รับแล้ว" + เฟดหาย) */}
       <style>{`
         @keyframes pdGold {
           0% { background-position: 0% 50%; }
@@ -1481,6 +1536,19 @@ export default function Home() {
         @keyframes pdTwinkle {
           0%, 100% { opacity: 0; transform: scale(0.3) rotate(0deg); }
           50% { opacity: 1; transform: scale(1.15) rotate(25deg); }
+        }
+        @keyframes pdScanGray {
+          from { filter: none; opacity: 1; }
+          to { filter: grayscale(1) brightness(0.8); opacity: 0.75; }
+        }
+        @keyframes pdStamp {
+          0% { opacity: 0; transform: rotate(-14deg) scale(2.6); }
+          60% { opacity: 1; transform: rotate(-14deg) scale(0.92); }
+          100% { opacity: 1; transform: rotate(-14deg) scale(1); }
+        }
+        @keyframes pdFadeOut {
+          from { opacity: 1; transform: translateY(0) scale(1); }
+          to { opacity: 0; transform: translateY(10px) scale(0.97); }
         }
         .pd-gold-frame {
           background: linear-gradient(110deg, #b8860b, #ffe27a, #fff6c9, #ffd54a, #b8860b, #ffe27a, #b8860b);
@@ -1497,9 +1565,16 @@ export default function Home() {
         .pd-twinkle:nth-child(6) { top: 92%; left: 9%; width: 1.25rem; height: 1.25rem; animation-delay: 1.4s; }
         .pd-twinkle:nth-child(7) { top: 94%; left: 52%; width: 0.75rem; height: 0.75rem; animation-delay: 0.2s; }
         .pd-twinkle:nth-child(8) { top: 90%; left: 88%; width: 1rem; height: 1rem; animation-delay: 0.9s; }
+        .pd-scanned { animation: pdScanGray 0.5s ease-out forwards; }
+        .pd-scanned .pd-gold-frame, .pd-scanned .pd-twinkle { animation: none; }
+        .pd-stamp { transform: rotate(-14deg); animation: pdStamp 0.5s cubic-bezier(0.2, 0.8, 0.3, 1.2) 0.15s both; }
+        .pd-scan-out { animation: pdFadeOut 1s ease-in 2.2s forwards; }
         @media (prefers-reduced-motion: reduce) {
           .pd-gold-frame, .pd-twinkle, .pd-spark { animation: none; }
           .pd-twinkle, .pd-spark { opacity: 1; }
+          .pd-scanned { animation: none; filter: grayscale(1) brightness(0.8); opacity: 0.75; }
+          .pd-stamp { animation: none; }
+          .pd-scan-out { animation: none; }
         }
       `}</style>
 
@@ -1533,22 +1608,8 @@ export default function Home() {
         {/* ===== หน้าหลัก ===== */}
         {view === "home" && (
           <>
-            <section className="relative -mt-6 ml-[calc(50%-50vw)] w-screen md:-mt-8">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={PAYCARD_IMG}
-                alt={`${EVENT.name} ${EVENT.tagline}`}
-                className="block h-auto min-h-[15rem] w-full object-cover object-center md:h-[18rem] lg:h-[22rem]"
-              />
-              {/* ไล่สีเข้มจากด้านล่างขึ้นบน กลืนกับพื้นหลังเว็บ */}
-              <div
-                aria-hidden
-                className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#141414] via-[#141414]/50 to-transparent"
-              />
-              <div
-                aria-hidden
-                className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/60 to-transparent md:hidden"
-              />
+            {/* มือถือ: เว้นด้านบนไว้ให้แถบหัว (โลโก้ + ปุ่มเข้าสู่ระบบ) อยู่บนพื้นดำ แล้วรูปใหญ่อยู่ต่ำลงมา */}
+            <section className="relative -mt-6 ml-[calc(50%-50vw)] w-screen pt-[5.5rem] md:-mt-8 md:pt-6">
               <header className="absolute inset-x-0 top-0 flex items-center justify-between px-5 pt-6 md:hidden">
                 <div className="flex items-center gap-3">
                   <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e50914] text-white">
@@ -1564,7 +1625,7 @@ export default function Home() {
                     type="button"
                     onClick={() => go("profile")}
                     aria-label="โปรไฟล์"
-                    className="flex h-11 w-11 items-center justify-center rounded-full bg-[#e50914] text-base font-bold uppercase text-white"
+                    className="flex h-11 w-11 items-center justify-center rounded-full bg-[#e50914] text-base font-bold uppercase text-white ring-2 ring-white/20 transition active:scale-95"
                   >
                     {(user.name || user.username).charAt(0)}
                   </button>
@@ -1572,12 +1633,35 @@ export default function Home() {
                   <button
                     type="button"
                     onClick={() => needLogin("home")}
-                    className="rounded-full border border-white/25 bg-black/40 px-4 py-2.5 text-sm font-bold backdrop-blur-md transition active:scale-95"
+                    className="rounded-full bg-[#e50914] px-4 py-2.5 text-sm font-bold text-white transition active:scale-95"
                   >
                     เข้าสู่ระบบ
                   </button>
                 )}
               </header>
+
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={PAYCARD_IMG}
+                  alt={`${EVENT.name} ${EVENT.tagline}`}
+                  className="block h-auto min-h-[15rem] w-full object-cover object-center md:h-[18rem] lg:h-[22rem]"
+                />
+                {/* ไล่สีเข้มจากด้านล่างขึ้นบน กลืนกับพื้นหลังเว็บ (เริ่มไล่ต่ำลง ให้เห็นรูปมากขึ้น) */}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0"
+                  style={{
+                    background:
+                      "linear-gradient(to top, #141414 0%, rgba(20,20,20,0.6) 14%, rgba(20,20,20,0) 45%)",
+                  }}
+                />
+                {/* ขอบบนของรูปกลืนกับพื้นดำ */}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-[#141414] to-transparent"
+                />
+              </div>
             </section>
 
             <div className="mt-3 flex items-center justify-between px-1 text-sm md:mt-4 md:text-base">
@@ -1603,7 +1687,7 @@ export default function Home() {
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => pick(t.id)}
+                    onClick={pick}
                     aria-label={`${t.title} ${baht(t.price)} ต่อใบ`}
                     className="block text-left transition active:scale-[0.98] md:hover:-translate-y-0.5"
                   >
@@ -1665,11 +1749,8 @@ export default function Home() {
               <Steps current={1} />
             </div>
 
-            <h2 className="mt-8 text-2xl font-bold text-white md:text-3xl">พร้อมสนุกกี่ใบดี?</h2>
-            <p className="mt-1 text-sm text-white/70 md:text-base">เลือกจำนวนตั๋วทั้ง 2 แบบในครั้งเดียว</p>
-
             {/* มือถือ: เรียงลง / คอมพิวเตอร์: 2 ตั๋วเรียงซ้ายขวา */}
-            <div className="mt-5 flex flex-col gap-4 md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-6">
+            <div className="mt-8 flex flex-col gap-4 md:mt-10 md:grid md:grid-cols-2 md:items-start md:gap-6">
               {TICKETS.map((t) => {
                 const q = cart[t.id] ?? 0;
 
@@ -2523,7 +2604,7 @@ export default function Home() {
           >
             <div className="flex items-center justify-between">
               <h2 id="sheet-title" className="text-xl font-bold">
-                {sheetDef.title} · {sheetOrders.length} ใบ
+                {sheetDef.title} · {sheetReadyCount} ใบ
               </h2>
               <button
                 type="button"
@@ -2537,7 +2618,7 @@ export default function Home() {
 
             <div className="mt-4 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
               {sheetOrders.map((o) => (
-                <TicketPass key={o.code} def={sheetDef} order={o} />
+                <TicketPass key={o.code} def={sheetDef} order={o} scanned={o.used === true} />
               ))}
             </div>
           </div>
