@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Prompt } from "next/font/google";
+import { code128Bars } from "@/lib/code128";
 
 // ฟอนต์หลักของเว็บ: Prompt (โค้งมน เป็นกันเอง) เปลี่ยนเป็น Kanit / Mali ได้
 const appFont = Prompt({
@@ -319,17 +320,28 @@ const IconTrash = ({ className }: IconProps) => (
 const iconOf = (id: TicketId, className?: string) =>
   id === "booth" ? <IconTicket className={className} /> : <IconGift className={className} />;
 
+// บาร์โค้ด Code128 จริง (เจ้าหน้าที่ยิงด้วยกล้องที่หน้า /ticket ได้) วาดเป็น SVG สีตามตัวหนังสือของตั๋ว
+// มีพื้นที่ว่างซ้ายขวาในตัว ต้องวางบนพื้นสีอ่อน (ตั๋วใช้พื้นขาว)
 function Barcode({ code }: { code: string }) {
-  const bars = code.split("").flatMap((ch) => {
-    const n = ch.charCodeAt(0);
-    return [1 + (n % 3), 1 + ((n >> 2) % 2)];
-  });
+  let data: ReturnType<typeof code128Bars>;
+  try {
+    data = code128Bars(code);
+  } catch {
+    return null;
+  }
   return (
-    <div className="flex h-12 items-stretch justify-center gap-px" aria-hidden>
-      {bars.map((w, i) => (
-        <span key={i} style={{ width: w * 1.5 }} className="bg-current" />
+    <svg
+      viewBox={`0 0 ${data.total} 1`}
+      preserveAspectRatio="none"
+      shapeRendering="crispEdges"
+      role="img"
+      aria-label={`บาร์โค้ด ${code}`}
+      className="block h-16 w-full"
+    >
+      {data.bars.map((b, i) => (
+        <rect key={i} x={b.x} y={0} width={b.w} height={1} fill="currentColor" />
       ))}
-    </div>
+    </svg>
   );
 }
 
@@ -432,7 +444,7 @@ function TicketPass({ def, order }: { def: TicketDef; order: Order }) {
             <p className="mt-2 break-all font-mono text-xs font-bold tracking-wider">{order.code}</p>
           </div>
         ) : (
-          <div className="px-5 pb-5 pt-4">
+          <div className="px-2 pb-5 pt-4">
             <Barcode code={order.code} />
             <p className="mt-2 break-all text-center font-mono text-xs font-bold tracking-wider">{order.code}</p>
           </div>
@@ -1157,6 +1169,8 @@ export default function Home() {
   // โหลดตั๋วใหม่ทุก 10 วิ ตลอดที่ login อยู่ (เข้าหน้า "ตั๋วของฉัน" โหลดทันที)
   // (ตั๋วถูกออกตอน admin อนุมัติสลีป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง
   //  และสถานะถูกรางวัลก็มาทางนี้ด้วย ปุ่มเมนูสีทองจะขึ้นแม้อยู่หน้าอื่น)
+  // ตอนเปิดหน้าต่างแสดงตั๋วอยู่ = ใกล้ถูกเจ้าหน้าที่ยิงที่หน้างาน: โหลดทุก 3 วิ
+  // ตั๋วที่ถูกยิงแล้วจะย้ายไปแท็บ "ใช้แล้ว" (ขึ้น "รับแล้ว") ทันที
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
@@ -1168,12 +1182,12 @@ export default function Home() {
       }
     };
     if (view === "tickets") loadTickets();
-    const t = setInterval(loadTickets, 10000);
+    const t = setInterval(loadTickets, sheet ? 3000 : 10000);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
-  }, [view, user]);
+  }, [view, user, sheet]);
 
   const defOf = (id: TicketId) => TICKETS.find((t) => t.id === id)!;
   const cartLines = TICKETS.flatMap((t) => {
@@ -1434,6 +1448,11 @@ export default function Home() {
   const sheetOrders = sheet
     ? readyOrders.filter((o) => o.ticket === sheet).sort((a, b) => Number(b.won === true) - Number(a.won === true))
     : [];
+
+  // ตั๋วในหน้าต่างแสดงตั๋วถูกยิงจนหมด (ย้ายไป "ใช้แล้ว") = ปิดหน้าต่างเอง
+  useEffect(() => {
+    if (sheet && sheetOrders.length === 0) setSheet(null);
+  }, [sheet, sheetOrders.length]);
 
   // ระยะเว้นด้านล่างของหน้า: หน้าซื้อ/ชำระเงินมีแถบสรุปยอดติดขอบล่าง ต้องเว้นที่ให้ทั้งมือถือและคอมพิวเตอร์
   const mainPad =
@@ -2157,11 +2176,12 @@ export default function Home() {
                             <p className="truncate font-mono text-xs text-white/50">{o.code}</p>
                             {o.won && <p className="text-xs font-bold text-[#ffd54a]">ถูกรางวัล</p>}
                           </div>
-                          <p className="shrink-0 text-right text-xs text-white/50">
-                            ใช้แล้ว
-                            <br />
-                            {fmtTime(o.usedAt)}
-                          </p>
+                          <div className="shrink-0 text-right">
+                            <span className="inline-block rounded-full bg-green-100 px-2.5 py-1 text-xs font-bold text-green-800">
+                              รับแล้ว
+                            </span>
+                            <p className="mt-1 text-xs text-white/50">{fmtTime(o.usedAt)}</p>
+                          </div>
                         </li>
                       );
                     })}

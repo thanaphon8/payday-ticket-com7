@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@zxing/browser": "^0.2.1",
+    "@zxing/library": "^0.23.0",
     "googleapis": "^190.0.0",
     "jsqr": "^1.4.0",
     "mongodb": "^7.9.0",

@@ -35,6 +35,13 @@ export async function getDb(): Promise<Db> {
       // สลีป: key = ธนาคาร-transRef ซ้ำไม่ได้ (กันใช้สลีปใบเดิมซ้ำ)
       db.collection("slips").createIndex({ key: 1 }, { unique: true }),
       db.collection("slips").createIndex({ paymentId: 1 }),
+      // ประวัติการสแกนตั๋วเข้างาน: หน้า admin เรียงตามเวลา / ค้นตามรหัสตั๋ว
+      db.collection("scans").createIndex({ at: -1 }),
+      db.collection("scans").createIndex({ code: 1 }),
+      // ตั๋ว 1 ใบ สแกนสำเร็จ (result = "ok") ได้ครั้งเดียวเท่านั้น กันยิงซ้ำระดับฐานข้อมูล
+      db
+        .collection("scans")
+        .createIndex({ code: 1 }, { unique: true, partialFilterExpression: { result: "ok" }, name: "code_ok_once" }),
     ])
       .then(() => undefined)
       .catch((e) => {

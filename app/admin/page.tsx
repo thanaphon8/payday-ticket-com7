@@ -6,7 +6,7 @@ import { Prompt } from "next/font/google";
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
 
 type ListTab = "reviewing" | "approved" | "rejected";
-type Tab = ListTab | "summary";
+type Tab = ListTab | "summary" | "scans";
 type SlipCheck = {
   amount: number | null;
   amountOk: boolean;
@@ -32,7 +32,8 @@ type Item = {
   slip: { transRef: string; sendingBank: string; check: SlipCheck | null } | null;
 };
 type Counts = Record<ListTab, number>;
-type Gate = "loading" | "ok" | "unauth" | "forbidden" | "locked";
+// admin เข้าด้วยรหัสผ่านอย่างเดียว: ยังไม่ปลดล็อก/หมดอายุ = locked
+type Gate = "loading" | "ok" | "locked";
 type Summary = {
   buyers: number;
   orders: number;
@@ -44,6 +45,18 @@ type Summary = {
   daily: { date: string; orders: number; booth: number; lucky: number; amount: number }[];
   generatedAt: string;
 };
+// ประวัติการยิงบาร์โค้ดตั๋วเข้างาน (มาจากหน้า /ticket)
+type ScanRow = {
+  id: string;
+  code: string;
+  result: string;
+  at: string;
+  name: string | null;
+  phone: string | null;
+  ticket: string | null;
+  firstUsedAt: string | null;
+};
+type ScanData = { total: number; rejected: number; scans: ScanRow[] };
 
 const POLL_MS = 10_000;
 const RECEIVER_LABEL = "บริษัท คอมเซเว่น จำกัด (มหาชน)";
@@ -59,11 +72,27 @@ const BANKS: Record<string, string> = {
   "034": "ธ.ก.ส.",
   "069": "เกียรตินาคินภัทร",
 };
+const SCAN_LABEL: Record<string, { label: string; cls: string }> = {
+  ok: { label: "ผ่าน", cls: "bg-green-600 text-white" },
+  duplicate: { label: "ซ้ำ (ใช้แล้ว)", cls: "bg-red-600 text-white" },
+  wrong_type: { label: "ไม่ใช่ตั๋วซุ้ม", cls: "bg-yellow-400 text-[#14402c]" },
+  invalid: { label: "ไม่พบตั๋ว", cls: "bg-red-600 text-white" },
+};
 
 const baht = (n: number) => `฿${n.toLocaleString("th-TH")}`;
 const num = (n: number) => n.toLocaleString("th-TH");
 const fmt = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "-";
+const fmtSec = (iso: string | null) =>
+  iso
+    ? new Date(iso).toLocaleString("th-TH", {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : "-";
 const fmtDay = (ymd: string) =>
   new Date(`${ymd}T00:00:00+07:00`).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "2-digit" });
 
@@ -153,6 +182,7 @@ export default function AdminPage() {
   const [items, setItems] = useState<Item[]>([]);
   const [counts, setCounts] = useState<Counts>({ reviewing: 0, approved: 0, rejected: 0 });
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [scanData, setScanData] = useState<ScanData | null>(null);
   const [sound, setSound] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -174,31 +204,34 @@ export default function AdminPage() {
   const load = useCallback(async () => {
     try {
       const current = tabRef.current;
-      const listStatus: ListTab = current === "summary" ? "reviewing" : current;
-      const [res, sumRes] = await Promise.all([
+      const listStatus: ListTab = current === "summary" || current === "scans" ? "reviewing" : current;
+      const extraUrl =
+        current === "summary" ? "/api/admin/summary" : current === "scans" ? "/api/admin/scans" : null;
+      const [res, extraRes] = await Promise.all([
         fetch(`/api/admin/payments?status=${listStatus}`, { cache: "no-store" }),
-        current === "summary" ? fetch("/api/admin/summary", { cache: "no-store" }) : Promise.resolve(null),
+        extraUrl ? fetch(extraUrl, { cache: "no-store" }) : Promise.resolve(null),
       ]);
-      if (res.status === 401) return setGate("unauth");
-      if (res.status === 403) {
-        // เป็น admin แต่ยังไม่กรอกรหัส admin (หรือหมดอายุ 12 ชั่วโมง) → หน้ากรอกรหัส
-        const st = (await fetch("/api/admin/login", { cache: "no-store" })
-          .then((r) => r.json())
-          .catch(() => null)) as { isAdmin?: boolean; unlocked?: boolean } | null;
-        return setGate(st?.isAdmin && !st.unlocked ? "locked" : "forbidden");
+      // ยังไม่กรอกรหัส admin (หรือหมดอายุ 12 ชั่วโมง) → หน้ากรอกรหัส
+      if (res.status === 401 || res.status === 403 || extraRes?.status === 401 || extraRes?.status === 403) {
+        return setGate("locked");
       }
       if (!res.ok) return setNote("โหลดข้อมูลไม่ได้ กำลังลองใหม่");
       const data = (await res.json()) as { counts: Counts; payments: Item[] };
       setGate("ok");
       setNote("");
-      if (current !== "summary") setItems(data.payments);
+      if (current !== "summary" && current !== "scans") setItems(data.payments);
       setCounts(data.counts);
       if (prevReviewing.current !== null && data.counts.reviewing > prevReviewing.current && soundRef.current) beep();
       prevReviewing.current = data.counts.reviewing;
 
-      if (sumRes) {
-        if (sumRes.ok) setSummary((await sumRes.json()) as Summary);
-        else setNote("โหลดสรุปยอดไม่ได้ กำลังลองใหม่");
+      if (extraRes) {
+        if (!extraRes.ok) {
+          setNote(current === "summary" ? "โหลดสรุปยอดไม่ได้ กำลังลองใหม่" : "โหลดประวัติสแกนไม่ได้ กำลังลองใหม่");
+        } else if (current === "summary") {
+          setSummary((await extraRes.json()) as Summary);
+        } else {
+          setScanData((await extraRes.json()) as ScanData);
+        }
       }
     } catch {
       setNote("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กำลังลองใหม่");
@@ -251,6 +284,7 @@ export default function AdminPage() {
     await fetch("/api/admin/login", { method: "DELETE" }).catch(() => {});
     setItems([]);
     setSummary(null);
+    setScanData(null);
     setCounts({ reviewing: 0, approved: 0, rejected: 0 });
     setDetailId(null);
     setConfirmId(null);
@@ -326,16 +360,7 @@ export default function AdminPage() {
       <div className={shell}>
         <main className="mx-auto max-w-md px-4 py-16 text-center sm:px-5">
           <h1 className="text-2xl font-bold">หน้าเจ้าหน้าที่</h1>
-          <p className="mt-3 text-sm text-[#4d6652]">
-            {gate === "loading" && "กำลังโหลด..."}
-            {gate === "unauth" && "เข้าสู่ระบบด้วยบัญชี admin ที่หน้าแรกก่อน แล้วกลับมาหน้านี้"}
-            {gate === "forbidden" && "บัญชีนี้ไม่มีสิทธิ์ admin"}
-          </p>
-          {gate !== "loading" && (
-            <a href="/" className="mt-5 inline-block rounded-full bg-[#14402c] px-6 py-3 font-semibold text-white">
-              ไปหน้าแรก
-            </a>
-          )}
+          <p className="mt-3 text-sm text-[#4d6652]">กำลังโหลด...</p>
         </main>
       </div>
     );
@@ -346,18 +371,23 @@ export default function AdminPage() {
     ["approved", "อนุมัติแล้ว"],
     ["rejected", "ปฏิเสธ"],
     ["summary", "สรุปยอด"],
+    ["scans", "สแกนตั๋ว"],
   ];
+
+  const heading = tab === "summary" ? "สรุปยอดขาย" : tab === "scans" ? "ประวัติสแกนตั๋ว" : "ตรวจสลีป";
 
   return (
     <div className={shell}>
       <main className="mx-auto w-full max-w-lg px-4 pb-16 pt-5 sm:max-w-4xl sm:px-6 sm:pt-8">
         <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
           <div className="min-w-0">
-            <h1 className="text-2xl font-bold sm:text-3xl">{tab === "summary" ? "สรุปยอดขาย" : "ตรวจสลีป"}</h1>
+            <h1 className="text-2xl font-bold sm:text-3xl">{heading}</h1>
             <p className="mt-1 text-xs leading-relaxed text-[#4d6652] sm:text-sm">
               {tab === "summary"
                 ? "ยอดขายนับจากรายการที่อนุมัติแล้วเท่านั้น รายการที่รอตรวจแสดงแยกไว้ต่างหาก"
-                : "ระบบอ่านสลีปให้เบื้องต้น ✓ = ตรงกับรายการ / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
+                : tab === "scans"
+                  ? "ประวัติการยิงบาร์โค้ดตั๋วเข้างานจากหน้า /ticket ว่ายิงให้ใคร เวลาไหน ตั๋ว 1 ใบยิงผ่านได้ครั้งเดียว ครั้งต่อไปจะขึ้นว่าซ้ำ"
+                  : "ระบบอ่านสลีปให้เบื้องต้น ✓ = ตรงกับรายการ / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
             </p>
           </div>
           <div className="flex shrink-0 gap-2 self-start">
@@ -379,7 +409,7 @@ export default function AdminPage() {
           </div>
         </header>
 
-        <div role="tablist" className="mt-5 grid grid-cols-4 rounded-2xl bg-[#e3ecd6] p-1 sm:mt-6">
+        <div role="tablist" className="mt-5 grid grid-cols-5 rounded-2xl bg-[#e3ecd6] p-1 sm:mt-6">
           {tabs.map(([id, label]) => (
             <button
               key={id}
@@ -395,7 +425,7 @@ export default function AdminPage() {
               }}
               className={`relative min-h-11 rounded-xl px-1 py-2.5 text-xs font-bold transition sm:text-sm ${tab === id ? "bg-[#14402c] text-white" : "text-[#4d6652]"}`}
             >
-              {id === "summary" ? label : `${label} (${counts[id]})`}
+              {id === "summary" || id === "scans" ? label : `${label} (${counts[id]})`}
               {id === "reviewing" && counts.reviewing > 0 && tab !== "reviewing" && (
                 <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500" />
               )}
@@ -491,6 +521,68 @@ export default function AdminPage() {
               <p className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">
                 อัปเดตล่าสุด {fmt(summary.generatedAt)} · รีเฟรชอัตโนมัติทุก 10 วินาที
               </p>
+            </section>
+          )
+        ) : tab === "scans" ? (
+          !scanData ? (
+            <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+              กำลังโหลดประวัติสแกน...
+            </div>
+          ) : (
+            <section className="mt-5 sm:mt-6">
+              <div className="grid grid-cols-2 gap-3 sm:gap-4">
+                <Stat title="ตั๋วที่ยิงผ่านแล้ว" value={`${num(scanData.total)} ใบ`} tone="dark" />
+                <Stat title="ยิงไม่ผ่าน" value={`${num(scanData.rejected)} ครั้ง`} sub="ซ้ำ / ไม่ใช่ตั๋วซุ้ม / ไม่พบ" />
+              </div>
+
+              <div className="mt-5 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+                <div className="p-4">
+                  <h2 className="text-base font-bold sm:text-lg">ประวัติล่าสุด</h2>
+                </div>
+                {scanData.scans.length === 0 ? (
+                  <p className="border-t border-[#e3ecd6] p-6 text-center text-sm text-[#4d6652]">ยังไม่มีการยิงตั๋ว</p>
+                ) : (
+                  <div className="overflow-x-auto border-t border-[#e3ecd6]">
+                    <table className="w-full min-w-[560px] text-left text-xs sm:text-sm">
+                      <thead className="bg-[#f8fbf3] text-[#4d6652]">
+                        <tr>
+                          <th className="px-4 py-2.5 font-semibold">เวลา</th>
+                          <th className="px-2 py-2.5 font-semibold">ชื่อผู้ถือตั๋ว</th>
+                          <th className="px-2 py-2.5 font-semibold">รหัสตั๋ว</th>
+                          <th className="px-4 py-2.5 text-right font-semibold">ผล</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {scanData.scans.map((s) => {
+                          const r = SCAN_LABEL[s.result] ?? { label: s.result, cls: "bg-[#e3ecd6] text-[#14402c]" };
+                          return (
+                            <tr key={s.id} className="border-t border-[#e3ecd6] align-top">
+                              <td className="whitespace-nowrap px-4 py-2.5 font-semibold">{fmtSec(s.at)}</td>
+                              <td className="px-2 py-2.5">
+                                <p className="font-semibold">{s.name ?? "-"}</p>
+                                {s.phone && <p className="text-[#4d6652]">{s.phone}</p>}
+                              </td>
+                              <td className="px-2 py-2.5">
+                                <p className="break-all font-mono">{s.code}</p>
+                                {s.result === "duplicate" && s.firstUsedAt && (
+                                  <p className="mt-0.5 text-[#6b7f6f]">ยิงครั้งแรก {fmtSec(s.firstUsedAt)}</p>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                <span className={`inline-block whitespace-nowrap rounded-full px-3 py-1 font-bold ${r.cls}`}>
+                                  {r.label}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <p className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">แสดง 200 รายการล่าสุด · รีเฟรชอัตโนมัติทุก 10 วินาที</p>
             </section>
           )
         ) : items.length === 0 ? (
