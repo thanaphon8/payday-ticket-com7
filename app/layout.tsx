@@ -18,10 +18,15 @@ export const metadata: Metadata = {
 };
 
 // สีแถบเบราว์เซอร์/ขอบตอนปัดเด้งบนมือถือ = ดำเดียวกับแอป
+// ปิดการซูม (ล็อกสเกล 1 เท่า)
 export const viewport: Viewport = {
   themeColor: "#141414",
   colorScheme: "dark",
   viewportFit: "cover",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
