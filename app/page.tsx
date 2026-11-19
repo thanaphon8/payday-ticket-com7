@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Prompt } from "next/font/google";
 import { code128Bars } from "@/lib/code128";
@@ -67,12 +67,12 @@ const TICKETS: TicketDef[] = [
     sub: "BOOTH PASS",
     homeNote: "เล่นเกมให้เต็มที่",
     homeImage: "/img/p1.png",
-    blurb: "1 ใบ เล่นเกมได้ 1 ซุ้ม เลือกซุ้มได้ทั้งหน้างาน", // TODO: แก้ให้ตรงสิทธิ์จริง
-    // ราคา 100 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts (ฝั่งเซิร์ฟเวอร์คิดเงินจากตัวนั้น)
+    blurb: "1 ชุด = ตั๋วเล่นซุ้ม 2 ใบ (ใบละ ฿50) + ตั๋วรับตั๋วกระดาษ 1 ใบ", // TODO: แก้ให้ตรงสิทธิ์จริง
+    // ราคา 100 บาท / ชุด (ออกเป็น 3 ใบ: 50 + 50 + 0) ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES และ BOOTH_SET ใน lib/tickets.ts (ฝั่งเซิร์ฟเวอร์คิดเงินจากตัวนั้น)
     price: 100,
     layout: "banner",
     groupNote: "เลือกซุ้มที่ชอบ แล้วไปเล่นกัน!",
-    meta: "1 ใบ / 1 ซุ้ม • ใช้ได้เฉพาะวันงาน",
+    meta: "1 ชุด = 3 ใบ • ใช้ได้เฉพาะวันงาน",
     showLabel: "แสดงตั๋วเข้าซุ้ม",
     card: "bg-[#0f1b4d]",
     fg: "text-white",
@@ -88,8 +88,8 @@ const TICKETS: TicketDef[] = [
     homeNote: "ลุ้นรางวัลสุดเซอร์ไพรส์",
     homeImage: "/img/p2.png",
     blurb: "1 ใบ = 1 สิทธิ์สุ่มของรางวัล ภายในงาน", // TODO: แก้ให้ตรงสิทธิ์จริง
-    // ราคา 200 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
-    price: 200,
+    // ราคา 50 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
+    price: 50,
     layout: "compact",
     groupNote: "ลุ้นของรางวัล • 1 สิทธิ์",
     chips: ["รอสุ่มภายในงาน", "ยังไม่ได้ใช้สิทธิ์"],
@@ -115,6 +115,7 @@ type Order = {
   empCode?: string; // รหัสพนักงาน (ตั๋ว Lucky Draw)
   won?: boolean; // ตั๋วใบนี้ถูกรางวัลแล้ว
   wonAt?: string;
+  part?: "booth" | "paper"; // ตั๋วเข้าซุ้ม: booth = ตั๋วเล่นซุ้ม (฿50) / paper = ตั๋วรับตั๋วกระดาษ (ไม่มีมูลค่า)
 };
 
 type View = "home" | "buy" | "pay" | "qr" | "done" | "tickets" | "profile" | "auth";
@@ -133,7 +134,7 @@ type Payment = {
   status: PayStatus;
   qrUrl?: string;
   rejectReason?: string;
-  items?: { ticket: TicketId; qty: number }[]; // ตั๋วที่ซื้อในรายการนี้ (ประเภท + จำนวนใบ)
+  items?: { ticket: TicketId; qty: number }[]; // ตั๋วที่ซื้อในรายการนี้ (ประเภท + จำนวน)
 };
 
 // ผลจาก GET /api/payments/[id]
@@ -142,7 +143,6 @@ type PayPoll = Payment & { orders?: Order[] };
 const MAX_QTY = 20; // จำนวนสูงสุดต่อตั๋ว 1 ประเภท ต่อการซื้อ 1 ครั้ง (กันกดพลาด)
 const CART_KEY = "payday-cart-v1";
 const SLIP_POLL_MS = 5000; // เช็กสถานะรายการโอนทุกกี่มิลลิวินาที
-const SCANNED_SHOW_MS = 3200; // ตั๋วที่เพิ่งถูกสแกน ค้างโชว์ตราประทับ "รับแล้ว" แล้วเฟดหายในหน้าต่างแสดงตั๋วกี่มิลลิวินาที (ต้องไม่น้อยกว่า 2.2s delay + 1s เฟด ใน CSS .pd-scan-out)
 const seenKey = (userId: string) => `payday-won-seen-v1-${userId}`; // รหัสตั๋วที่ถูกรางวัลและผู้ใช้เห็นแล้ว
 
 // ป้ายสถานะรายการโอนเงิน (ข้อความ + สี) ที่แสดงบนการ์ดในแท็บ "สถานะ"
@@ -325,7 +325,7 @@ const iconOf = (id: TicketId, className?: string) =>
 
 // บาร์โค้ด Code128 จริง (เจ้าหน้าที่ยิงด้วยกล้องที่หน้า /ticket ได้) วาดเป็น SVG สีตามตัวหนังสือของตั๋ว
 // มีพื้นที่ว่างซ้ายขวาในตัว ต้องวางบนพื้นสีอ่อน (ตั๋วใช้พื้นขาว)
-function Barcode({ code }: { code: string }) {
+function Barcode({ code, className = "block h-16 w-full" }: { code: string; className?: string }) {
   let data: ReturnType<typeof code128Bars>;
   try {
     data = code128Bars(code);
@@ -339,7 +339,7 @@ function Barcode({ code }: { code: string }) {
       shapeRendering="crispEdges"
       role="img"
       aria-label={`บาร์โค้ด ${code}`}
-      className="block h-16 w-full"
+      className={className}
     >
       {data.bars.map((b, i) => (
         <rect key={i} x={b.x} y={0} width={b.w} height={1} fill="currentColor" />
@@ -426,18 +426,55 @@ function GoldFrame({ children }: { children: ReactNode }) {
 }
 
 /* ---------- ตั๋ว 1 ใบ (ใช้ในหน้าซื้อสำเร็จ และตอนแสดงตั๋ว) ----------
-   scanned = ตั๋วใบนี้เพิ่งถูกเจ้าหน้าที่สแกนรับแล้ว: ตั๋วเป็นสีเทา + ตราประทับ "รับแล้ว" เฉียงทับตั๋ว แล้วเฟดหายไปอย่างนุ่มนวล */
-function TicketPass({ def, order, scanned = false }: { def: TicketDef; order: Order; scanned?: boolean }) {
+   scanned = ตั๋วใบนี้ถูกเจ้าหน้าที่สแกนแล้ว: ตั๋วเป็นสีเทา + ตราประทับเฉียงทับตั๋วค้างไว้ถาวร (ไม่เฟดหาย) ผู้ใช้จะรู้ว่าใบไหนใช้แล้ว ใบไหนยังไม่ใช้
+     ตั๋วเล่นซุ้มที่มีมูลค่า ขึ้นว่า "ใช้แล้ว" / ตั๋วที่ไม่มีมูลค่า (รับตั๋วกระดาษ) และ Lucky Draw ขึ้นว่า "รับแล้ว"
+   calm = โหมดเบา (หน้าต่างแสดงตั๋ว): ตั๋วถูกรางวัลเป็นกรอบทองนิ่ง ไม่มีประกาย/ออร่า/แอนิเมชัน กันเครื่องค้างเมื่อถูกรางวัลหลายใบ
+   onBarcode = (ตั๋วเข้าซุ้มในหน้าต่างแสดงตั๋ว) ยังไม่แสดงบาร์โค้ด ต้องแตะที่ตั๋วอีกครั้งเพื่อเปิดบาร์โค้ดเต็มจอ
+   ตั๋วเล่นซุ้ม (มีมูลค่า ฿50) = พื้นขาว หัวสีกรมท่า ป้ายราคาสีไลม์ / ตั๋วรับตั๋วกระดาษ (ไม่มีมูลค่า) = พื้นครีม หัวสีส้มน้ำตาล เส้นประสีส้ม ไอคอนใบเสร็จ */
+const TicketPass = memo(function TicketPass({
+  def,
+  order,
+  scanned = false,
+  calm = false,
+  onBarcode,
+}: {
+  def: TicketDef;
+  order: Order;
+  scanned?: boolean;
+  calm?: boolean;
+  onBarcode?: (code: string) => void;
+}) {
+  const isPaper = def.id === "booth" && order.part === "paper";
+  const isValue = def.id === "booth" && !isPaper;
+  const heading = isPaper ? "ตั๋วรับตั๋วกระดาษ" : isValue ? "ตั๋วเล่นซุ้ม" : def.title;
+  const subHeading = isPaper ? "PAPER TICKET · ไม่มีมูลค่า" : isValue ? "BOOTH PLAY TICKET" : def.sub;
+  const tapBarcode = !!onBarcode && def.id === "booth" && !scanned && !order.used;
+  const usedWord = isValue ? "ใช้แล้ว" : "รับแล้ว"; // ตั๋วมีมูลค่า = ใช้แล้ว / ตั๋วไม่มีมูลค่า = รับแล้ว
+
   const pass = (
     <Perforated
+      bg={isPaper ? "bg-[#fff1c2]" : "bg-white"}
+      dash={isPaper ? "border-[#b45309]" : undefined}
       top={
         <div className="p-2">
-          <div className={`flex items-center justify-between rounded-2xl px-4 py-3 ${def.card} ${def.fg}`}>
+          <div
+            className={`flex items-center justify-between rounded-2xl px-4 py-3 ${
+              isPaper ? "bg-[#b45309] text-white" : `${def.card} ${def.fg}`
+            }`}
+          >
             <div>
-              <p className="text-[10px] font-bold tracking-widest">{def.sub}</p>
-              <p className="text-lg font-extrabold leading-tight">{def.title}</p>
+              <p className="text-[10px] font-bold tracking-widest">{subHeading}</p>
+              <p className="text-lg font-extrabold leading-tight">{heading}</p>
             </div>
-            {iconOf(def.id, "h-8 w-8")}
+            {isValue ? (
+              <span className="rounded-full bg-[#d9f27a] px-3 py-1 text-xl font-extrabold text-[#14402c]">
+                {baht(order.price)}
+              </span>
+            ) : isPaper ? (
+              <IconReceipt className="h-8 w-8" />
+            ) : (
+              iconOf(def.id, "h-8 w-8")
+            )}
           </div>
           <div className="px-3 pb-3 pt-3">
             <p className="text-[10px] font-bold tracking-widest text-[#2f8f5b]">
@@ -446,6 +483,11 @@ function TicketPass({ def, order, scanned = false }: { def: TicketDef; order: Or
             <p className="mt-1 text-sm font-semibold">
               {order.name} · {order.phone}
             </p>
+            {def.id === "booth" && (
+              <p className="mt-1 text-xs font-semibold text-neutral-600">
+                {isPaper ? "ไม่มีมูลค่า · ให้เจ้าหน้าที่สแกนเพื่อรับตั๋วกระดาษ" : `มูลค่า ${baht(order.price)} · ใช้เล่นซุ้ม`}
+              </p>
+            )}
             {order.empCode && (
               <p className="mt-1 text-xs font-semibold text-neutral-600">
                 รหัสพนักงาน <span className="font-mono font-bold text-neutral-900">{order.empCode}</span>
@@ -461,6 +503,25 @@ function TicketPass({ def, order, scanned = false }: { def: TicketDef; order: Or
             <p className="text-base font-extrabold tracking-wide">ตั๋วสุ่มรางวัล</p>
             <p className="mt-2 break-all font-mono text-xs font-bold tracking-wider">{order.code}</p>
           </div>
+        ) : scanned || order.used ? (
+          // ตั๋วที่สแกนแล้ว ไม่แสดงบาร์โค้ดอีก (กันยิงซ้ำ) แสดงแค่สถานะ + รหัส
+          <div className="px-5 pb-5 pt-4 text-center">
+            <p className="text-base font-extrabold tracking-wide">{usedWord}</p>
+            <p className="mt-2 break-all font-mono text-xs font-bold tracking-wider">{order.code}</p>
+          </div>
+        ) : tapBarcode ? (
+          // ยังไม่โชว์บาร์โค้ด: แตะอีกครั้งเพื่อเปิดบาร์โค้ดเต็มจอแนวนอน (กันผู้ยิงตั๋วยิงผิดใบ)
+          <button
+            type="button"
+            onClick={() => onBarcode?.(order.code)}
+            aria-label={`แตะเพื่อแสดงบาร์โค้ด ${heading}`}
+            className="block w-full px-5 pb-5 pt-4 text-center transition active:scale-[0.98]"
+          >
+            <p className="text-base font-extrabold tracking-wide">
+              {isPaper ? "แตะเพื่อแสดงบาร์โค้ด (รับตั๋วกระดาษ)" : `แตะเพื่อแสดงบาร์โค้ด (${baht(order.price)})`}
+            </p>
+            <p className="mt-2 break-all font-mono text-xs font-bold tracking-wider">{order.code}</p>
+          </button>
         ) : (
           <div className="px-2 pb-5 pt-4">
             <Barcode code={order.code} />
@@ -471,37 +532,89 @@ function TicketPass({ def, order, scanned = false }: { def: TicketDef; order: Or
     />
   );
 
-  // ตั๋วถูกรางวัล: กรอบสีทองวิบวับ
+  // ตั๋วถูกรางวัล: กรอบสีทอง (โหมดเบา = ทองนิ่ง ไม่มีประกาย/ออร่า)
   const shown = order.won ? (
-    <div className="pd-gold-frame relative rounded-[2rem] p-2">
-      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[2rem]">
-        {SPARKLES.map((s, i) => (
-          <IconSpark key={i} className={`pd-twinkle absolute text-white ${s.size}`} />
-        ))}
+    calm ? (
+      <div className="pd-gold-static relative rounded-[2rem] p-2">
+        <p className="pb-2 text-center text-sm font-extrabold tracking-wide text-[#5a3b00]">
+          ตั๋วใบนี้ถูกรางวัล! ยินดีด้วย
+        </p>
+        {pass}
       </div>
-      <p className="pb-2 text-center text-sm font-extrabold tracking-wide text-[#5a3b00]">
-        ตั๋วใบนี้ถูกรางวัล! ยินดีด้วย
-      </p>
-      {pass}
-    </div>
+    ) : (
+      <div className="pd-gold-frame relative rounded-[2rem] p-2">
+        <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[2rem]">
+          {SPARKLES.map((s, i) => (
+            <IconSpark key={i} className={`pd-twinkle absolute text-white ${s.size}`} />
+          ))}
+        </div>
+        <p className="pb-2 text-center text-sm font-extrabold tracking-wide text-[#5a3b00]">
+          ตั๋วใบนี้ถูกรางวัล! ยินดีด้วย
+        </p>
+        {pass}
+      </div>
+    )
   ) : (
     pass
   );
 
   if (!scanned) return shown;
 
-  // ตั๋วถูกสแกนแล้ว: ตัวตั๋วค่อย ๆ เป็นสีเทา แล้วมีตราประทับ "รับแล้ว" ตกลงมาทับเฉียง ๆ จากนั้นทั้งใบ (ตั๋ว + ตราประทับ) เฟดหายไปเบา ๆ
+  // ตั๋วถูกสแกนแล้ว: ตัวตั๋วเป็นสีเทา + ตราประทับเฉียงทับตั๋วค้างไว้ถาวร พร้อมเวลาที่ใช้
   return (
-    <div className="pd-scan-out relative">
+    <div className="relative">
       <div className="pd-scanned">{shown}</div>
       <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <span className="pd-stamp rounded-2xl border-4 border-red-500 bg-black/40 px-6 py-2 text-4xl font-extrabold tracking-widest text-red-500 shadow-[0_4px_20px_rgba(0,0,0,0.5)]">
-          รับแล้ว
-        </span>
+        <div className="flex flex-col items-center gap-2">
+          <span className="pd-stamp rounded-2xl border-4 border-red-500 bg-black/40 px-6 py-2 text-4xl font-extrabold tracking-widest text-red-500 shadow-[0_4px_20px_rgba(0,0,0,0.5)]">
+            {usedWord}
+          </span>
+          {order.usedAt && (
+            <span className="rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
+              {fmtTime(order.usedAt)}
+            </span>
+          )}
+        </div>
       </div>
       <span role="status" className="sr-only">
-        ตั๋วใบนี้รับแล้ว
+        ตั๋วใบนี้{usedWord}
       </span>
+    </div>
+  );
+});
+
+/* ---------- บาร์โค้ดเต็มจอแนวนอน ----------
+   จอแนวตั้ง: หมุนเนื้อหา 90° ด้วย CSS (ไม่ต้องหมุนจอ) / จอแนวนอน: ไม่หมุน
+   แตะที่ไหนก็ได้เพื่อปิด แสดงทีละใบ กันผู้ยิงตั๋วยิงผิดใบ
+   ตั๋วเล่นซุ้ม (฿50) = พื้นขาว กรอบกรมท่า / ตั๋วรับตั๋วกระดาษ = พื้นครีม กรอบส้มน้ำตาล เพื่อให้ staff แยกออกทันที */
+function BarcodeFullscreen({ order, def, onClose }: { order: Order; def: TicketDef; onClose: () => void }) {
+  const isPaper = def.id === "booth" && order.part === "paper";
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="บาร์โค้ดตั๋ว"
+      onClick={onClose}
+      className={`pd-fade fixed inset-0 z-[60] border-[14px] text-black ${
+        isPaper ? "border-[#b45309] bg-[#fff1c2]" : "border-[#0f1b4d] bg-white"
+      }`}
+    >
+      <div className="pd-land absolute left-1/2 top-1/2 flex flex-col items-center justify-center gap-3 p-6">
+        {isPaper ? (
+          <p className="rounded-full bg-[#b45309] px-6 py-2 text-center text-xl font-extrabold text-white">
+            ตั๋วรับตั๋วกระดาษ · ไม่มีมูลค่า
+          </p>
+        ) : (
+          <p className="rounded-full bg-[#0f1b4d] px-6 py-2 text-center text-xl font-extrabold text-white">
+            ตั๋วเล่นซุ้ม · มูลค่า <span className="text-[#d9f27a]">{baht(order.price)}</span>
+          </p>
+        )}
+        <div className="min-h-0 w-full max-w-4xl flex-1">
+          <Barcode code={order.code} className="block h-full w-full" />
+        </div>
+        <p className="break-all text-center font-mono text-base font-bold tracking-wider">{order.code}</p>
+        <p className="text-xs text-neutral-500">แตะที่ไหนก็ได้เพื่อปิด</p>
+      </div>
     </div>
   );
 }
@@ -1137,14 +1250,13 @@ export default function Home() {
   const [accBusy, setAccBusy] = useState(false);
   const [returnToPay, setReturnToPay] = useState(false); // ถูกส่งมากรอกรหัสพนักงานจากการกดชำระเงิน: บันทึกแล้วกลับไปหน้าชำระเงิน
 
-  // ตั๋วของฉัน
-  const [tab, setTab] = useState<"ready" | "used" | "status">("ready");
+  // ตั๋วของฉัน (แท็บ "ready" = ตั๋วทั้งหมดที่ได้รับ ทั้งที่ยังไม่ใช้และใช้แล้ว / "status" = รายการโอนเงินที่ค้างอยู่)
+  const [tab, setTab] = useState<"ready" | "status">("ready");
   const [sheet, setSheet] = useState<TicketId | null>(null);
   const [sheetClosing, setSheetClosing] = useState(false); // กำลังเล่นแอนิเมชันปิดหน้าต่างแสดงตั๋ว
   const closingRef = useRef(false);
+  const [barcodeCode, setBarcodeCode] = useState<string | null>(null); // รหัสตั๋วที่เปิดบาร์โค้ดเต็มจอแนวนอนอยู่
   const [seenWon, setSeenWon] = useState<string[]>([]); // ตั๋วถูกรางวัลที่ผู้ใช้เห็นแล้ว
-  const [scanned, setScanned] = useState<string[]>([]); // รหัสตั๋วที่เพิ่งถูกสแกนขณะเปิดหน้าต่างแสดงตั๋วอยู่ (ค้างโชว์ตราประทับ "รับแล้ว" ชั่วคราว)
-  const prevSheetRef = useRef<string[]>([]); // รหัสตั๋วที่ยังพร้อมใช้ในหน้าต่างแสดงตั๋วรอบก่อน ไว้เทียบหาใบที่เพิ่งถูกสแกน
 
   const userId = user?.id ?? null;
 
@@ -1180,16 +1292,18 @@ export default function Home() {
     setSeenWon(userId ? load<string[]>(seenKey(userId), []) : []);
   }, [userId]);
 
-  // กด Esc ปิดหน้าต่างแสดงตั๋ว (คอมพิวเตอร์)
+  // กด Esc: ถ้าบาร์โค้ดเต็มจอเปิดอยู่ ปิดบาร์โค้ดก่อน ไม่งั้นปิดหน้าต่างแสดงตั๋ว (คอมพิวเตอร์)
   useEffect(() => {
     if (!sheet) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeSheet();
+      if (e.key !== "Escape") return;
+      if (barcodeCode) setBarcodeCode(null);
+      else closeSheet();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheet]);
+  }, [sheet, barcodeCode]);
 
   // กด Esc ปิด popup ยืนยันการยกเลิกรายการ
   useEffect(() => {
@@ -1205,15 +1319,18 @@ export default function Home() {
   // (ตั๋วถูกออกตอน admin อนุมัติสลีป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง
   //  และสถานะถูกรางวัลก็มาทางนี้ด้วย ปุ่มเมนูสีทองจะขึ้นแม้อยู่หน้าอื่น)
   // ตอนเปิดหน้าต่างแสดงตั๋วอยู่ = ใกล้ถูกเจ้าหน้าที่ยิงที่หน้างาน: โหลดทุก 3 วิ
-  // ตั๋วที่ถูกยิงแล้วจะขึ้นตราประทับ "รับแล้ว" ค้างไว้แล้วเฟดหายไป (SCANNED_SHOW_MS) แล้วย้ายไปแท็บ "ใช้แล้ว" (ขึ้น "รับแล้ว")
+  // ตั๋วที่ถูกยิงแล้วจะเป็นสีเทา + ตราประทับ ("ใช้แล้ว" / "รับแล้ว") ค้างอยู่ในหน้าต่างแสดงตั๋วถาวร
+  // ถ้าข้อมูลไม่เปลี่ยน ไม่ setState (กัน render ซ้ำโดยไม่จำเป็น ลดอาการค้างบนมือถือ)
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
     const loadTickets = async () => {
       const r = await api<{ orders: Order[]; pending?: Payment[] }>("/api/orders");
       if (r.ok && !cancelled) {
-        setOrders(r.data.orders);
-        setPending(r.data.pending ?? []);
+        const nextOrders = r.data.orders;
+        const nextPending = r.data.pending ?? [];
+        setOrders((prev) => (JSON.stringify(prev) === JSON.stringify(nextOrders) ? prev : nextOrders));
+        setPending((prev) => (JSON.stringify(prev) === JSON.stringify(nextPending) ? prev : nextPending));
       }
     };
     if (view === "tickets") loadTickets();
@@ -1234,9 +1351,6 @@ export default function Home() {
   const cartHasLucky = cartLines.some((l) => l.def.id === "lucky");
 
   const readyOrders = orders.filter((o) => !o.used);
-  const usedOrders = orders
-    .filter((o) => o.used)
-    .sort((a, b) => (b.usedAt ?? "").localeCompare(a.usedAt ?? ""));
 
   // มีตั๋วถูกรางวัลที่ผู้ใช้ยังไม่เคยเปิดดู
   const hasNewWin = orders.some((o) => o.won && !seenWon.includes(o.code));
@@ -1252,6 +1366,7 @@ export default function Home() {
   function closeSheet() {
     if (closingRef.current) return;
     closingRef.current = true;
+    setBarcodeCode(null);
     setSheetClosing(true);
     setTimeout(() => {
       setSheet(null);
@@ -1316,6 +1431,7 @@ export default function Home() {
     setAccSaved(false);
     setAccError("");
     setSheet(null);
+    setBarcodeCode(null);
     go("home");
   }
 
@@ -1509,38 +1625,34 @@ export default function Home() {
   const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(EVENT.place)}`;
 
   const sheetDef = sheet ? defOf(sheet) : null;
-  // ตั๋วที่พร้อมใช้ + ตั๋วที่เพิ่งถูกสแกน (ค้างโชว์ตราประทับชั่วคราว) ตั๋วที่ถูกรางวัลขึ้นก่อน
+  // ตั๋วทั้งหมดของประเภทนี้ (ทั้งที่ยังไม่ใช้และใช้แล้ว): ยังไม่ใช้ขึ้นก่อน (ถูกรางวัลก่อน) ตั๋วที่ใช้แล้วอยู่ท้าย ค้างอยู่ในหน้าต่างนี้ถาวร
   const sheetOrders = sheet
     ? orders
-        .filter((o) => o.ticket === sheet && (!o.used || scanned.includes(o.code)))
-        .sort((a, b) => Number(b.won === true) - Number(a.won === true))
+        .filter((o) => o.ticket === sheet)
+        .sort(
+          (a, b) =>
+            Number(a.used === true) - Number(b.used === true) ||
+            Number(b.won === true) - Number(a.won === true),
+        )
     : [];
   const sheetReadyCount = sheetOrders.filter((o) => !o.used).length;
+  // ตั๋วเข้าซุ้ม: แยกกลุ่ม "ตั๋วเล่นซุ้ม (มีมูลค่า)" กับ "ตั๋วรับตั๋วกระดาษ (ไม่มีมูลค่า)" ให้ชัด กดผิดใบยาก
+  const sheetGroups: { key: "value" | "paper" | "all"; list: Order[] }[] =
+    sheetDef?.id === "booth"
+      ? [
+          { key: "value", list: sheetOrders.filter((o) => o.part !== "paper") },
+          { key: "paper", list: sheetOrders.filter((o) => o.part === "paper") },
+        ]
+      : [{ key: "all", list: sheetOrders }];
 
-  // เทียบรอบก่อน: ตั๋วที่หายจาก "พร้อมใช้" เพราะถูกสแกน (used) → ค้างโชว์ตราประทับแล้วเฟดหาย SCANNED_SHOW_MS
-  // ตั๋วในหน้าต่างหมดแล้ว และไม่มีใบที่กำลังโชว์ตราประทับ = ปิดหน้าต่างเอง
+  // ตั๋วที่เปิดบาร์โค้ดเต็มจออยู่
+  const barcodeOrder = barcodeCode ? (orders.find((o) => o.code === barcodeCode) ?? null) : null;
+
+  // ปิดบาร์โค้ดเต็มจออัตโนมัติ: หน้าต่างแสดงตั๋วปิดแล้ว หรือตั๋วใบนั้นถูกสแกนแล้ว (จะขึ้นตราประทับในหน้าต่างแสดงตั๋วแทน)
   useEffect(() => {
-    if (!sheet) {
-      prevSheetRef.current = [];
-      setScanned((prev) => (prev.length ? [] : prev));
-      return;
-    }
-    const readyCodes = orders.filter((o) => o.ticket === sheet && !o.used).map((o) => o.code);
-    const newlyUsed = prevSheetRef.current.filter(
-      (c) => !readyCodes.includes(c) && orders.some((o) => o.code === c && o.used),
-    );
-    prevSheetRef.current = readyCodes;
-
-    if (newlyUsed.length > 0) {
-      setScanned((prev) => Array.from(new Set([...prev, ...newlyUsed])));
-      setTimeout(() => {
-        setScanned((prev) => prev.filter((c) => !newlyUsed.includes(c)));
-      }, SCANNED_SHOW_MS);
-      return;
-    }
-
-    if (readyCodes.length === 0 && scanned.length === 0) setSheet(null);
-  }, [sheet, orders, scanned]);
+    if (!barcodeCode) return;
+    if (!sheet || orders.some((o) => o.code === barcodeCode && o.used)) setBarcodeCode(null);
+  }, [barcodeCode, sheet, orders]);
 
   // ระยะเว้นด้านล่างของหน้า: หน้าซื้อ/ชำระเงินมีแถบสรุปยอดติดขอบล่าง ต้องเว้นที่ให้ทั้งมือถือและคอมพิวเตอร์
   // หน้า auth ซ่อน <main> ไว้ (ฟอร์มวาดนอก <main> ทับเต็มจอ)
@@ -1560,7 +1672,7 @@ export default function Home() {
       style={{ touchAction: "pan-x pan-y" }}
       className={`min-h-screen overflow-x-clip bg-[#141414] text-white [color-scheme:dark] [&_button:disabled]:cursor-not-allowed [&_button:not(:disabled)]:cursor-pointer ${appFont.className}`}
     >
-      {/* แอนิเมชันกรอบทองวิบวับ + ออร่า (ตั๋วที่ถูกรางวัล + ปุ่มเมนู "ตั๋วของฉัน"), พื้นตั๋ววิบวับตามสีตั๋ว (ไม่มีกรอบ ไม่มีออร่า) และเอฟเฟคตั๋วถูกสแกน (สีเทา + ตราประทับ "รับแล้ว" + เฟดหาย) */}
+      {/* แอนิเมชันกรอบทองวิบวับ + ออร่า (ตั๋วที่ถูกรางวัล + ปุ่มเมนู "ตั๋วของฉัน"), พื้นตั๋ววิบวับตามสีตั๋ว (ไม่มีกรอบ ไม่มีออร่า) และเอฟเฟคตั๋วถูกสแกน (สีเทา + ตราประทับค้างถาวร) */}
       <style>{`
         @keyframes pdGold {
           0% { background-position: 0% 50%; }
@@ -1587,10 +1699,6 @@ export default function Home() {
           60% { opacity: 1; transform: rotate(-14deg) scale(0.92); }
           100% { opacity: 1; transform: rotate(-14deg) scale(1); }
         }
-        @keyframes pdFadeOut {
-          from { opacity: 1; transform: translateY(0) scale(1); }
-          to { opacity: 0; transform: translateY(10px) scale(0.97); }
-        }
         @keyframes pdPage { from { opacity: 0; } to { opacity: 1; } }
         @keyframes pdRise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
         @keyframes pdPop { 0% { transform: scale(1); } 40% { transform: scale(1.14); } 100% { transform: scale(1); } }
@@ -1607,6 +1715,21 @@ export default function Home() {
           background: linear-gradient(110deg, #b8860b, #ffe27a, #fff6c9, #ffd54a, #b8860b, #ffe27a, #b8860b);
           background-size: 200% 100%;
           animation: pdGold 2.2s linear infinite, pdGlow 1.5s ease-in-out infinite;
+        }
+        .pd-gold-static {
+          background: linear-gradient(110deg, #b8860b, #ffe27a, #fff6c9, #ffd54a, #b8860b);
+        }
+        .pd-land {
+          width: 100%;
+          height: 100%;
+          transform: translate(-50%, -50%);
+        }
+        @media (orientation: portrait) {
+          .pd-land {
+            width: 100dvh;
+            height: 100dvw;
+            transform: translate(-50%, -50%) rotate(90deg);
+          }
         }
         .pd-shimmer-blue {
           background: linear-gradient(110deg, #0f1b4d 0%, #0f1b4d 32%, #2c45b8 44%, #8aa4ff 50%, #2c45b8 56%, #0f1b4d 68%, #0f1b4d 100%);
@@ -1631,7 +1754,6 @@ export default function Home() {
         .pd-scanned { animation: pdScanGray 0.5s ease-out forwards; }
         .pd-scanned .pd-gold-frame, .pd-scanned .pd-twinkle { animation: none; }
         .pd-stamp { transform: rotate(-14deg); animation: pdStamp 0.5s cubic-bezier(0.2, 0.8, 0.3, 1.2) 0.15s both; }
-        .pd-scan-out { animation: pdFadeOut 1s ease-in 2.2s forwards; }
         .pd-page { animation: pdPage 0.35s ease-out; }
         .pd-rise { animation: pdRise 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards; animation-delay: calc(var(--i, 0) * 70ms); }
         .pd-pop { animation: pdPop 0.28s ease-out; }
@@ -1655,7 +1777,6 @@ export default function Home() {
           .pd-twinkle, .pd-spark { opacity: 1; }
           .pd-scanned { animation: none; filter: grayscale(1) brightness(0.8); opacity: 0.75; }
           .pd-stamp { animation: none; }
-          .pd-scan-out { animation: none; }
         }
       `}</style>
 
@@ -1885,7 +2006,7 @@ export default function Home() {
                 <InfoBox
                   icon={<IconShield className="h-5 w-5" />}
                   title="ตั๋วแต่ละประเภทใช้แทนกันไม่ได้"
-                  text="ตั๋วใช้ได้เฉพาะวันงานที่ระบุเท่านั้น"
+                  text="ตั๋วเข้าซุ้ม 1 ใบ = ตั๋วเล่นซุ้ม 2 ใบ (ใบละ ฿50) + ตั๋วรับตั๋วกระดาษ 1 ใบ ใช้ได้เฉพาะวันงานที่ระบุเท่านั้น"
                 />
               </div>
             </div>
@@ -2072,31 +2193,20 @@ export default function Home() {
         {/* ===== ตั๋วของฉัน ===== */}
         {view === "tickets" && (
           <section aria-label="ตั๋วของฉัน">
-            <header className="flex items-start justify-between">
-              <div>
-                <h1 className="text-3xl font-bold">ตั๋วของฉัน</h1>
-                <p className="mt-1 text-sm text-white/60">ความสนุกรอบนี้ พร้อมแล้ว!</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setTab("used")}
-                aria-label="ดูตั๋วที่ใช้แล้ว"
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-[#1f1f1f] shadow-[0_1px_4px_rgba(20,64,44,0.15)]"
-              >
-                <IconReceipt />
-              </button>
+            <header>
+              <h1 className="text-3xl font-bold">ตั๋วของฉัน</h1>
+              <p className="mt-1 text-sm text-white/60">ความสนุกรอบนี้ พร้อมแล้ว!</p>
             </header>
 
             <div
               role="tablist"
               aria-label="สถานะตั๋ว"
-              className="mt-5 grid grid-cols-3 rounded-full border border-white/10 bg-[#1f1f1f] p-1 md:max-w-lg"
+              className="mt-5 grid grid-cols-2 rounded-full border border-white/10 bg-[#1f1f1f] p-1 md:max-w-md"
             >
               {(
                 [
-                  ["ready", `พร้อมใช้ (${readyOrders.length})`],
+                  ["ready", `ตั๋ว (${orders.length})`],
                   ["status", `สถานะ (${pending.length})`],
-                  ["used", `ใช้แล้ว (${usedOrders.length})`],
                 ] as const
               ).map(([id, label]) => (
                 <button
@@ -2232,9 +2342,9 @@ export default function Home() {
 
             {(user || !ready) && tab === "ready" && (
               <>
-                {!ready || readyOrders.length === 0 ? (
+                {!ready || orders.length === 0 ? (
                   <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
-                    <p className="text-white/60">ยังไม่มีตั๋วที่พร้อมใช้</p>
+                    <p className="text-white/60">ยังไม่มีตั๋ว</p>
                     <button
                       type="button"
                       onClick={() => go("buy")}
@@ -2246,13 +2356,15 @@ export default function Home() {
                 ) : (
                   <div className="mt-5 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
                     {TICKETS.map((t) => {
-                      const count = readyOrders.filter((o) => o.ticket === t.id).length;
-                      if (count === 0) return null;
-                      const wonCount = readyOrders.filter((o) => o.ticket === t.id && o.won).length;
+                      const mine = orders.filter((o) => o.ticket === t.id);
+                      if (mine.length === 0) return null;
+                      const count = mine.filter((o) => !o.used).length; // ใบที่ยังไม่ใช้
+                      const usedCount = mine.length - count; // ใบที่ใช้แล้ว
+                      const wonCount = mine.filter((o) => !o.used && o.won).length;
                       // มีตั๋วถูกรางวัล: กรอบทอง + ออร่า + ประกาย + พื้นการ์ดสีทองวิบวับ / ไม่มี: พื้นวิบวับตามสีตั๋ว (ไม่มีกรอบ ไม่มีออร่า)
                       const goldWin = wonCount > 0;
 
-                      // หน้าตาเหมือนหน้า "ซื้อตั๋ว" แต่ไม่มีราคา: ส่วนล่างเป็นจำนวนใบ + ปุ่มแสดงตั๋ว
+                      // หน้าตาเหมือนหน้า "ซื้อตั๋ว" แต่ไม่มีราคา: ส่วนล่างเป็นจำนวนใบที่เหลือ (+ ใช้แล้วกี่ใบ) + ปุ่มแสดงตั๋ว
                       const card = (
                         <Perforated
                           bg={goldWin ? "pd-gold-card" : t.shimmer}
@@ -2278,10 +2390,15 @@ export default function Home() {
                           }
                           bottom={
                             <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-3">
-                              <p className="text-3xl font-extrabold">
-                                {count}
-                                <span className="text-xs font-medium opacity-70"> ใบ</span>
-                              </p>
+                              <div>
+                                <p className="text-3xl font-extrabold">
+                                  {count}
+                                  <span className="text-xs font-medium opacity-70"> ใบ</span>
+                                </p>
+                                {usedCount > 0 && (
+                                  <p className="text-xs font-semibold opacity-70">ใช้แล้ว {usedCount} ใบ</p>
+                                )}
+                              </div>
                               <div className="flex items-center gap-2">
                                 {wonCount > 0 && (
                                   <span
@@ -2322,48 +2439,9 @@ export default function Home() {
                   <InfoBox
                     icon={<IconInfo className="h-5 w-5" />}
                     title="ใช้ตั๋วง่าย ๆ ที่หน้างาน"
-                    text="เปิดตั๋ว แล้วให้เจ้าหน้าที่สแกนก่อนร่วมสนุก"
+                    text="เปิดตั๋ว แล้วให้เจ้าหน้าที่สแกนก่อนร่วมสนุก ตั๋วที่สแกนแล้วจะเป็นสีเทาและมีตราประทับ"
                   />
                 </div>
-              </>
-            )}
-
-            {user && tab === "used" && (
-              <>
-                {usedOrders.length === 0 ? (
-                  <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
-                    <p className="text-white/60">ยังไม่มีตั๋วที่ใช้แล้ว</p>
-                  </div>
-                ) : (
-                  <ul className="mt-5 flex flex-col gap-3 md:grid md:grid-cols-2 md:gap-4">
-                    {usedOrders.map((o) => {
-                      const d = defOf(o.ticket);
-                      return (
-                        <li key={o.code} className="pd-rise flex items-center gap-3 rounded-2xl bg-[#1f1f1f] p-4 opacity-80">
-                          {d.homeImage ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={d.homeImage} alt={d.title} className="h-12 w-auto shrink-0 object-contain" />
-                          ) : (
-                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#2a2a2a]">
-                              {iconOf(o.ticket, "h-5 w-5")}
-                            </span>
-                          )}
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-bold">{d.title}</p>
-                            <p className="truncate font-mono text-xs text-white/50">{o.code}</p>
-                            {o.won && <p className="text-xs font-bold text-[#ffd54a]">ถูกรางวัล</p>}
-                          </div>
-                          <div className="shrink-0 text-right">
-                            <span className="inline-block rounded-full bg-green-100 px-2.5 py-1 text-xs font-bold text-green-800">
-                              รับแล้ว
-                            </span>
-                            <p className="mt-1 text-xs text-white/50">{fmtTime(o.usedAt)}</p>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
               </>
             )}
           </section>
@@ -2593,7 +2671,7 @@ export default function Home() {
           >
             <div className="flex items-center justify-between">
               <h2 id="sheet-title" className="text-xl font-bold">
-                {sheetDef.title} · {sheetReadyCount} ใบ
+                {sheetDef.title} · เหลือ {sheetReadyCount}/{sheetOrders.length} ใบ
               </h2>
               <button
                 type="button"
@@ -2603,15 +2681,55 @@ export default function Home() {
                 ปิด
               </button>
             </div>
-            <p className="mt-1 text-xs text-white/60">แสดงตั๋วนี้ให้เจ้าหน้าที่สแกนที่หน้างาน</p>
+            <p className="mt-1 text-xs text-white/60">
+              {sheetDef.id === "booth"
+                ? "แตะที่ตั๋วเพื่อแสดงบาร์โค้ดเต็มจอ แล้วให้เจ้าหน้าที่สแกนทีละใบ ตั๋วที่สแกนแล้วจะเป็นสีเทาและมีตราประทับ"
+                : "แสดงตั๋วนี้ให้เจ้าหน้าที่สแกนที่หน้างาน ตั๋วที่สแกนแล้วจะเป็นสีเทาและมีตราประทับ"}
+            </p>
 
-            <div className="mt-4 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
-              {sheetOrders.map((o) => (
-                <TicketPass key={o.code} def={sheetDef} order={o} scanned={o.used === true} />
-              ))}
-            </div>
+            {sheetGroups.map((g) => {
+              if (g.list.length === 0) return null;
+              const left = g.list.filter((o) => !o.used).length;
+              return (
+                <div key={g.key}>
+                  {g.key === "value" && (
+                    <h3 className="mt-5 flex items-center gap-2 text-base font-bold">
+                      <span className="rounded-full bg-[#d9f27a] px-2.5 py-0.5 text-sm font-extrabold text-[#14402c]">
+                        {baht(g.list[0].price)}
+                      </span>
+                      ตั๋วเล่นซุ้ม (มีมูลค่า) · เหลือ {left}/{g.list.length} ใบ
+                    </h3>
+                  )}
+                  {g.key === "paper" && (
+                    <h3 className="mt-6 flex items-center gap-2 text-base font-bold">
+                      <span className="rounded-full bg-[#b45309] px-2.5 py-0.5 text-sm font-extrabold text-white">
+                        ไม่มีมูลค่า
+                      </span>
+                      ตั๋วรับตั๋วกระดาษ · เหลือ {left}/{g.list.length} ใบ
+                    </h3>
+                  )}
+                  <div className="mt-4 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
+                    {g.list.map((o) => (
+                      <TicketPass
+                        key={o.code}
+                        def={sheetDef}
+                        order={o}
+                        scanned={o.used === true}
+                        calm
+                        onBarcode={setBarcodeCode}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
+      )}
+
+      {/* ===== บาร์โค้ดเต็มจอแนวนอน (แตะตั๋วเข้าซุ้มในหน้าต่างแสดงตั๋ว) ===== */}
+      {sheet && barcodeOrder && (
+        <BarcodeFullscreen order={barcodeOrder} def={defOf(barcodeOrder.ticket)} onClose={() => setBarcodeCode(null)} />
       )}
     </div>
   );
