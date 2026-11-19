@@ -49,11 +49,12 @@ type TicketDef = {
   meta?: string; // บรรทัดรายละเอียด (แบบ banner)
   chips?: [string, string]; // ป้ายสถานะ (แบบ compact)
   showLabel: string; // ข้อความปุ่ม "แสดงตั๋ว"
-  card: string; // สีการ์ด/ไอคอน
+  card: string; // สีการ์ด/ไอคอน (ใช้ในตั๋วที่แสดงให้เจ้าหน้าที่สแกน/สรุปรายการ)
   fg: string; // สีตัวหนังสือบนการ์ด
   dash: string; // สีเส้นประ
   button: string; // สีปุ่ม
   soft: string; // สีอ่อนของป้ายสถานะ
+  shimmer: string; // class พื้นตั๋ววิบวับตามสีตั๋ว (หน้าหลัก/หน้าซื้อตั๋ว/หน้าตั๋วของฉัน) ไม่มีกรอบ ไม่มีออร่า
 };
 
 const TICKETS: TicketDef[] = [
@@ -64,8 +65,8 @@ const TICKETS: TicketDef[] = [
     homeNote: "เล่นเกมให้เต็มที่",
     homeImage: "/img/p1.png",
     blurb: "1 ใบ เล่นเกมได้ 1 ซุ้ม เลือกซุ้มได้ทั้งหน้างาน", // TODO: แก้ให้ตรงสิทธิ์จริง
-    // TODO: 10 บาทเพื่อทดสอบ ก่อนขายจริงแก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts (ฝั่งเซิร์ฟเวอร์คิดเงินจากตัวนั้น)
-    price: 10,
+    // ราคา 100 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts (ฝั่งเซิร์ฟเวอร์คิดเงินจากตัวนั้น)
+    price: 100,
     layout: "banner",
     groupNote: "เลือกซุ้มที่ชอบ แล้วไปเล่นกัน!",
     meta: "1 ใบ / 1 ซุ้ม • ใช้ได้เฉพาะวันงาน",
@@ -75,6 +76,7 @@ const TICKETS: TicketDef[] = [
     dash: "border-white/30",
     button: "bg-[#e50914] text-white",
     soft: "bg-[#eef9c8]",
+    shimmer: "pd-shimmer-blue",
   },
   {
     id: "lucky",
@@ -83,8 +85,8 @@ const TICKETS: TicketDef[] = [
     homeNote: "ลุ้นรางวัลสุดเซอร์ไพรส์",
     homeImage: "/img/p2.png",
     blurb: "1 ใบ = 1 สิทธิ์สุ่มของรางวัล ภายในงาน", // TODO: แก้ให้ตรงสิทธิ์จริง
-    // TODO: 10 บาทเพื่อทดสอบ ก่อนขายจริงแก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
-    price: 10,
+    // ราคา 200 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
+    price: 200,
     layout: "compact",
     groupNote: "ลุ้นของรางวัล • 1 สิทธิ์",
     chips: ["รอสุ่มภายในงาน", "ยังไม่ได้ใช้สิทธิ์"],
@@ -94,6 +96,7 @@ const TICKETS: TicketDef[] = [
     dash: "border-white/30",
     button: "bg-[#6b1d24] text-white",
     soft: "bg-[#f3d9dc]",
+    shimmer: "pd-shimmer-red",
   },
 ];
 
@@ -411,6 +414,20 @@ const SPARKLES: { top: string; left: string; size: string; delay: string }[] = [
   { top: "94%", left: "52%", size: "h-3 w-3", delay: "0.2s" },
   { top: "90%", left: "88%", size: "h-4 w-4", delay: "0.9s" },
 ];
+
+/* ---------- กรอบทอง + ออร่า + ประกาย (ตั๋วที่ถูกรางวัล ในหน้า "ตั๋วของฉัน") ---------- */
+function GoldFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="pd-gold-frame relative rounded-[2rem] p-1.5">
+      <div aria-hidden className="pointer-events-none absolute inset-0 z-10 overflow-hidden rounded-[2rem]">
+        {SPARKLES.map((s, i) => (
+          <IconSpark key={i} className={`pd-twinkle absolute text-white ${s.size}`} />
+        ))}
+      </div>
+      {children}
+    </div>
+  );
+}
 
 /* ---------- ตั๋ว 1 ใบ (ใช้ในหน้าซื้อสำเร็จ และตอนแสดงตั๋ว) ----------
    scanned = ตั๋วใบนี้เพิ่งถูกเจ้าหน้าที่สแกนรับแล้ว: ตั๋วเป็นสีเทา + ตราประทับ "รับแล้ว" เฉียงทับตั๋ว แล้วเฟดหายไปอย่างนุ่มนวล */
@@ -988,7 +1005,7 @@ function SlipPay({
                 download={`payday-${pay.ref}.png`}
                 className="mt-3 inline-block rounded-full border border-white/40 px-4 py-2 text-xs font-semibold"
               >
-                บันทึก QR Code  
+                บันทึก QR Code
               </a>
             )}
             <p className="mt-3 text-sm font-bold">
@@ -1545,11 +1562,15 @@ export default function Home() {
       style={{ touchAction: "pan-x pan-y" }}
       className={`min-h-screen overflow-x-clip bg-[#141414] text-white [color-scheme:dark] [&_button:disabled]:cursor-not-allowed [&_button:not(:disabled)]:cursor-pointer ${appFont.className}`}
     >
-      {/* แอนิเมชันกรอบทองวิบวับ (ตั๋วที่ถูกรางวัล + ปุ่มเมนู "ตั๋วของฉัน") และเอฟเฟคตั๋วถูกสแกน (สีเทา + ตราประทับ "รับแล้ว" + เฟดหาย) */}
+      {/* แอนิเมชันกรอบทองวิบวับ + ออร่า (ตั๋วที่ถูกรางวัล + ปุ่มเมนู "ตั๋วของฉัน"), พื้นตั๋ววิบวับตามสีตั๋ว (ไม่มีกรอบ ไม่มีออร่า) และเอฟเฟคตั๋วถูกสแกน (สีเทา + ตราประทับ "รับแล้ว" + เฟดหาย) */}
       <style>{`
         @keyframes pdGold {
           0% { background-position: 0% 50%; }
           100% { background-position: 200% 50%; }
+        }
+        @keyframes pdSheen {
+          0% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
         }
         @keyframes pdGlow {
           0%, 100% { box-shadow: 0 0 16px 2px rgba(255, 200, 40, 0.55), 0 0 36px 6px rgba(255, 170, 0, 0.3); }
@@ -1589,6 +1610,16 @@ export default function Home() {
           background-size: 200% 100%;
           animation: pdGold 2.2s linear infinite, pdGlow 1.5s ease-in-out infinite;
         }
+        .pd-shimmer-blue {
+          background: linear-gradient(110deg, #0f1b4d 0%, #0f1b4d 32%, #2c45b8 44%, #8aa4ff 50%, #2c45b8 56%, #0f1b4d 68%, #0f1b4d 100%);
+          background-size: 300% 100%;
+          animation: pdSheen 3.2s linear infinite;
+        }
+        .pd-shimmer-red {
+          background: linear-gradient(110deg, #6b1d24 0%, #6b1d24 32%, #b83a4b 44%, #ff9fb0 50%, #b83a4b 56%, #6b1d24 68%, #6b1d24 100%);
+          background-size: 300% 100%;
+          animation: pdSheen 3.2s linear infinite;
+        }
         .pd-twinkle { animation: pdTwinkle 1.6s ease-in-out infinite; }
         .pd-spark { animation: pdTwinkle 1.6s ease-in-out infinite; }
         .pd-twinkle:nth-child(1) { top: 2%; left: 6%; width: 1rem; height: 1rem; animation-delay: 0s; }
@@ -1622,7 +1653,7 @@ export default function Home() {
         .pd-dialog { animation: pdDialogIn 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
         @media (prefers-reduced-motion: reduce) {
           .pd-page, .pd-rise, .pd-pop, .pd-bar, .pd-fade, .pd-sheet, .pd-dialog, .pd-sheet-out, .pd-fade-out { animation: none; }
-          .pd-gold-frame, .pd-gold-card, .pd-twinkle, .pd-spark { animation: none; }
+          .pd-gold-frame, .pd-gold-card, .pd-shimmer-blue, .pd-shimmer-red, .pd-twinkle, .pd-spark { animation: none; }
           .pd-twinkle, .pd-spark { opacity: 1; }
           .pd-scanned { animation: none; filter: grayscale(1) brightness(0.8); opacity: 0.75; }
           .pd-stamp { animation: none; }
@@ -1746,7 +1777,7 @@ export default function Home() {
                       <p className="px-1 pb-2 text-lg font-bold text-white md:pb-3 md:text-2xl">{t.title}</p>
                     )}
                     <Perforated
-                      bg={t.card}
+                      bg={t.shimmer}
                       text={t.fg}
                       dash={t.dash}
                       top={
@@ -1762,12 +1793,12 @@ export default function Home() {
                       }
                       bottom={
                         <div className="flex w-full items-end justify-between px-4 pb-4 pt-3 md:px-6 md:pb-6 md:pt-4">
-                          <p className="text-3xl font-extrabold md:text-4xl">
+                          <p className="text-xl font-extrabold md:text-4xl">
                             {baht(t.price)}
                             <span className="text-xs font-medium"> / ใบ</span>
                           </p>
                           <span
-                            className={`flex h-9 w-9 items-center justify-center rounded-full md:h-11 md:w-11 ${
+                            className={`hidden h-9 w-9 items-center justify-center rounded-full md:flex md:h-11 md:w-11 ${
                               t.homeImage ? "bg-white text-black" : "bg-[#e50914] text-white"
                             }`}
                           >
@@ -1806,25 +1837,12 @@ export default function Home() {
 
                 // ส่วนบน: ตั๋วที่มีรูปใช้รูปเดียวกับหน้าหลัก (ชื่อตั๋วอยู่เหนือกรอบ) / ตั๋วอื่นใช้การ์ดข้อความ
                 // ส่วนล่าง (หลังรอยประ): ราคา + ปุ่ม + - แยกจากตัวตั๋วเหมือนกันทุกใบ
+                // กดที่ตัวตั๋วไม่เปิดหน้าแสดงตั๋ว (หน้าแสดงตั๋วอยู่เฉพาะหน้า "ตั๋วของฉัน")
                 return (
-                  <div
-                          key={t.id}
-                          role="button"
-                          tabIndex={0}
-                          aria-label={`แสดงตั๋ว ${t.title}`}
-                          onClick={() => openSheet(t.id)}
-                          onKeyDown={(e) => {
-                            if (e.target !== e.currentTarget) return;
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              openSheet(t.id);
-                            }
-                          }}
-                          className="pd-rise cursor-pointer transition duration-300 active:scale-[0.98]"
-                        >
+                  <div key={t.id} className="pd-rise">
                     {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-white">{t.title}</p>}
                     <Perforated
-                      bg={t.card}
+                      bg={t.shimmer}
                       text={t.fg}
                       dash={t.dash}
                       top={
@@ -2233,65 +2251,69 @@ export default function Home() {
                       const count = readyOrders.filter((o) => o.ticket === t.id).length;
                       if (count === 0) return null;
                       const wonCount = readyOrders.filter((o) => o.ticket === t.id && o.won).length;
-                      // มีตั๋วถูกรางวัล: กรอบการ์ดเป็นสีทองวิบวับตลอด
+                      // มีตั๋วถูกรางวัล: กรอบทอง + ออร่า + ประกาย + พื้นการ์ดสีทองวิบวับ / ไม่มี: พื้นวิบวับตามสีตั๋ว (ไม่มีกรอบ ไม่มีออร่า)
                       const goldWin = wonCount > 0;
 
                       // หน้าตาเหมือนหน้า "ซื้อตั๋ว" แต่ไม่มีราคา: ส่วนล่างเป็นจำนวนใบ + ปุ่มแสดงตั๋ว
+                      const card = (
+                        <Perforated
+                          bg={goldWin ? "pd-gold-card" : t.shimmer}
+                          text={goldWin ? "text-[#5a3b00]" : t.fg}
+                          dash={goldWin ? "border-[#5a3b00]/30" : t.dash}
+                          top={
+                            t.homeImage ? (
+                              <TicketImage src={t.homeImage} alt={t.title} />
+                            ) : (
+                              <div className="p-4">
+                                <div className="flex items-center gap-3">
+                                  <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
+                                    {iconOf(t.id, "h-6 w-6")}
+                                  </span>
+                                  <div>
+                                    <p className="text-lg font-bold leading-tight">{t.title}</p>
+                                    <p className="text-[10px] font-semibold tracking-widest opacity-70">{t.sub}</p>
+                                  </div>
+                                </div>
+                                <p className="mt-4 text-sm opacity-80">{t.groupNote}</p>
+                              </div>
+                            )
+                          }
+                          bottom={
+                            <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-3">
+                              <p className="text-3xl font-extrabold">
+                                {count}
+                                <span className="text-xs font-medium opacity-70"> ใบ</span>
+                              </p>
+                              <div className="flex items-center gap-2">
+                                {wonCount > 0 && (
+                                  <span
+                                    className={`rounded-full px-3 py-1.5 text-xs font-extrabold ${
+                                      goldWin ? "bg-white text-[#5a3b00]" : "pd-gold-frame text-[#5a3b00]"
+                                    }`}
+                                  >
+                                    ถูกรางวัล {wonCount} ใบ
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openSheet(t.id);
+                                  }}
+                                  className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition active:scale-[0.96]"
+                                >
+                                  แสดงตั๋ว
+                                </button>
+                              </div>
+                            </div>
+                          }
+                        />
+                      );
+
                       return (
                         <div key={t.id} className="pd-rise">
                           {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-white">{t.title}</p>}
-                          <Perforated
-                            bg={goldWin ? "pd-gold-card" : t.card}
-                            text={goldWin ? "text-[#5a3b00]" : t.fg}
-                            dash={goldWin ? "border-[#5a3b00]/30" : t.dash}
-                            top={
-                              t.homeImage ? (
-                                <TicketImage src={t.homeImage} alt={t.title} />
-                              ) : (
-                                <div className="p-4">
-                                  <div className="flex items-center gap-3">
-                                    <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
-                                      {iconOf(t.id, "h-6 w-6")}
-                                    </span>
-                                    <div>
-                                      <p className="text-lg font-bold leading-tight">{t.title}</p>
-                                      <p className="text-[10px] font-semibold tracking-widest opacity-70">{t.sub}</p>
-                                    </div>
-                                  </div>
-                                  <p className="mt-4 text-sm opacity-80">{t.groupNote}</p>
-                                </div>
-                              )
-                            }
-                            bottom={
-                              <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-3">
-                                <p className="text-3xl font-extrabold">
-                                  {count}
-                                  <span className="text-xs font-medium opacity-70"> ใบ</span>
-                                </p>
-                                <div className="flex items-center gap-2">
-                                  {wonCount > 0 && (
-                                    <span
-                                      className={`rounded-full px-3 py-1.5 text-xs font-extrabold ${
-                                        goldWin ? "bg-white text-[#5a3b00]" : "pd-gold-frame text-[#5a3b00]"
-                                      }`}
-                                    >
-                                      ถูกรางวัล {wonCount} ใบ
-                                    </span>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      openSheet(t.id);
-                                    }}
-                                    className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition active:scale-[0.96]"
-                                  >
-                                    แสดงตั๋ว
-                                  </button>
-                                </div>
-                              </div>
-                            }
-                          />
+                          {goldWin ? <GoldFrame>{card}</GoldFrame> : card}
                         </div>
                       );
                     })}
