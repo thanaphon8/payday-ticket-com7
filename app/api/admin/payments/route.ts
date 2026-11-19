@@ -5,10 +5,11 @@ import { requireAdmin } from "@/lib/auth";
 import { expireStale, type PaymentTicket } from "@/lib/tickets";
 import type { SlipCheck } from "@/lib/slipOcr";
 
-const LISTABLE = ["reviewing", "approved", "rejected"] as const;
+const LISTABLE = ["reviewing", "approved", "auto", "rejected"] as const;
 
-// รายการสำหรับหน้า admin: ?status=reviewing (ค่าเริ่มต้น) | approved | rejected
-// คืน { counts: { reviewing, approved, rejected }, payments: [...] }
+// รายการสำหรับหน้า admin: ?status=reviewing (ค่าเริ่มต้น) | approved | auto | rejected
+// auto = อนุมัติแล้วโดยระบบอัตโนมัติ (reviewedBy = "auto") ซึ่งยังนับรวมอยู่ใน approved ด้วย
+// คืน { counts: { reviewing, approved, auto, rejected }, payments: [...] }
 // slip.check = ผล OCR เทียบกับรายการ (null = สลีปเก่าที่ยังไม่เคยตรวจ)
 export async function GET(req: Request) {
   const guard = await requireAdmin();
@@ -16,17 +17,19 @@ export async function GET(req: Request) {
 
   const q = new URL(req.url).searchParams.get("status") ?? "reviewing";
   const status = (LISTABLE as readonly string[]).includes(q) ? q : "reviewing";
+  const filter = status === "auto" ? { status: "approved", reviewedBy: "auto" } : { status };
 
   const db = await getDb();
   await expireStale(db);
   const payments = db.collection("payments");
 
-  const [reviewing, approved, rejected, docs] = await Promise.all([
+  const [reviewing, approved, auto, rejected, docs] = await Promise.all([
     payments.countDocuments({ status: "reviewing" }),
     payments.countDocuments({ status: "approved" }),
+    payments.countDocuments({ status: "approved", reviewedBy: "auto" }),
     payments.countDocuments({ status: "rejected" }),
     payments
-      .find({ status })
+      .find(filter)
       // รอตรวจ: เก่าสุดก่อน (ตรวจตามคิว) / ประวัติ: ใหม่สุดก่อน
       .sort(status === "reviewing" ? { slipAt: 1 } : { createdAt: -1 })
       .limit(100)
@@ -47,6 +50,7 @@ export async function GET(req: Request) {
       phone: d.phone as string,
       amount: d.amount as number,
       status: d.status as string,
+      auto: d.status === "approved" && d.reviewedBy === "auto",
       createdAt: d.createdAt as string,
       slipAt: (d.slipAt as string | undefined) ?? null,
       booth: tickets.filter((t) => t.ticket === "booth").length,
@@ -62,5 +66,5 @@ export async function GET(req: Request) {
     };
   });
 
-  return NextResponse.json({ counts: { reviewing, approved, rejected }, payments: list });
+  return NextResponse.json({ counts: { reviewing, approved, auto, rejected }, payments: list });
 }

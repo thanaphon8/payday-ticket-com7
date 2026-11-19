@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { getSessionUser } from "@/lib/auth";
-import { MAX_SLIPS_PER_PAYMENT, expireStale } from "@/lib/tickets";
+import { MAX_SLIPS_PER_PAYMENT, expireStale, fulfillPayment } from "@/lib/tickets";
 import { compressSlip, readSlip } from "@/lib/slip";
 import { checkSlip, ocrSlip } from "@/lib/slipOcr";
 import { uploadSlip } from "@/lib/drive";
@@ -18,6 +18,7 @@ const allowDupSlip = () => process.env.ALLOW_DUP_SLIP === "1";
 // 1) อ่าน QR บนสลีป → ได้ transRef  2) กันสลีปซ้ำด้วย unique index  3) เก็บรูปลง Drive
 // 4) OCR อ่านยอด/ผู้รับ/เวลาโอน เทียบกับรายการ เก็บผลไว้ใน slips.check ให้ admin ดู
 // 5) เปลี่ยนสถานะเป็น reviewing รอ admin อนุมัติ
+// 6) ถ้า check.ok = ผ่านทุกข้อ → อนุมัติอัตโนมัติ + ออกตั๋วทันที (ไม่ผ่านก็ค้างรอ admin ตรวจ)
 // เร็วขึ้น: OCR + บีบรูปเริ่มทำพร้อมกับอ่าน QR เลย (ไม่รอกัน) ส่วนอัปโหลด Drive เริ่มหลังจองเลขสลีปได้แล้ว
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionUser().catch(() => null);
@@ -86,6 +87,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     throw e;
   }
 
+  let autoOk = false;
   try {
     // อัปโหลด Drive กับ OCR (เริ่มไปแล้ว) รอผลพร้อมกัน (ocrSlip ไม่โยน error ถ้าอ่านไม่ได้จะได้ค่าว่าง)
     const [fileId, ocr] = await Promise.all([
@@ -96,6 +98,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       amount: pay.amount as number,
       since: dup ? "1970-01-01T00:00:00.000Z" : (pay.createdAt as string),
     });
+    autoOk = check.ok === true;
     await slips.updateOne({ _id: slipId }, { $set: { fileId, check } });
   } catch (e) {
     console.error("อัปสลีปขึ้น Drive ไม่สำเร็จ:", e);
@@ -111,6 +114,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (upd.modifiedCount === 0) {
     await slips.deleteOne({ _id: slipId });
     return NextResponse.json({ error: "รายการนี้ส่งสลีปไปแล้ว" }, { status: 409 });
+  }
+
+  // ผ่านทุกข้อ → อนุมัติอัตโนมัติ (ทำเหมือนตอน admin กดอนุมัติ) ถ้าพลาดตรงไหนปล่อยค้าง reviewing ให้ admin จัดการต่อ
+  if (autoOk) {
+    try {
+      const r = await payments.updateOne(
+        { _id: paymentId, status: "reviewing" },
+        { $set: { status: "approved", approvedAt: new Date().toISOString(), reviewedBy: "auto" } },
+      );
+      if (r.modifiedCount > 0) {
+        await slips.updateOne({ _id: slipId }, { $set: { status: "approved" } });
+        await fulfillPayment(db, paymentId);
+        return NextResponse.json({ ok: true, status: "approved" });
+      }
+    } catch (e) {
+      console.error("อนุมัติอัตโนมัติไม่สำเร็จ:", e);
+    }
   }
 
   return NextResponse.json({ ok: true, status: "reviewing" });

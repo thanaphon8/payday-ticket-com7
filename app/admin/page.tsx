@@ -5,7 +5,7 @@ import { Prompt } from "next/font/google";
 
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
 
-type ListTab = "reviewing" | "approved" | "rejected";
+type ListTab = "reviewing" | "approved" | "auto" | "rejected";
 type Tab = ListTab | "summary" | "scans";
 type SlipCheck = {
   amount: number | null;
@@ -24,6 +24,7 @@ type Item = {
   phone: string;
   amount: number;
   status: string;
+  auto: boolean;
   createdAt: string;
   slipAt: string | null;
   booth: number;
@@ -180,7 +181,7 @@ export default function AdminPage() {
   const [gate, setGate] = useState<Gate>("loading");
   const [tab, setTab] = useState<Tab>("reviewing");
   const [items, setItems] = useState<Item[]>([]);
-  const [counts, setCounts] = useState<Counts>({ reviewing: 0, approved: 0, rejected: 0 });
+  const [counts, setCounts] = useState<Counts>({ reviewing: 0, approved: 0, auto: 0, rejected: 0 });
   const [summary, setSummary] = useState<Summary | null>(null);
   const [scanData, setScanData] = useState<ScanData | null>(null);
   const [sound, setSound] = useState(true);
@@ -285,7 +286,7 @@ export default function AdminPage() {
     setItems([]);
     setSummary(null);
     setScanData(null);
-    setCounts({ reviewing: 0, approved: 0, rejected: 0 });
+    setCounts({ reviewing: 0, approved: 0, auto: 0, rejected: 0 });
     setDetailId(null);
     setConfirmId(null);
     setRejectId(null);
@@ -369,12 +370,14 @@ export default function AdminPage() {
   const tabs: [Tab, string][] = [
     ["reviewing", "รอตรวจ"],
     ["approved", "อนุมัติแล้ว"],
+    ["auto", "อัตโนมัติ"],
     ["rejected", "ปฏิเสธ"],
     ["summary", "สรุปยอด"],
     ["scans", "สแกนตั๋ว"],
   ];
 
-  const heading = tab === "summary" ? "สรุปยอดขาย" : tab === "scans" ? "ประวัติสแกนตั๋ว" : "ตรวจสลีป";
+  const heading =
+    tab === "summary" ? "สรุปยอดขาย" : tab === "scans" ? "ประวัติสแกนตั๋ว" : tab === "auto" ? "อนุมัติอัตโนมัติ" : "ตรวจสลีป";
 
   return (
     <div className={shell}>
@@ -387,7 +390,9 @@ export default function AdminPage() {
                 ? "ยอดขายนับจากรายการที่อนุมัติแล้วเท่านั้น รายการที่รอตรวจแสดงแยกไว้ต่างหาก"
                 : tab === "scans"
                   ? "ประวัติการยิงบาร์โค้ดตั๋วเข้างานจากหน้า /ticket ว่ายิงให้ใคร เวลาไหน ตั๋ว 1 ใบยิงผ่านได้ครั้งเดียว ครั้งต่อไปจะขึ้นว่าซ้ำ"
-                  : "ระบบอ่านสลีปให้เบื้องต้น ✓ = ตรงกับรายการ / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
+                  : tab === "auto"
+                    ? "รายการที่ระบบอนุมัติให้เองเพราะตรวจสลีปผ่านครบทุกข้อ (ยอดเงิน ผู้รับ วันเวลาโอน เลขอ้างอิง) และออกตั๋วแล้ว รายการเหล่านี้อยู่ในแถบ “อนุมัติแล้ว” ด้วย"
+                    : "ระบบอ่านสลีปให้เบื้องต้น ✓ = ตรงกับรายการ / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
             </p>
           </div>
           <div className="flex shrink-0 gap-2 self-start">
@@ -409,7 +414,7 @@ export default function AdminPage() {
           </div>
         </header>
 
-        <div role="tablist" className="mt-5 grid grid-cols-5 rounded-2xl bg-[#e3ecd6] p-1 sm:mt-6">
+        <div role="tablist" className="mt-5 grid grid-cols-3 gap-1 rounded-2xl bg-[#e3ecd6] p-1 sm:mt-6 sm:grid-cols-6">
           {tabs.map(([id, label]) => (
             <button
               key={id}
@@ -631,6 +636,11 @@ export default function AdminPage() {
                     >
                       <div className="min-w-0 flex-1">
                         <p className="text-2xl font-extrabold sm:text-3xl">{baht(p.amount)}</p>
+                        {p.auto && (
+                          <span className="mt-1 inline-block rounded-full bg-[#d9f27a] px-2.5 py-0.5 text-[11px] font-bold sm:text-xs">
+                            ⚡ อนุมัติอัตโนมัติโดยระบบ
+                          </span>
+                        )}
                         <p className="mt-1 text-sm">
                           Ref1 <span className="break-all font-mono font-bold">{p.ref}</span>
                         </p>
