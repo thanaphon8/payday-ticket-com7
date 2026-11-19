@@ -11,7 +11,6 @@ type ScanResult = { result: ResultKind; code: string; name?: string; phone?: str
 type HistoryRow = { code: string; result: ResultKind; name?: string; at: string };
 
 const COOLDOWN_MS = 4000; // รหัสเดิมยิงซ้ำภายในกี่ ms ให้ข้าม (กันกล้องอ่านซ้ำรัว ๆ)
-const OK_DISMISS_MS = 1800; // ผลสำเร็จปิดเองกี่ ms (ผลไม่สำเร็จต้องกดปิดเอง)
 
 const META: Record<ResultKind, { title: string; sub: string; bg: string }> = {
   ok: { title: "ผ่าน", sub: "ตัดตั๋วแล้ว", bg: "bg-green-600" },
@@ -82,6 +81,7 @@ export default function TicketScanPage() {
     setResult(r);
   }, []);
 
+  // กดยืนยัน/สแกนต่อ: ปิดหน้าผล แล้วยิงตั๋วใบต่อไปได้
   const dismiss = useCallback(() => {
     lastRef.current.at = Date.now(); // เริ่มนับ cooldown ใหม่จากตอนปิด
     showResult(null);
@@ -131,13 +131,6 @@ export default function TicketScanPage() {
     [showResult],
   );
   scanRef.current = submit;
-
-  // ผลสำเร็จปิดเอง ส่วนผลไม่สำเร็จรอให้เจ้าหน้าที่กดปิด
-  useEffect(() => {
-    if (result?.result !== "ok") return;
-    const t = setTimeout(dismiss, OK_DISMISS_MS);
-    return () => clearTimeout(t);
-  }, [result, dismiss]);
 
   // เปิดกล้องหลังปลดล็อก (และเมื่อกดปุ่มเปิดกล้อง): อ่านเฉพาะ Code128
   // ปิดกล้อง = หยุดสตรีมและปล่อยกล้องคืนเครื่องจริง ๆ
@@ -233,7 +226,7 @@ export default function TicketScanPage() {
     return (
       <div className={shell}>
         <main className="mx-auto max-w-md px-5 py-16 text-center">
-          <h1 className="text-2xl font-bold">สแกนตั๋วเข้างาน</h1>
+          <h1 className="text-2xl font-bold">สแกนรับตั๋ว</h1>
           {gate === "loading" ? (
             <p className="mt-3 text-sm text-white/60">กำลังโหลด...</p>
           ) : (
@@ -277,7 +270,7 @@ export default function TicketScanPage() {
       <main className="mx-auto w-full max-w-md px-4 pb-10 pt-5 md:max-w-2xl">
         <header className="flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold">สแกนตั๋วเข้างาน</h1>
+            <h1 className="text-2xl font-bold">สแกนรับตั๋ว</h1>
             <p className="mt-0.5 text-xs text-white/60">ผ่านแล้วรอบนี้ {okCount} ใบ</p>
           </div>
           <button
@@ -391,9 +384,16 @@ export default function TicketScanPage() {
           role="alertdialog"
           aria-modal="true"
           aria-live="assertive"
-          onClick={dismiss}
           className={`fixed inset-0 z-50 flex flex-col items-center justify-center px-6 text-center text-white ${meta.bg}`}
         >
+          {result.result === "ok" && (
+            <div
+              aria-hidden="true"
+              className="mb-6 flex h-28 w-28 items-center justify-center rounded-full bg-white text-7xl font-extrabold leading-none text-green-600 shadow-lg md:h-32 md:w-32 md:text-8xl"
+            >
+              ✓
+            </div>
+          )}
           <p className="text-5xl font-extrabold md:text-6xl">{meta.title}</p>
           <p className="mt-2 text-lg font-semibold">{meta.sub}</p>
           {result.name && (
@@ -409,9 +409,10 @@ export default function TicketScanPage() {
           <button
             type="button"
             onClick={dismiss}
-            className="mt-8 min-h-12 rounded-full bg-white px-8 py-3 text-base font-bold text-black"
+            autoFocus
+            className="mt-8 min-h-14 w-full max-w-xs rounded-full bg-white px-8 py-3 text-lg font-bold text-black"
           >
-            สแกนต่อ
+            {result.result === "ok" ? "ยืนยัน" : "สแกนต่อ"}
           </button>
         </div>
       )}
