@@ -98,7 +98,6 @@ export default function SpinPage() {
   const [quake, setQuake] = useState(false);
   const [zoom, setZoom] = useState(false); // ซูมเข้าหาตัวเลขตอนสุ่ม
   const [zoomT, setZoomT] = useState({ x: 0, y: 0, ox: 50, oy: 36 }); // ตำแหน่งเลื่อนตัวเลขเข้ากลางจอ + จุดซูม
-  const [zoomFree, setZoomFree] = useState(false); // ปล่อย overflow ระหว่างซูม (ไม่ให้ตู้ถูกตัดขอบ)
   const fxRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -291,7 +290,6 @@ export default function SpinPage() {
     setSpinning(false);
     // ผลออกแล้ว: ค่อย ๆ ซูมกลับเป็นปกติอย่างนุ่มนวล
     timersRef.current.push(setTimeout(() => setZoom(false), 900));
-    timersRef.current.push(setTimeout(() => setZoomFree(false), 2200));
     setWinner(w);
     setPool((p) => p.filter((t) => t.code !== w.code)); // ตัดตั๋วที่ถูกออกจากโหล
     setTotal(remaining);
@@ -329,7 +327,6 @@ export default function SpinPage() {
         oy: ((cy - b.top) / b.height) * 100,
       });
     }
-    setZoomFree(true);
     setZoom(true);
     setStopped(Array(EMP_LEN).fill(false));
 
@@ -343,7 +340,6 @@ export default function SpinPage() {
       seqRef.current += 1;
       setSpinning(false);
       setZoom(false);
-      setZoomFree(false);
       setDigits(Array(EMP_LEN).fill("-"));
       setNote(data.error ?? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
       if (res?.status === 401 || res?.status === 403) setGate("locked");
@@ -481,6 +477,10 @@ export default function SpinPage() {
           0%, 100% { box-shadow: 0 0 18px 2px rgba(255, 200, 40, 0.55), 0 0 40px 6px rgba(255, 170, 0, 0.3); }
           50% { box-shadow: 0 0 30px 6px rgba(255, 225, 90, 0.95), 0 0 70px 14px rgba(255, 190, 0, 0.55); }
         }
+        @keyframes pdSlideUp {
+          0% { transform: translateY(140%); opacity: 0; }
+          100% { transform: translateY(0); opacity: 1; }
+        }
         @keyframes pdLive {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.25; }
@@ -498,7 +498,7 @@ export default function SpinPage() {
           50% { filter: brightness(1.3); }
         }
 
-        .pd-room { background-color: #10131c; }
+        .pd-room { background-color: #10131c; --pd-side: #172848; }
 
         /* ===== พื้นหลังเบลอ: ไฟร้านอาหารด้านหลัง (อยู่หลังทุกส่วน คลิกทะลุได้) ===== */
         .pd-bokeh {
@@ -532,23 +532,23 @@ export default function SpinPage() {
           background: #ffc83d;
           box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.5), inset 0 -3px 0 rgba(178, 125, 0, 0.55), 0 6px 0 #b27d00;
         }
-        /* หัวตู้: ทองนูน + ความหนาด้านข้างซ้าย (หนาขึ้น ให้ตู้ดูเอียงแบบ 3 มิติ) */
+        /* หัวตู้: ทองนูน + ความหนาด้านข้างซ้าย (สีเดียวกันทั้งหมด ผ่านตัวแปร --pd-side) */
         .pd-crown {
           box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.5), inset 0 -3px 0 rgba(178, 125, 0, 0.55), 0 6px 0 #b27d00,
-            -4px 10px 0 #1e3358, -8px 14px 0 #1e3358, -12px 18px 0 #1e3358, -16px 22px 0 #1e3358, -20px 26px 0 #1e3358,
-            -24px 30px 0 #172848, -28px 34px 0 #172848, -32px 38px 0 #172848, -36px 42px 0 #172848, -40px 46px 0 #172848,
-            -44px 50px 0 #0f1c36, -48px 54px 0 #0f1c36, -52px 58px 0 #0f1c36, -56px 62px 0 #0f1c36, -60px 66px 0 #0f1c36,
-            -64px 70px 0 #0f1c36;
+            -4px 10px 0 var(--pd-side), -8px 14px 0 var(--pd-side), -12px 18px 0 var(--pd-side), -16px 22px 0 var(--pd-side),
+            -20px 26px 0 var(--pd-side), -24px 30px 0 var(--pd-side), -28px 34px 0 var(--pd-side), -32px 38px 0 var(--pd-side),
+            -36px 42px 0 var(--pd-side), -40px 46px 0 var(--pd-side), -44px 50px 0 var(--pd-side), -48px 54px 0 var(--pd-side),
+            -52px 58px 0 var(--pd-side), -56px 62px 0 var(--pd-side), -60px 66px 0 var(--pd-side), -64px 70px 0 var(--pd-side);
         }
-        /* ตัวตู้สีแดง นูน + ความหนาด้านข้างซ้ายสีกรมท่า (หนาขึ้น) */
+        /* ตัวตู้สีแดง นูน + ความหนาด้านข้างซ้าย (สีเดียวกันทั้งหมด) */
         .pd-body {
           background: #e0243c;
           border: 4px solid #8f0f1a;
           box-shadow: inset 0 6px 0 rgba(255, 255, 255, 0.2), inset 0 -12px 0 rgba(0, 0, 0, 0.22), 0 8px 0 #8f0f1a,
-            -4px 12px 0 #1e3358, -8px 16px 0 #1e3358, -12px 20px 0 #1e3358, -16px 24px 0 #1e3358, -20px 28px 0 #1e3358,
-            -24px 32px 0 #172848, -28px 36px 0 #172848, -32px 40px 0 #172848, -36px 44px 0 #172848, -40px 48px 0 #172848,
-            -44px 52px 0 #0f1c36, -48px 56px 0 #0f1c36, -52px 60px 0 #0f1c36, -56px 64px 0 #0f1c36, -60px 68px 0 #0f1c36,
-            -64px 72px 0 #0f1c36;
+            -4px 12px 0 var(--pd-side), -8px 16px 0 var(--pd-side), -12px 20px 0 var(--pd-side), -16px 24px 0 var(--pd-side),
+            -20px 28px 0 var(--pd-side), -24px 32px 0 var(--pd-side), -28px 36px 0 var(--pd-side), -32px 40px 0 var(--pd-side),
+            -36px 44px 0 var(--pd-side), -40px 48px 0 var(--pd-side), -44px 52px 0 var(--pd-side), -48px 56px 0 var(--pd-side),
+            -52px 60px 0 var(--pd-side), -56px 64px 0 var(--pd-side), -60px 68px 0 var(--pd-side), -64px 72px 0 var(--pd-side);
         }
         /* เลขในวงล้อ: กล่องนูนเหมือนปุ่ม */
         .pd-reel {
@@ -843,13 +843,14 @@ export default function SpinPage() {
           background: #1b0509;
           box-shadow: inset 0 4px 0 rgba(0, 0, 0, 0.6);
         }
-        /* ฐานตู้ (หนาขึ้น) */
+        /* ฐานตู้ (สีเดียวกันทั้งหมด) */
         .pd-foot {
           background: #8f0f1a;
-          box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.2), 0 6px 0 #4f060d, -4px 10px 0 #1e3358, -8px 14px 0 #1e3358,
-            -12px 18px 0 #1e3358, -16px 22px 0 #1e3358, -20px 26px 0 #1e3358, -24px 30px 0 #172848, -28px 34px 0 #172848,
-            -32px 38px 0 #172848, -36px 42px 0 #172848, -40px 46px 0 #172848, -44px 50px 0 #0f1c36, -48px 54px 0 #0f1c36,
-            -52px 58px 0 #0f1c36, -56px 62px 0 #0f1c36, -60px 66px 0 #0f1c36, -64px 70px 0 #0f1c36;
+          box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.2), 0 6px 0 #4f060d, -4px 10px 0 var(--pd-side),
+            -8px 14px 0 var(--pd-side), -12px 18px 0 var(--pd-side), -16px 22px 0 var(--pd-side), -20px 26px 0 var(--pd-side),
+            -24px 30px 0 var(--pd-side), -28px 34px 0 var(--pd-side), -32px 38px 0 var(--pd-side), -36px 42px 0 var(--pd-side),
+            -40px 46px 0 var(--pd-side), -44px 50px 0 var(--pd-side), -48px 54px 0 var(--pd-side), -52px 58px 0 var(--pd-side),
+            -56px 62px 0 var(--pd-side), -60px 66px 0 var(--pd-side), -64px 70px 0 var(--pd-side);
         }
 
         @keyframes pdWash {
@@ -907,7 +908,8 @@ export default function SpinPage() {
         .pd-gold-frame {
           background: linear-gradient(110deg, #b8860b, #ffe27a, #fff6c9, #ffd54a, #b8860b, #ffe27a, #b8860b);
           background-size: 200% 100%;
-          animation: pdGold 2.2s linear infinite, pdGlow 1.4s ease-in-out infinite;
+          animation: pdGold 2.2s linear infinite, pdGlow 1.4s ease-in-out infinite,
+            pdSlideUp 0.8s cubic-bezier(0.22, 0.9, 0.3, 1) both;
         }
         @media (prefers-reduced-motion: reduce) {
           .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-wash::after, .pd-quake, .pd-bokeh-dot { animation: none; }
@@ -955,12 +957,8 @@ export default function SpinPage() {
         )}
 
         <div className="mt-3 grid flex-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] lg:gap-6">
-          {/* ===== คอลัมน์ซ้าย: ตู้ slot ทรงสูง + คันโยกข้าง ===== */}
-          <div
-            className={`pd-noscroll flex min-w-0 flex-col pb-10 pl-16 pt-10 sm:pl-16 lg:min-h-0 lg:pb-16 lg:pl-28 lg:pr-2 lg:pt-20 ${
-              zoomFree ? "relative z-20 lg:overflow-visible" : "lg:overflow-y-auto"
-            }`}
-          >
+          {/* ===== คอลัมน์ซ้าย: ตู้ slot ทรงสูง + คันโยกข้าง (ไม่เลื่อน) ===== */}
+          <div className="pd-noscroll relative z-20 flex min-w-0 flex-col pb-10 pl-16 pt-10 sm:pl-16 lg:min-h-0 lg:overflow-visible lg:pb-16 lg:pl-28 lg:pr-2 lg:pt-20">
             <div
               ref={rowRef}
               className="mx-auto flex w-full max-w-[58rem] items-center justify-center md:pr-1"
@@ -1280,7 +1278,7 @@ export default function SpinPage() {
         </div>
       </main>
 
-      {/* ===== ผู้ถูกรางวัล (การ์ดลอยเหนือหน้า) ===== */}
+      {/* ===== ผู้ถูกรางวัล (การ์ดลอยเหนือหน้า เลื่อนขึ้นจากด้านล่าง) ===== */}
       {winner && !spinning && (
         <section
           aria-label="ผู้ถูกรางวัล"
