@@ -9,6 +9,7 @@ const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600
 const EMP_LEN = 7;
 const SHOW_MAX = 60; // จำนวนตั๋วสูงสุดที่วาดหล่นในโหล (ตัวเลข "เหลือ ... ใบ" นับจริงทั้งหมด)
 const FIRST_STOP_MS = 3000; // ตัวเลขสปินกี่ ms (นับจากกดเริ่ม) ก่อนหยุดหลักแรก
+const ZOOM_CENTER_Y = 0.6; // ตอนซูม ตัวเลขอยู่สูงจากบนจอกี่ส่วน (0.5 = กลางจอ / มากกว่า = ตัวตู้ต่ำลง)
 const STEP_MS = 2000; // ระยะห่างระหว่างการหยุดแต่ละหลัก (รอ 2 วิก่อนแสดงเลขถัดไป)
 const POLL_MS = 3000; // รีเฟรชโหลสด: ตั๋วที่ admin เพิ่งอนุมัติจะหล่นเข้าโหลเอง
 const BULBS = 22; // จำนวนหลอดไฟประดับตู้
@@ -52,7 +53,14 @@ const BOKEH = [
 ];
 
 type PoolTicket = { code: string; empCode: string };
-type Winner = { code: string; empCode: string; name: string; wonAt: string | null };
+type Winner = {
+  code: string;
+  empCode: string;
+  name: string;
+  wonAt: string | null;
+  company: string | null; // บริษัทที่เลือกตอนสมัคร (บัญชีเก่า = null)
+  department: string | null; // แผนก (สำนักงานใหญ่) หรือสาขา (หน้าร้าน)
+};
 // เข้าด้วยรหัสผ่าน admin อย่างเดียว (ไม่ต้อง login บัญชีผู้ใช้) ใช้ cookie ปลดล็อกเดียวกับหน้า /admin
 type Gate = "loading" | "ok" | "locked";
 
@@ -94,6 +102,10 @@ export default function SpinPage() {
   const [spinning, setSpinning] = useState(false);
   const [winner, setWinner] = useState<Winner | null>(null);
   const [goldFlash, setGoldFlash] = useState(false);
+  const [hiddenCode, setHiddenCode] = useState<string | null>(null); // แถวผู้ถูกรางวัลที่ซ่อนไว้ รอการ์ดลอยมาถึง
+  const [popCode, setPopCode] = useState<string | null>(null); // แถวที่เพิ่งโผล่ (เด้งเข้ารายชื่อ)
+  const [shake, setShake] = useState(false); // จอสั่นตอนผลออก
+  const [winnerClosing, setWinnerClosing] = useState(false); // กำลังเล่นแอนิเมชันเลื่อนการ์ดผู้ถูกรางวัลลง
   const [hammer, setHammer] = useState(false);
   const [quake, setQuake] = useState(false);
   const [zoom, setZoom] = useState(false); // ซูมเข้าหาตัวเลขตอนสุ่ม
@@ -105,6 +117,11 @@ export default function SpinPage() {
   const winRef = useRef<HTMLDivElement>(null); // หน้าต่างตัวเลข
   const rowRef = useRef<HTMLDivElement>(null); // กล่องตู้ทั้งตัว (ใช้คำนวณซูม)
   const fwRaf = useRef(0);
+  const winnerCardRef = useRef<HTMLElement>(null); // การ์ดทองลอยประกาศผู้ถูกรางวัล
+  const winnerListRef = useRef<HTMLElement>(null); // กล่องรายชื่อผู้ถูกรางวัล (จุดที่การ์ดลอยเข้าไป)
+  const confettiRef = useRef<HTMLCanvasElement>(null); // แคนวาสกระดาษทอง (แยกจากพลุ จะได้ไม่มีรอยหาง)
+  const cfRaf = useRef(0);
+  const fwActive = useRef(false); // true = พลุยิงต่อเรื่อย ๆ จนกว่าจะปิดการ์ดผู้ถูกรางวัล
 
   // รีเฟรชสด: ไม่เขียนทับตอนกำลังสุ่ม และทิ้งผลที่ขอไว้ก่อนเริ่ม/จบการสุ่ม (กันตั๋วที่ถูกตัดแล้วกลับมาในโหล)
   const spinningRef = useRef(false);
@@ -168,7 +185,9 @@ export default function SpinPage() {
     return () => {
       timers.current.forEach(clearTimeout);
       fx.current.forEach(clearTimeout);
+      fwActive.current = false;
       cancelAnimationFrame(fwRaf.current);
+      cancelAnimationFrame(cfRaf.current);
     };
   }, []);
 
@@ -218,6 +237,7 @@ export default function SpinPage() {
     const ctx = cv.getContext("2d");
     if (!ctx) return;
     cancelAnimationFrame(fwRaf.current);
+    fwActive.current = true;
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const W = window.innerWidth;
@@ -229,7 +249,6 @@ export default function SpinPage() {
     type P = { x: number; y: number; vx: number; vy: number; life: number; color: string };
     const ps: P[] = [];
     const colors = ["#ffd54a", "#ff4d4d", "#4dd2ff", "#7dff6b", "#ff7ad9", "#ffffff", "#ffb300"];
-    const end = performance.now() + 6000;
     let nextBurst = 0;
 
     const burst = () => {
@@ -251,7 +270,7 @@ export default function SpinPage() {
       ctx.fillRect(0, 0, W, H);
       ctx.globalCompositeOperation = "lighter";
 
-      if (t < end && t >= nextBurst) {
+      if (fwActive.current && t >= nextBurst) {
         burst();
         nextBurst = t + 280 + Math.random() * 350;
       }
@@ -274,13 +293,85 @@ export default function SpinPage() {
       }
       ctx.globalAlpha = 1;
 
-      if (t < end || ps.length > 0) fwRaf.current = requestAnimationFrame(frame);
+      if (fwActive.current || ps.length > 0) fwRaf.current = requestAnimationFrame(frame);
       else {
         ctx.globalCompositeOperation = "source-over";
         ctx.clearRect(0, 0, W, H);
       }
     };
     fwRaf.current = requestAnimationFrame(frame);
+  }, []);
+
+  /* ---------- พลุกระดาษสีทอง ---------- */
+  // ยิงจากมุมล่างซ้าย/ขวา + กลางจอ แล้วโปรยจากด้านบนต่อเรื่อย ๆ จนกว่าจะปิดการ์ดผู้ถูกรางวัล (fwActive = false)
+  const confetti = useCallback(() => {
+    const cv = confettiRef.current;
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    cancelAnimationFrame(cfRaf.current);
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    cv.width = W * dpr;
+    cv.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    type C = { x: number; y: number; vx: number; vy: number; w: number; h: number; rot: number; vr: number; ph: number; color: string };
+    const ps: C[] = [];
+    const colors = ["#ffd54a", "#ffc83d", "#ffe27a", "#fff3b0", "#e0a010", "#b8860b", "#fff6c9"];
+    const spawn = (x: number, y: number, vx: number, vy: number) =>
+      ps.push({
+        x,
+        y,
+        vx,
+        vy,
+        w: 6 + Math.random() * 8,
+        h: 10 + Math.random() * 10,
+        rot: Math.random() * Math.PI * 2,
+        vr: (Math.random() - 0.5) * 0.35,
+        ph: Math.random() * Math.PI * 2,
+        color: colors[Math.floor(Math.random() * colors.length)],
+      });
+
+    for (let i = 0; i < 90; i++) {
+      spawn(W * 0.02, H * 0.95, 6 + Math.random() * 9, -(12 + Math.random() * 12));
+      spawn(W * 0.98, H * 0.95, -(6 + Math.random() * 9), -(12 + Math.random() * 12));
+    }
+    for (let i = 0; i < 60; i++) spawn(W * 0.5, H * 0.3, (Math.random() - 0.5) * 16, -(4 + Math.random() * 10));
+
+    let nextRain = 0;
+    const frame = (t: number) => {
+      ctx.clearRect(0, 0, W, H);
+      if (fwActive.current && t >= nextRain) {
+        for (let k = 0; k < 4; k++) spawn(Math.random() * W, -20, (Math.random() - 0.5) * 2, 1 + Math.random() * 2);
+        nextRain = t + 60;
+      }
+      for (let i = ps.length - 1; i >= 0; i--) {
+        const c = ps[i];
+        c.vx *= 0.992;
+        c.vy = Math.min(c.vy + 0.22, 5);
+        c.x += c.vx + Math.sin(c.ph) * 0.6;
+        c.y += c.vy;
+        c.rot += c.vr;
+        c.ph += 0.08;
+        if (c.y > H + 30) {
+          ps.splice(i, 1);
+          continue;
+        }
+        ctx.save();
+        ctx.translate(c.x, c.y);
+        ctx.rotate(c.rot);
+        ctx.scale(1, Math.cos(c.ph * 1.3)); // พลิกวูบวาบเหมือนกระดาษ
+        ctx.fillStyle = c.color;
+        ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+        ctx.restore();
+      }
+      if (fwActive.current || ps.length > 0) cfRaf.current = requestAnimationFrame(frame);
+      else ctx.clearRect(0, 0, W, H);
+    };
+    cfRaf.current = requestAnimationFrame(frame);
   }, []);
 
   /* ---------- สุ่ม ---------- */
@@ -291,19 +382,64 @@ export default function SpinPage() {
     // ผลออกแล้ว: ค่อย ๆ ซูมกลับเป็นปกติอย่างนุ่มนวล
     timersRef.current.push(setTimeout(() => setZoom(false), 900));
     setWinner(w);
+    setHiddenCode(w.code); // ซ่อนแถวไว้ก่อน จนกว่าการ์ดจะลอยมาถึงรายชื่อ
+    setPopCode(null);
     setPool((p) => p.filter((t) => t.code !== w.code)); // ตัดตั๋วที่ถูกออกจากโหล
     setTotal(remaining);
     setWinners((ws) => [w, ...ws]);
-    fireworks();
+    setWinnerClosing(false);
+    fireworks(); // พลุ + หน้าจอทองค้างอยู่จนกว่าจะกดปิดการ์ด (closeWinner)
+    confetti(); // กระดาษสีทอง
+    setShake(true); // ผลออกปุ๊บ จอสั่น
+    timersRef.current.push(setTimeout(() => setShake(false), 1300));
     setGoldFlash(true);
-    timersRef.current.push(setTimeout(() => setGoldFlash(false), 6500));
+  }
+
+  // ปิดการ์ดผู้ถูกรางวัล: หยุดยิงพลุ แล้วการ์ดลอยเข้าไปที่รายชื่อผู้ถูกรางวัล (เด้งเล็กน้อย) พร้อมจางหน้าจอทอง
+  function closeWinner() {
+    if (winnerClosing || !winner) return;
+    fwActive.current = false;
+    const code = winner.code;
+    const card = winnerCardRef.current;
+    const list = winnerListRef.current;
+    if (card && list) {
+      // วัดตำแหน่งการ์ดกับกล่องรายชื่อ แล้วส่งระยะ/ขนาดปลายทางให้แอนิเมชัน pdCardFly ผ่านตัวแปร CSS
+      const c = card.getBoundingClientRect();
+      const l = list.getBoundingClientRect();
+      const tx = l.left + l.width / 2;
+      const ty = l.top + Math.min(70, l.height / 2);
+      const fs = Math.min(0.5, Math.max(0.15, (l.width * 0.7) / c.width));
+      card.style.setProperty("--fx", `${tx - (c.left + c.width / 2)}px`);
+      card.style.setProperty("--fy", `${ty - (c.top + c.height / 2)}px`);
+      card.style.setProperty("--fs", String(fs));
+    }
+    setWinnerClosing(true);
+    timersRef.current.push(
+      // การ์ดลอยมาถึง: แถวของผู้ถูกรางวัลเด้งขึ้นในรายชื่อ
+      setTimeout(() => {
+        setHiddenCode(null);
+        setPopCode(code);
+      }, 640),
+      setTimeout(() => {
+        setWinner(null);
+        setGoldFlash(false);
+        setWinnerClosing(false);
+      }, 950),
+    );
   }
 
   async function spin() {
     if (spinning || total === 0) return;
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
+    fwActive.current = false;
+    setWinnerClosing(false);
+    setHiddenCode(null);
+    setPopCode(null);
+    setShake(false);
     cancelAnimationFrame(fwRaf.current);
+    cancelAnimationFrame(cfRaf.current);
+    confettiRef.current?.getContext("2d")?.clearRect(0, 0, confettiRef.current.width, confettiRef.current.height);
     canvasRef.current?.getContext("2d")?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
     setNote("");
@@ -322,7 +458,7 @@ export default function SpinPage() {
       const cy = a.top + a.height / 2;
       setZoomT({
         x: window.innerWidth / 2 - cx,
-        y: window.innerHeight / 2 - cy,
+        y: window.innerHeight * ZOOM_CENTER_Y - cy,
         ox: ((cx - b.left) / b.width) * 100,
         oy: ((cy - b.top) / b.height) * 100,
       });
@@ -810,6 +946,7 @@ export default function SpinPage() {
           animation: pdShard 0.8s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
         }
         .pd-quake { animation: pdQuake 0.85s ease-out 1; }
+        .pd-quake-win { animation: pdQuake 1.2s ease-out 1; }
         .pd-key { box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.5), 0 3px 0 rgba(0, 0, 0, 0.45); }
         /* แผ่นแสดงจำนวนตั๋ว */
         .pd-count-plate {
@@ -855,9 +992,25 @@ export default function SpinPage() {
 
         @keyframes pdWash {
           0% { opacity: 0; }
-          10% { opacity: 1; }
-          75% { opacity: 1; }
+          100% { opacity: 1; }
+        }
+        @keyframes pdWashOut {
+          0% { opacity: 1; }
           100% { opacity: 0; }
+        }
+        /* การ์ดลอยเข้ารายชื่อ: เด้งขึ้นเล็กน้อย → ลอยไปถึงรายชื่อ → เด้งกลับนิดนึง → จางหาย */
+        @keyframes pdCardFly {
+          0% { transform: translate(0, 0) scale(1); opacity: 1; }
+          14% { transform: translate(0, -14px) scale(1.06); opacity: 1; }
+          68% { transform: translate(var(--fx), var(--fy)) scale(var(--fs)); opacity: 1; }
+          80% { transform: translate(var(--fx), calc(var(--fy) - 12px)) scale(calc(var(--fs) * 1.1)); opacity: 1; }
+          100% { transform: translate(var(--fx), var(--fy)) scale(var(--fs)); opacity: 0; }
+        }
+        @keyframes pdRowPop {
+          0% { transform: scale(0.6); opacity: 0; }
+          55% { transform: scale(1.08); opacity: 1; }
+          80% { transform: scale(0.97); }
+          100% { transform: scale(1); opacity: 1; }
         }
         @keyframes pdTwinkle {
           from { opacity: 0.1; }
@@ -870,7 +1023,7 @@ export default function SpinPage() {
           pointer-events: none;
           background: linear-gradient(115deg, rgba(255, 196, 40, 0.5), rgba(255, 244, 170, 0.7), rgba(255, 190, 30, 0.5), rgba(255, 236, 150, 0.7), rgba(255, 196, 40, 0.5));
           background-size: 300% 100%;
-          animation: pdGold 2.2s linear infinite, pdWash 6.5s ease-out forwards;
+          animation: pdGold 2.2s linear infinite, pdWash 0.6s ease-out forwards;
         }
         .pd-wash::before,
         .pd-wash::after {
@@ -911,8 +1064,21 @@ export default function SpinPage() {
           animation: pdGold 2.2s linear infinite, pdGlow 1.4s ease-in-out infinite,
             pdSlideUp 0.8s cubic-bezier(0.22, 0.9, 0.3, 1) both;
         }
+        .pd-wash-out { animation: pdGold 2.2s linear infinite, pdWashOut 0.6s ease-in forwards; }
+        /* การ์ดผู้ถูกรางวัล: พื้นทองวิบวับ + เลื่อนลงตอนปิด */
+        .pd-row-pop { animation: pdRowPop 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
+        .pd-gold-card {
+          background: linear-gradient(110deg, #ffc83d, #fff3b0, #ffe27a, #ffd54a, #fff6c9, #ffc83d, #ffe27a);
+          background-size: 250% 100%;
+          animation: pdGold 2.4s linear infinite;
+        }
+        .pd-gold-frame.pd-card-out {
+          animation: pdGold 2.2s linear infinite, pdGlow 1.4s ease-in-out infinite,
+            pdCardFly 0.95s ease-in-out forwards;
+        }
         @media (prefers-reduced-motion: reduce) {
-          .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-wash::after, .pd-quake, .pd-bokeh-dot { animation: none; }
+          .pd-gold-card, .pd-row-pop { animation: none; }
+          .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-wash::after, .pd-quake, .pd-quake-win, .pd-bokeh-dot { animation: none; }
           .pd-half-l { animation: none; transform: translate(-6px, 12px) rotate(13deg); }
           .pd-half-r { animation: none; transform: translate(6px, 12px) rotate(-13deg); }
           .pd-hammer, .pd-shard { display: none; }
@@ -939,13 +1105,14 @@ export default function SpinPage() {
         ))}
       </div>
 
-      {goldFlash && <div aria-hidden className="pd-wash" />}
+      {goldFlash && <div aria-hidden className={`pd-wash ${winnerClosing ? "pd-wash-out" : ""}`} />}
 
       <canvas ref={canvasRef} aria-hidden className="pointer-events-none fixed inset-0 z-50 h-full w-full" />
+      <canvas ref={confettiRef} aria-hidden className="pointer-events-none fixed inset-0 z-50 h-full w-full" />
 
       <main
         className={`relative z-10 mx-auto flex w-full max-w-[1800px] flex-1 flex-col px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-5 lg:min-h-0 lg:pb-4 ${
-          quake ? "pd-quake" : ""
+          quake ? "pd-quake" : shake ? "pd-quake-win" : ""
         }`}
       >
         <h1 className="sr-only">Lucky Draw</h1>
@@ -989,10 +1156,10 @@ export default function SpinPage() {
                       ))}
                     </div>
                     <p className="pd-title mt-2 text-4xl font-extrabold tracking-[0.12em] sm:text-5xl lg:text-6xl">
-                      LUCKY SLOT
+                      LUCKY DRAW
                     </p>
                     <div className="pd-plate-green mx-auto mt-2 w-fit rounded-full border-2 border-[#ffd54a] px-6 py-0.5 text-xs font-extrabold tracking-[0.3em] text-[#fff6c9] sm:text-sm">
-                      LUCKY DRAW
+                      ลุ้นของรางวัล
                     </div>
                   </div>
                 </div>
@@ -1252,23 +1419,28 @@ export default function SpinPage() {
             </section>
 
             {/* ===== ประวัติผู้ถูกรางวัล ===== */}
-            <section aria-label="ผู้ถูกรางวัลแล้ว" className="flex min-h-0 flex-1 flex-col">
+            <section ref={winnerListRef} aria-label="ผู้ถูกรางวัลแล้ว" className="flex min-h-0 flex-1 flex-col">
               <h2 className="flex-none text-lg font-bold">ผู้ถูกรางวัลแล้ว ({winners.length})</h2>
               {winners.length === 0 ? (
                 <p className="mt-3 rounded-2xl border border-dashed border-white/20 p-5 text-center text-sm text-white/50">
                   ยังไม่มีผู้ถูกรางวัล
                 </p>
               ) : (
-                <ul className="mt-3 max-h-[28rem] min-h-0 flex-1 divide-y divide-white/10 overflow-y-auto rounded-2xl bg-[#1f1f1f] border-2 border-white/10 shadow-[0_5px_0_#05070c] lg:max-h-none">
+                <ul className="pd-noscroll pd-gold-card mt-3 max-h-[28rem] min-h-0 flex-1 divide-y divide-[#8a5a00]/25 overflow-y-auto rounded-2xl border-2 border-[#fff3b0] shadow-[0_5px_0_#b27d00] lg:max-h-none">
                   {winners.map((w, i) => (
-                    <li key={w.code} className="flex items-center justify-between gap-3 px-4 py-3">
+                    <li
+                      key={w.code}
+                      className={`flex items-center justify-between gap-3 px-4 py-3 ${
+                        w.code === hiddenCode ? "invisible" : w.code === popCode ? "pd-row-pop" : ""
+                      }`}
+                    >
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-bold">
+                        <p className="truncate text-sm font-extrabold text-[#5a3500]">
                           {winners.length - i}. {w.name}
                         </p>
-                        <p className="font-mono text-xs text-white/50">{w.empCode}</p>
+                        <p className="font-mono text-xs font-semibold text-[#7a4b00]">{w.empCode}</p>
                       </div>
-                      <p className="shrink-0 text-xs text-white/50">{fmt(w.wonAt)}</p>
+                      <p className="shrink-0 text-xs font-semibold text-[#7a4b00]">{fmt(w.wonAt)}</p>
                     </li>
                   ))}
                 </ul>
@@ -1278,26 +1450,41 @@ export default function SpinPage() {
         </div>
       </main>
 
-      {/* ===== ผู้ถูกรางวัล (การ์ดลอยเหนือหน้า เลื่อนขึ้นจากด้านล่าง) ===== */}
+      {/* ===== ผู้ถูกรางวัล (การ์ดลอยเหนือหน้า เลื่อนขึ้นจากด้านล่าง กดปิดแล้วเลื่อนลง) ===== */}
       {winner && !spinning && (
         <section
+          ref={winnerCardRef}
           aria-label="ผู้ถูกรางวัล"
-          className="pd-gold-frame fixed inset-x-3 bottom-4 z-[46] mx-auto max-w-xl rounded-3xl p-1 sm:bottom-6"
+          className={`pd-gold-frame fixed inset-x-3 bottom-4 z-[46] mx-auto max-w-2xl rounded-[2rem] p-1.5 sm:bottom-6 ${
+            winnerClosing ? "pd-card-out" : ""
+          }`}
         >
-          <div className="relative rounded-[1.35rem] bg-[#1b1408] px-4 py-6 text-center sm:px-5 sm:py-7">
+          <div className="pd-gold-card relative rounded-[1.7rem] px-5 py-8 text-center [text-shadow:0_1px_0_rgba(255,255,255,0.45)] sm:px-8 sm:py-10">
             <button
               type="button"
-              onClick={() => setWinner(null)}
-              className="absolute right-3 top-3 min-h-9 rounded-full border border-white/30 px-3 text-xs font-semibold text-white/80"
+              onClick={closeWinner}
+              disabled={winnerClosing}
+              className="absolute right-4 top-4 min-h-9 rounded-full border-2 border-[#6b4200]/60 bg-white/30 px-4 text-sm font-bold text-[#5a3500]"
             >
               ปิด
             </button>
-            <p className="text-xs font-bold tracking-widest text-[#ffd54a]">ยินดีด้วย! ผู้ถูกรางวัล</p>
-            <p className="mt-3 break-words text-3xl font-extrabold text-[#ffe27a] md:text-5xl">{winner.name}</p>
-            <p className="mt-3 text-sm text-white/70">
-              รหัสพนักงาน <span className="font-mono font-bold text-white">{winner.empCode}</span>
+            <p className="text-sm font-extrabold tracking-widest text-[#7a4b00] sm:text-base">ยินดีด้วย! ผู้ถูกรางวัล</p>
+            <span
+              aria-hidden
+              className="mx-auto mt-4 flex h-28 w-28 items-center justify-center rounded-full bg-[#e50914] text-6xl font-bold uppercase text-white ring-4 ring-white/80 [text-shadow:none] md:h-36 md:w-36 md:text-7xl"
+            >
+              {Array.from(winner.name.trim())[0] ?? "?"}
+            </span>
+            <p className="mt-4 break-words text-4xl font-extrabold text-[#5a3500] md:text-6xl">{winner.name}</p>
+            {(winner.company || winner.department) && (
+              <p className="mt-3 break-words text-base font-bold text-[#7a4b00] md:text-xl">
+                {[winner.company, winner.department].filter(Boolean).join(" · ")}
+              </p>
+            )}
+            <p className="mt-3 text-base font-semibold text-[#7a4b00] md:text-lg">
+              รหัสพนักงาน <span className="font-mono font-extrabold text-[#5a3500]">{winner.empCode}</span>
             </p>
-            <p className="mt-1 break-all font-mono text-xs text-white/40">{winner.code}</p>
+            <p className="mt-1 break-all font-mono text-xs text-[#7a4b00]/70">{winner.code}</p>
           </div>
         </section>
       )}

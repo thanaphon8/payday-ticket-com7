@@ -26,6 +26,9 @@ export async function POST(req: Request) {
         name: u.name,
         phone: u.phone,
         empCode: typeof u.empCode === "string" ? u.empCode : null,
+        companyId: typeof u.companyId === "number" ? u.companyId : null,
+        departmentId: typeof u.departmentId === "number" ? u.departmentId : null,
+        branchId: typeof u.branchId === "number" ? u.branchId : null,
       },
     });
   } catch (e) {

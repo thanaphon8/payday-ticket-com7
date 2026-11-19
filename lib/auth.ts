@@ -23,6 +23,9 @@ export type SessionUser = {
   name: string;
   phone: string;
   empCode: string | null;
+  companyId?: number | null;
+  departmentId?: number | null;
+  branchId?: number | null;
   isAdmin?: boolean; // เลิกใช้แล้ว (admin แยกเป็นรหัสผ่านต่างหาก) คงไว้กันโค้ดเก่าพัง
 };
 
@@ -96,6 +99,9 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     name: u.name,
     phone: u.phone,
     empCode: typeof u.empCode === "string" ? u.empCode : null,
+    companyId: typeof u.companyId === "number" ? u.companyId : null,
+    departmentId: typeof u.departmentId === "number" ? u.departmentId : null,
+    branchId: typeof u.branchId === "number" ? u.branchId : null,
   };
 }
 

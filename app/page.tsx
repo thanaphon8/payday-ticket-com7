@@ -4,6 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Prompt } from "next/font/google";
 import { code128Bars } from "@/lib/code128";
+import LoginForm from "./components/LoginForm";
+import RegisterForm from "./components/RegisterForm";
+import { EMP_CODE_LENGTH, validEmp, validPhone } from "./components/auth-shared";
+import type { AuthMode, User } from "./components/auth-shared";
+import { departmentsOf, getCompany } from "./components/departments";
+import { branchesOf, branchFullLabel } from "./components/branches";
 
 // ฟอนต์หลักของเว็บ: Prompt (โค้งมน เป็นกันเอง) เปลี่ยนเป็น Kanit / Mali ได้
 const appFont = Prompt({
@@ -27,9 +33,6 @@ const PAYCARD2_IMG = "/img/paycard2.jpg"; // พื้นหลังหน้�
 // สัดส่วนกรอบรูปตั๋ว = สัดส่วนรูปจริง (p1/p2 ประมาณ 715×349) ทุกใบใช้ค่าเดียวกัน จึงเท่ากัน
 // ถ้าเปลี่ยนรูปใหม่ ให้แก้เป็น aspect-[กว้าง/สูง] ของรูปนั้น
 const TICKET_IMG_ASPECT = "aspect-[715/349]";
-
-// รหัสพนักงาน: ตัวเลขล้วน 7 หลัก (ต้องตรงกับ EMP_CODE_LENGTH ใน lib/tickets.ts)
-const EMP_CODE_LENGTH = 7;
 
 /* สีหลัก (ตามดีไซน์)
    เขียว #14402c · ไลม์ #d9f27a · เหลือง #ffcf5c · พื้นหลัง #f1f7e9 · กล่องเขียวอ่อน #e3ecd6 · midnight blue #0f1b4d · แดงเลือดหมู #6b1d24 */
@@ -114,9 +117,6 @@ type Order = {
   wonAt?: string;
 };
 
-// empCode = รหัสพนักงานของบัญชี (null = บัญชีเก่าที่ยังไม่เคยกรอก ต้องกรอกในโปรไฟล์ก่อนซื้อ Lucky Draw)
-type User = { id: string; username: string; name: string; phone: string; empCode: string | null };
-
 type View = "home" | "buy" | "pay" | "qr" | "done" | "tickets" | "profile" | "auth";
 
 type Cart = Partial<Record<TicketId, number>>;
@@ -194,10 +194,6 @@ async function api<T = Record<string, unknown>>(
 }
 
 const baht = (n: number) => `฿${n.toLocaleString("th-TH")}`;
-
-const validPhone = (p: string) => /^0\d{9}$/.test(p);
-
-const validEmp = (c: string) => new RegExp(`^\\d{${EMP_CODE_LENGTH}}$`).test(c);
 
 const fmtTime = (iso?: string) =>
   iso
@@ -1128,15 +1124,8 @@ export default function Home() {
   const [cancelingId, setCancelingId] = useState<string | null>(null); // รายการที่กำลังลบ
   const [cancelTarget, setCancelTarget] = useState<Payment | null>(null); // รายการที่รอยืนยันการยกเลิก (popup)
 
-  // เข้าสู่ระบบ / สมัครสมาชิก
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
-  const [authUser, setAuthUser] = useState("");
-  const [authPass, setAuthPass] = useState("");
-  const [authName, setAuthName] = useState("");
-  const [authPhone, setAuthPhone] = useState("");
-  const [authEmp, setAuthEmp] = useState("");
-  const [authError, setAuthError] = useState("");
-  const [authBusy, setAuthBusy] = useState(false);
+  // เข้าสู่ระบบ / สมัครสมาชิก (ฟอร์มอยู่ใน components/LoginForm.tsx และ components/RegisterForm.tsx)
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [afterAuth, setAfterAuth] = useState<View>("home");
 
   // บัญชี/โปรไฟล์
@@ -1145,6 +1134,7 @@ export default function Home() {
   const [accEmp, setAccEmp] = useState("");
   const [accError, setAccError] = useState("");
   const [accSaved, setAccSaved] = useState(false);
+  const [accBusy, setAccBusy] = useState(false);
   const [returnToPay, setReturnToPay] = useState(false); // ถูกส่งมากรอกรหัสพนักงานจากการกดชำระเงิน: บันทึกแล้วกลับไปหน้าชำระเงิน
 
   // ตั๋วของฉัน
@@ -1293,7 +1283,6 @@ export default function Home() {
   // ไปหน้า login แล้วเมื่อสำเร็จให้เด้งกลับมาหน้าที่ต้องการ
   function needLogin(next: View) {
     setAfterAuth(next);
-    setAuthError("");
     setAuthMode("login");
     setView("auth");
   }
@@ -1306,40 +1295,11 @@ export default function Home() {
     go("profile");
   }
 
-  async function submitAuth() {
-    const username = authUser.trim();
-    if (authMode === "register") {
-      if (authName.trim().length < 2) return setAuthError("กรอกชื่อ-นามสกุลให้ครบ");
-      if (!validPhone(authPhone.replace(/\D/g, ""))) return setAuthError("เบอร์โทรต้องมี 10 หลัก ขึ้นต้นด้วย 0");
-      if (!validEmp(authEmp.replace(/\D/g, ""))) return setAuthError(`รหัสพนักงานต้องเป็นตัวเลข ${EMP_CODE_LENGTH} หลัก`);
-      if (!/^[a-zA-Z0-9._]{3,20}$/.test(username)) return setAuthError("username ต้องยาว 3-20 ตัว ใช้ได้เฉพาะ a-z 0-9 . _");
-      if (authPass.length < 6) return setAuthError("รหัสผ่านต้องยาวอย่างน้อย 6 ตัวอักษร");
-    } else if (!username || !authPass) {
-      return setAuthError("กรอก username และรหัสผ่าน");
-    }
-
-    setAuthBusy(true);
-    setAuthError("");
-    const r = await api<{ user: User }>(
-      authMode === "login" ? "/api/auth/login" : "/api/auth/register",
-      "POST",
-      authMode === "login"
-        ? { username, password: authPass }
-        : { username, password: authPass, name: authName, phone: authPhone, empCode: authEmp.replace(/\D/g, "") },
-    );
-    if (!r.ok) {
-      setAuthBusy(false);
-      return setAuthError(r.error);
-    }
-    applyUser(r.data.user);
+  // LoginForm / RegisterForm เรียกตอนสำเร็จ: เก็บ user โหลดตั๋ว แล้วเด้งกลับหน้าที่ต้องการ
+  async function handleAuthed(u: User) {
+    applyUser(u);
     const o = await api<{ orders: Order[] }>("/api/orders");
     if (o.ok) setOrders(o.data.orders);
-    setAuthBusy(false);
-    setAuthPass("");
-    setAuthName("");
-    setAuthPhone("");
-    setAuthEmp("");
-    setAuthUser("");
     go(afterAuth);
   }
 
@@ -1459,7 +1419,17 @@ export default function Home() {
     }
   }
 
+  // คืนค่าฟอร์มโปรไฟล์กลับเป็นข้อมูลล่าสุดของบัญชี
+  function resetProfile() {
+    setAccName(user?.name ?? "");
+    setAccPhone(user?.phone ?? "");
+    setAccEmp("");
+    setAccError("");
+    setAccSaved(false);
+  }
+
   async function saveProfile() {
+    if (accBusy) return;
     const cleanPhone = accPhone.replace(/\D/g, "");
     const cleanEmp = accEmp.replace(/\D/g, "");
     setAccSaved(false);
@@ -1481,11 +1451,14 @@ export default function Home() {
       setAccError(`กรอกรหัสพนักงาน ${EMP_CODE_LENGTH} หลักก่อนซื้อ Lucky Draw`);
       return;
     }
+    setAccBusy(true);
+    setAccError("");
     const r = await api<{ user: User }>("/api/auth/me", "PATCH", {
       name: accName.trim(),
       phone: cleanPhone,
       ...(settingEmp ? { empCode: cleanEmp } : {}),
     });
+    setAccBusy(false);
     if (!r.ok) {
       setAccError(r.error);
       return;
@@ -1502,11 +1475,33 @@ export default function Home() {
     }
   }
 
+  // โปรไฟล์: มีอะไรเปลี่ยนจากข้อมูลบัญชีไหม (ใช้เปิดปุ่มบันทึก / ยกเลิก)
+  const profileDirty =
+    !!user &&
+    (accName.trim() !== user.name ||
+      accPhone.replace(/\D/g, "") !== user.phone ||
+      (!user.empCode && accEmp.length > 0));
+  const profileRows: [string, string][] = [];
+  if (user) {
+    profileRows.push(["รหัสพนักงาน", user.empCode ?? "ยังไม่ได้ระบุ"]);
+    // บริษัท / แผนก (สำนักงานใหญ่) / สาขา (หน้าร้าน) ที่เลือกตอนสมัคร
+    const cid = user.companyId ?? null;
+    const company = cid ? getCompany(cid) : undefined;
+    const dept =
+      cid && user.departmentId
+        ? departmentsOf(cid).find((d) => d.id === user.departmentId)
+        : undefined;
+    const branch =
+      cid && user.branchId ? branchesOf(cid).find((b) => b.id === user.branchId) : undefined;
+    if (company) profileRows.push(["บริษัท", company.name]);
+    if (dept) profileRows.push(["แผนก", dept.name]);
+    if (branch) profileRows.push(["สาขา", branchFullLabel(branch)]);
+  }
+
   const badges: Badges = { tickets: readyOrders.length };
-  const showNav =
-    view === "home" || view === "buy" || view === "tickets" || view === "profile" || view === "auth";
-  const navView: View =
-    view === "pay" || view === "qr" || view === "done" ? "buy" : view === "auth" ? "profile" : view;
+  // หน้า auth เป็นกรอบเต็มจอของตัวเอง (AuthShell) ไม่แสดงแถบเมนูล่าง
+  const showNav = view === "home" || view === "buy" || view === "tickets" || view === "profile";
+  const navView: View = view === "pay" || view === "qr" || view === "done" ? "buy" : view;
 
   const inputCls =
     "mt-1 w-full rounded-xl border border-white/15 bg-[#2a2a2a] px-4 py-3 text-base text-white outline-none focus:border-white/60 focus:ring-2 focus:ring-white/20";
@@ -1548,14 +1543,17 @@ export default function Home() {
   }, [sheet, orders, scanned]);
 
   // ระยะเว้นด้านล่างของหน้า: หน้าซื้อ/ชำระเงินมีแถบสรุปยอดติดขอบล่าง ต้องเว้นที่ให้ทั้งมือถือและคอมพิวเตอร์
+  // หน้า auth ซ่อน <main> ไว้ (ฟอร์มวาดนอก <main> ทับเต็มจอ)
   const mainPad =
-    view === "buy" || view === "pay"
-      ? "pb-64 md:pb-48"
-      : showNav
-        ? "pb-28 md:pb-16"
-        : view === "done" || view === "qr"
-          ? "pb-10 md:pb-16"
-          : "pb-64 md:pb-16";
+    view === "auth"
+      ? "hidden"
+      : view === "buy" || view === "pay"
+        ? "pb-64 md:pb-48"
+        : showNav
+          ? "pb-28 md:pb-16"
+          : view === "done" || view === "qr"
+            ? "pb-10 md:pb-16"
+            : "pb-64 md:pb-16";
 
   return (
     <div
@@ -2391,19 +2389,28 @@ export default function Home() {
               </div>
             ) : (
               <div className="md:mt-6 md:grid md:grid-cols-[18rem_minmax(0,1fr)] md:items-start md:gap-6">
-                <div className="mt-6 flex items-center gap-4 rounded-3xl bg-gradient-to-br from-[#e50914] to-[#7a0a10] p-5 text-white md:col-start-1 md:row-start-1 md:mt-0">
-                  <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white text-2xl font-bold uppercase text-black">
-                    {(user.name || user.username).charAt(0)}
+                <div className="mt-6 flex flex-col items-center rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center text-white md:col-start-1 md:row-start-1 md:mt-0">
+                  <span
+                    aria-hidden
+                    className="flex h-44 w-44 shrink-0 items-center justify-center rounded-full bg-[#e50914] text-7xl font-bold uppercase text-white md:h-56 md:w-56 md:text-8xl"
+                  >
+                    {Array.from((user.name || user.username).trim())[0] ?? "?"}
                   </span>
-                  <div className="min-w-0">
-                    <p className="truncate text-lg font-bold">{user.name}</p>
-                    <p className="truncate text-sm text-white">@{user.username}</p>
-                  </div>
+                  <p className="mt-3 max-w-full truncate text-lg font-bold md:text-xl">{user.name}</p>
+                  <p className="max-w-full truncate text-xs text-white/60 md:text-sm">@{user.username}</p>
                 </div>
 
                 <div className="mt-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:col-start-2 md:row-span-2 md:row-start-1 md:mt-0 md:p-6">
                   <h2 className="text-lg font-bold">ข้อมูลผู้ซื้อ</h2>
                   <p className="mt-1 text-sm text-white/60">ใช้กรอกข้อมูลให้อัตโนมัติตอนซื้อตั๋ว</p>
+                  <dl className="mt-4 divide-y divide-white/10 overflow-hidden rounded-2xl bg-[#2a2a2a] text-sm">
+                    {profileRows.map(([label, value]) => (
+                      <div key={label} className="flex items-start justify-between gap-4 px-4 py-2.5">
+                        <dt className="shrink-0 text-white/60">{label}</dt>
+                        <dd className="min-w-0 break-words text-right font-semibold">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
                   {returnToPay && !user.empCode && (
                     <p role="alert" className="mt-3 rounded-xl bg-amber-100 px-4 py-3 text-sm font-semibold text-amber-800">
                       กรอกรหัสพนักงานก่อนซื้อ Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้ บันทึกแล้วระบบพากลับไปชำระเงินต่อ
@@ -2411,7 +2418,7 @@ export default function Home() {
                   )}
                   <div className="mt-4 space-y-4">
                     <label className="block">
-                      <span className="text-sm font-medium">ชื่อ-นามสกุล</span>
+                      <span className="text-sm font-medium">ชื่อที่แสดง</span>
                       <input
                         value={accName}
                         onChange={(e) => {
@@ -2436,27 +2443,27 @@ export default function Home() {
                         className={inputCls}
                       />
                     </label>
-                    <label className="block">
-                      <span className="text-sm font-medium">รหัสพนักงาน ({EMP_CODE_LENGTH} หลัก)</span>
-                      <input
-                        value={user.empCode ?? accEmp}
-                        onChange={(e) => {
-                          setAccEmp(e.target.value.replace(/\D/g, "").slice(0, EMP_CODE_LENGTH));
-                          setAccSaved(false);
-                        }}
-                        disabled={!!user.empCode}
-                        inputMode="numeric"
-                        autoComplete="off"
-                        maxLength={EMP_CODE_LENGTH}
-                        placeholder={"0".repeat(EMP_CODE_LENGTH)}
-                        className={`${inputCls} font-mono tracking-[0.3em] disabled:opacity-60`}
-                      />
-                      <span className="mt-1 block text-xs text-white/50">
-                        {user.empCode
-                          ? "แก้ไขเองไม่ได้ ถ้าผิดให้แจ้งเจ้าหน้าที่"
-                          : "ใช้ลุ้นรางวัล Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้"}
-                      </span>
-                    </label>
+                    {/* รหัสพนักงานแสดงในแถวข้อมูลด้านบน แก้ไม่ได้ (กรอกตอนสมัคร) ช่องนี้ขึ้นเฉพาะบัญชีเก่าที่ยังไม่มีรหัส */}
+                    {!user.empCode && (
+                      <label className="block">
+                        <span className="text-sm font-medium">รหัสพนักงาน ({EMP_CODE_LENGTH} หลัก)</span>
+                        <input
+                          value={accEmp}
+                          onChange={(e) => {
+                            setAccEmp(e.target.value.replace(/\D/g, "").slice(0, EMP_CODE_LENGTH));
+                            setAccSaved(false);
+                          }}
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={EMP_CODE_LENGTH}
+                          placeholder={"0".repeat(EMP_CODE_LENGTH)}
+                          className={`${inputCls} font-mono tracking-[0.3em]`}
+                        />
+                        <span className="mt-1 block text-xs text-white/50">
+                          ใช้ลุ้นรางวัล Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้
+                        </span>
+                      </label>
+                    )}
                     {accError && (
                       <p role="alert" className="text-sm font-medium text-red-600">
                         {accError}
@@ -2470,10 +2477,20 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={saveProfile}
-                      className="rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+                      disabled={!profileDirty || accBusy}
+                      className="flex h-14 w-full items-center justify-center rounded-full bg-[#e50914] text-base font-bold text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-white/15 disabled:text-white/50"
                     >
-                      บันทึกข้อมูล
+                      {accBusy ? "กำลังบันทึก" : "บันทึก"}
                     </button>
+                    {profileDirty && !accBusy && (
+                      <button
+                        type="button"
+                        onClick={resetProfile}
+                        className="h-10 w-full rounded-full text-sm font-semibold text-white/70 transition hover:bg-white/10 active:opacity-60"
+                      >
+                        ยกเลิกการเปลี่ยนแปลง
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -2488,155 +2505,25 @@ export default function Home() {
             )}
           </section>
         )}
-
-        {/* ===== เข้าสู่ระบบ / สมัครสมาชิก ===== */}
-        {view === "auth" && (
-          <section
-            aria-label={authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
-            className="md:mx-auto md:max-w-4xl"
-          >
-            <SubHeader
-              title={authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
-              onBack={() => go(afterAuth === "pay" ? "buy" : "home")}
-            />
-
-            <div className="md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-8">
-              <div className="relative mt-6 overflow-hidden rounded-3xl bg-gradient-to-br from-[#e50914] to-[#7a0a10] p-5 text-white md:mt-0 md:p-8">
-                <p className="text-[11px] font-bold tracking-wider text-white">PAYDAY IS PLAY DAY</p>
-                <h2 className="mt-2 text-2xl font-bold leading-tight md:text-3xl">
-                  {authMode === "login" ? "ยินดีต้อนรับกลับมา!" : "มาเป็นสมาชิก แล้วไปเล่นกัน!"}
-                </h2>
-                <p className="mt-1 text-xs text-white/70 md:text-sm">
-                  {afterAuth === "pay" ? "เข้าสู่ระบบก่อน เพื่อชำระเงินและรับตั๋ว" : "เข้าสู่ระบบเพื่อซื้อและดูตั๋วของคุณ"}
-                </p>
-              </div>
-
-              <div>
-                <div
-                  role="tablist"
-                  aria-label="โหมด"
-                  className="mt-5 grid grid-cols-2 rounded-2xl bg-[#2a2a2a] p-1 md:mt-0"
-                >
-                  {(
-                    [
-                      ["login", "เข้าสู่ระบบ"],
-                      ["register", "สมัครสมาชิก"],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      role="tab"
-                      aria-selected={authMode === id}
-                      onClick={() => {
-                        setAuthMode(id);
-                        setAuthError("");
-                      }}
-                      className={`rounded-xl py-2.5 text-sm font-bold transition ${
-                        authMode === id ? "bg-[#e50914] text-white" : "text-white/60"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                <form
-                  className="mt-4 space-y-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:p-6"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    submitAuth();
-                  }}
-                >
-                  {authMode === "register" && (
-                    <>
-                      <label className="block">
-                        <span className="text-sm font-medium">ชื่อ-นามสกุล</span>
-                        <input
-                          value={authName}
-                          onChange={(e) => setAuthName(e.target.value)}
-                          autoComplete="name"
-                          className={inputCls}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="text-sm font-medium">เบอร์โทร</span>
-                        <input
-                          value={authPhone}
-                          onChange={(e) => setAuthPhone(e.target.value)}
-                          inputMode="numeric"
-                          autoComplete="tel"
-                          placeholder="0812345678"
-                          className={inputCls}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="text-sm font-medium">รหัสพนักงาน ({EMP_CODE_LENGTH} หลัก)</span>
-                        <input
-                          value={authEmp}
-                          onChange={(e) => setAuthEmp(e.target.value.replace(/\D/g, "").slice(0, EMP_CODE_LENGTH))}
-                          inputMode="numeric"
-                          autoComplete="off"
-                          maxLength={EMP_CODE_LENGTH}
-                          placeholder={"0".repeat(EMP_CODE_LENGTH)}
-                          className={`${inputCls} font-mono tracking-[0.3em]`}
-                        />
-                        <span className="mt-1 block text-xs text-white/50">
-                          ใช้ลุ้นรางวัล Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้
-                        </span>
-                      </label>
-                    </>
-                  )}
-                  <label className="block">
-                    <span className="text-sm font-medium">Username</span>
-                    <input
-                      value={authUser}
-                      onChange={(e) => setAuthUser(e.target.value)}
-                      autoComplete="username"
-                      autoCapitalize="none"
-                      autoCorrect="off"
-                      spellCheck={false}
-                      placeholder="เช่น somchai99"
-                      className={inputCls}
-                    />
-                    {authMode === "register" && (
-                      <span className="mt-1 block text-xs text-white/50">3-20 ตัว ใช้ a-z 0-9 . _ ได้</span>
-                    )}
-                  </label>
-                  <label className="block">
-                    <span className="text-sm font-medium">รหัสผ่าน</span>
-                    <input
-                      type="password"
-                      value={authPass}
-                      onChange={(e) => setAuthPass(e.target.value)}
-                      autoComplete={authMode === "login" ? "current-password" : "new-password"}
-                      className={inputCls}
-                    />
-                    {authMode === "register" && (
-                      <span className="mt-1 block text-xs text-white/50">อย่างน้อย 6 ตัวอักษร</span>
-                    )}
-                  </label>
-
-                  {authError && (
-                    <p role="alert" className="text-sm font-medium text-red-600">
-                      {authError}
-                    </p>
-                  )}
-
-                  <button
-                    type="submit"
-                    disabled={authBusy}
-                    className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e50914] py-4 text-base font-bold text-white transition active:scale-[0.98] disabled:opacity-60"
-                  >
-                    {authBusy ? "กำลังดำเนินการ..." : authMode === "login" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
-                    {!authBusy && <IconArrow className="h-5 w-5 text-white" />}
-                  </button>
-                </form>
-              </div>
-            </div>
-          </section>
-        )}
       </main>
+
+      {/* ===== เข้าสู่ระบบ / สมัครสมาชิก =====
+          วางนอก <main> เพราะ AuthShell เป็นกรอบเต็มจอ z-50 ต้องชนะแถบเมนู z-40 */}
+      {view === "auth" &&
+        (authMode === "login" ? (
+          <LoginForm
+            onAuthed={handleAuthed}
+            onSwitch={setAuthMode}
+            onBack={() => go(afterAuth === "pay" ? "buy" : "home")}
+            subtitle={afterAuth === "pay" ? "เข้าสู่ระบบก่อน เพื่อชำระเงินและรับตั๋ว" : undefined}
+          />
+        ) : (
+          <RegisterForm
+            onAuthed={handleAuthed}
+            onSwitch={setAuthMode}
+            onBack={() => go(afterAuth === "pay" ? "buy" : "home")}
+          />
+        ))}
 
       {showNav && <BottomNav view={navView} badges={badges} golden={hasNewWin} onGo={go} />}
 
