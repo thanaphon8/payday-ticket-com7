@@ -88,6 +88,156 @@ function ticketStyle(code: string) {
   };
 }
 
+/* ---------- เสียงจากไฟล์ของผู้ใช้ (public/sound) ---------- */
+const SPIN_SRC = "/sound/spin.mp3"; // เสียงตอนสุ่ม (วนลูปจนเลขหลักสุดท้ายหยุด)
+const NUMBER_SRC = "/sound/number.mp3"; // เสียงตอนเลขหยุดทีละหลัก
+const VICTORY_SRC = "/sound/victory.mp3"; // เสียงตอนสุ่มครบทุกหลักแล้ว (ประกาศผู้ถูกรางวัล)
+
+let spinAudio: HTMLAudioElement | null = null;
+function prepareSpin() {
+  if (typeof window === "undefined") return;
+  if (!spinAudio) {
+    spinAudio = new Audio(SPIN_SRC);
+    spinAudio.loop = true;
+    spinAudio.preload = "auto";
+  }
+}
+function playSpin() {
+  prepareSpin();
+  if (!spinAudio) return;
+  try {
+    spinAudio.currentTime = 0;
+  } catch {
+    /* ยังโหลดไม่เสร็จ เล่นจากต้นอยู่แล้ว */
+  }
+  void spinAudio.play().catch(() => {});
+}
+function stopSpin() {
+  if (!spinAudio) return;
+  spinAudio.pause();
+  try {
+    spinAudio.currentTime = 0;
+  } catch {
+    /* ไม่เป็นไร */
+  }
+}
+function playNumber() {
+  if (typeof window === "undefined") return;
+  const a = new Audio(NUMBER_SRC); // สร้างใหม่ทุกครั้ง เสียงซ้อนกันได้ถ้าเลขหยุดถี่
+  void a.play().catch(() => {});
+}
+
+let victoryAudio: HTMLAudioElement | null = null;
+function prepareVictory() {
+  if (typeof window === "undefined") return;
+  if (!victoryAudio) {
+    victoryAudio = new Audio(VICTORY_SRC);
+    victoryAudio.preload = "auto";
+  }
+}
+function playVictory() {
+  prepareVictory();
+  if (!victoryAudio) return;
+  try {
+    victoryAudio.currentTime = 0;
+  } catch {
+    /* ยังโหลดไม่เสร็จ เล่นจากต้นอยู่แล้ว */
+  }
+  void victoryAudio.play().catch(() => {});
+}
+function stopVictory() {
+  if (!victoryAudio) return;
+  victoryAudio.pause();
+  try {
+    victoryAudio.currentTime = 0;
+  } catch {
+    /* ไม่เป็นไร */
+  }
+}
+
+/* ---------- เอฟเฟคเสียงสังเคราะห์ (WebAudio ไม่ต้องใช้ไฟล์เสียง) ---------- */
+let audioCtx: AudioContext | null = null;
+function ac(): AudioContext | null {
+  if (typeof window === "undefined") return null;
+  if (!audioCtx) {
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return null;
+    try {
+      audioCtx = new AC();
+    } catch {
+      return null;
+    }
+  }
+  if (audioCtx.state === "suspended") void audioCtx.resume().catch(() => {});
+  return audioCtx;
+}
+
+function tone(freq: number, dur: number, o: { type?: OscillatorType; vol?: number; at?: number; to?: number } = {}) {
+  const c = ac();
+  if (!c) return;
+  const t = c.currentTime + (o.at ?? 0);
+  const osc = c.createOscillator();
+  const g = c.createGain();
+  osc.type = o.type ?? "sine";
+  osc.frequency.setValueAtTime(freq, t);
+  if (o.to) osc.frequency.exponentialRampToValueAtTime(o.to, t + dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(o.vol ?? 0.2, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  osc.connect(g);
+  g.connect(c.destination);
+  osc.start(t);
+  osc.stop(t + dur + 0.02);
+}
+
+function noise(dur: number, o: { vol?: number; at?: number; freq?: number; sweepTo?: number } = {}) {
+  const c = ac();
+  if (!c) return;
+  const t = c.currentTime + (o.at ?? 0);
+  const len = Math.max(1, Math.floor(c.sampleRate * dur));
+  const buf = c.createBuffer(1, len, c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  const f = c.createBiquadFilter();
+  f.type = "bandpass";
+  f.Q.value = 0.8;
+  f.frequency.setValueAtTime(o.freq ?? 2000, t);
+  if (o.sweepTo) f.frequency.exponentialRampToValueAtTime(o.sweepTo, t + dur);
+  const g = c.createGain();
+  g.gain.setValueAtTime(o.vol ?? 0.2, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(f);
+  f.connect(g);
+  g.connect(c.destination);
+  src.start(t);
+  src.stop(t + dur + 0.02);
+}
+
+const sfx = {
+  // ค้อนเหวี่ยง
+  swing() {
+    noise(0.38, { vol: 0.16, freq: 400, sweepTo: 3200 });
+  },
+  // ค้อนกระทบปุ่ม ปุ่มแตก
+  hit() {
+    tone(180, 0.38, { type: "sine", vol: 0.55, to: 35 });
+    noise(0.28, { vol: 0.5, freq: 1800, sweepTo: 600 });
+    tone(950, 0.14, { type: "square", vol: 0.12, to: 200 });
+    noise(0.5, { vol: 0.14, at: 0.08, freq: 5200 }); // เสียงเศษกระจาย
+  },
+  // การ์ดเลื่อนลอยไปรายชื่อ
+  whoosh() {
+    noise(0.6, { vol: 0.14, freq: 2500, sweepTo: 300 });
+  },
+  // แถวเด้งเข้ารายชื่อ
+  pop() {
+    tone(300, 0.18, { type: "sine", vol: 0.3, to: 700 });
+    tone(880, 0.14, { type: "triangle", vol: 0.16, at: 0.12 });
+  },
+};
+
 export default function SpinPage() {
   const [gate, setGate] = useState<Gate>("loading");
   const [note, setNote] = useState("");
@@ -178,6 +328,14 @@ export default function SpinPage() {
     return () => clearInterval(t);
   }, [gate, refresh]);
 
+  // โหลดไฟล์เสียงไว้ล่วงหน้า จะได้เล่นทันทีตอนกดสุ่ม
+  useEffect(() => {
+    prepareSpin();
+    prepareVictory();
+    const n = new Audio(NUMBER_SRC);
+    n.preload = "auto";
+  }, []);
+
   // ล้าง timer / animation ตอนออกจากหน้า
   useEffect(() => {
     const timers = timersRef;
@@ -185,6 +343,8 @@ export default function SpinPage() {
     return () => {
       timers.current.forEach(clearTimeout);
       fx.current.forEach(clearTimeout);
+      stopSpin();
+      stopVictory();
       fwActive.current = false;
       cancelAnimationFrame(fwRaf.current);
       cancelAnimationFrame(cfRaf.current);
@@ -378,6 +538,7 @@ export default function SpinPage() {
   function finish(w: Winner, remaining: number) {
     spinningRef.current = false;
     seqRef.current += 1;
+    stopSpin(); // เลขหลักสุดท้ายหยุดแล้ว หยุดเสียงสุ่ม
     setSpinning(false);
     // ผลออกแล้ว: ค่อย ๆ ซูมกลับเป็นปกติอย่างนุ่มนวล
     timersRef.current.push(setTimeout(() => setZoom(false), 900));
@@ -390,6 +551,7 @@ export default function SpinPage() {
     setWinnerClosing(false);
     fireworks(); // พลุ + หน้าจอทองค้างอยู่จนกว่าจะกดปิดการ์ด (closeWinner)
     confetti(); // กระดาษสีทอง
+    playVictory(); // เสียงประกาศผู้ถูกรางวัล (victory.mp3)
     setShake(true); // ผลออกปุ๊บ จอสั่น
     timersRef.current.push(setTimeout(() => setShake(false), 1300));
     setGoldFlash(true);
@@ -399,6 +561,7 @@ export default function SpinPage() {
   function closeWinner() {
     if (winnerClosing || !winner) return;
     fwActive.current = false;
+    sfx.whoosh();
     const code = winner.code;
     const card = winnerCardRef.current;
     const list = winnerListRef.current;
@@ -419,6 +582,7 @@ export default function SpinPage() {
       setTimeout(() => {
         setHiddenCode(null);
         setPopCode(code);
+        sfx.pop();
       }, 640),
       setTimeout(() => {
         setWinner(null);
@@ -433,6 +597,7 @@ export default function SpinPage() {
     timersRef.current.forEach(clearTimeout);
     timersRef.current = [];
     fwActive.current = false;
+    stopVictory(); // กันเสียงชนะรอบก่อนค้างอยู่
     setWinnerClosing(false);
     setHiddenCode(null);
     setPopCode(null);
@@ -448,6 +613,7 @@ export default function SpinPage() {
     spinningRef.current = true;
     seqRef.current += 1;
     setSpinning(true);
+    playSpin(); // เสียงสุ่ม (spin.mp3) วนลูป
     // วัดตำแหน่งตัวเลขก่อนซูม แล้วเลื่อนให้ตัวเลขมาอยู่กลางจอ
     const wEl = winRef.current;
     const rEl = rowRef.current;
@@ -474,6 +640,7 @@ export default function SpinPage() {
     if (!res || !res.ok) {
       spinningRef.current = false;
       seqRef.current += 1;
+      stopSpin();
       setSpinning(false);
       setZoom(false);
       setDigits(Array(EMP_LEN).fill("-"));
@@ -493,6 +660,7 @@ export default function SpinPage() {
       timersRef.current.push(
         setTimeout(
           () => {
+            playNumber(); // เสียงเลขหยุด (number.mp3) ทุกหลัก
             setDigits((prev) => {
               const n = [...prev];
               n[i] = w.empCode[i] ?? "0";
@@ -515,9 +683,13 @@ export default function SpinPage() {
   function pressSpin() {
     if (spinning || hammer || total === 0) return;
     fxRef.current.forEach(clearTimeout);
+    prepareSpin(); // เตรียมไฟล์เสียงตอนผู้ใช้กด (ผ่านนโยบาย autoplay ของเบราว์เซอร์)
+    prepareVictory();
+    sfx.swing(); // สร้าง/ปลุก AudioContext ตอนผู้ใช้กด + เสียงค้อนเหวี่ยง
     setHammer(true);
     fxRef.current = [
       setTimeout(() => {
+        sfx.hit();
         setQuake(true);
         spin();
       }, HIT_MS),
@@ -580,6 +752,7 @@ export default function SpinPage() {
   const idle = !spinning && !winner;
   const spinLabel = spinning ? "กำลังสุ่ม..." : winner ? "สุ่มรอบถัดไป" : "เริ่มสุ่ม";
   const btnLabel = total === 0 ? "โหลว่างเปล่า" : spinLabel;
+  const latest = winners[0] ?? null; // ผู้ถูกรางวัลล่าสุด (แสดงบนตู้หลังปิดการ์ด)
 
   return (
     <div className={`${shell} pd-room flex flex-col lg:h-screen lg:overflow-hidden`}>
@@ -948,7 +1121,7 @@ export default function SpinPage() {
         .pd-quake { animation: pdQuake 0.85s ease-out 1; }
         .pd-quake-win { animation: pdQuake 1.2s ease-out 1; }
         .pd-key { box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.5), 0 3px 0 rgba(0, 0, 0, 0.45); }
-        /* แผ่นแสดงจำนวนตั๋ว */
+        /* แผ่นแสดงผู้ถูกรางวัลล่าสุด */
         .pd-count-plate {
           background: #2a0a12;
           box-shadow: inset 0 6px 0 rgba(0, 0, 0, 0.45);
@@ -1072,12 +1245,20 @@ export default function SpinPage() {
           background-size: 250% 100%;
           animation: pdGold 2.4s linear infinite;
         }
+        /* รายชื่อผู้ถูกรางวัล: พื้นทองเข้ม ตัวหนังสือสีทอง */
+        .pd-gold-list {
+          background: linear-gradient(110deg, #5e3a00, #8a5a00, #6b4200, #9a6700, #5e3a00, #8a5a00, #6b4200);
+          background-size: 250% 100%;
+          animation: pdGold 3.2s linear infinite;
+        }
+        .pd-gold-text { color: #ffe27a; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55); }
+        .pd-gold-text-sub { color: #ffd54a; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55); }
         .pd-gold-frame.pd-card-out {
           animation: pdGold 2.2s linear infinite, pdGlow 1.4s ease-in-out infinite,
             pdCardFly 0.95s ease-in-out forwards;
         }
         @media (prefers-reduced-motion: reduce) {
-          .pd-gold-card, .pd-row-pop { animation: none; }
+          .pd-gold-card, .pd-gold-list, .pd-row-pop { animation: none; }
           .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-wash::after, .pd-quake, .pd-quake-win, .pd-bokeh-dot { animation: none; }
           .pd-half-l { animation: none; transform: translate(-6px, 12px) rotate(13deg); }
           .pd-half-r { animation: none; transform: translate(6px, 12px) rotate(-13deg); }
@@ -1242,63 +1423,78 @@ export default function SpinPage() {
                         <span className="pd-key h-2.5 w-12 rounded-sm bg-[#ff9a9a] sm:w-16" />
                         <span className="pd-key h-2.5 w-12 rounded-sm bg-[#ffb0e0] sm:w-16" />
                       </div>
-                      {/* ปุ่มสั้นลง อยู่กลางแผง */}
-                      <div className="relative mx-auto w-3/5 min-w-[11rem] max-w-[17rem]">
-                        <button
-                          type="button"
-                          onClick={pressSpin}
-                          disabled={spinning || total === 0}
-                          className={`pd-btn-red relative min-h-14 w-full overflow-hidden rounded-2xl text-lg font-extrabold disabled:cursor-not-allowed sm:min-h-16 sm:text-xl ${
-                            spinning ? "opacity-0" : ""
-                          }`}
-                        >
-                          {btnLabel}
-                        </button>
 
-                        {/* ปุ่มหักเป็น 2 ท่อน (แสดงระหว่างสุ่ม พอสุ่มเสร็จกลับเป็นปุ่มปกติ) */}
-                        {spinning && (
-                          <div aria-hidden className="pointer-events-none absolute inset-0">
-                            <div className="pd-half-wrap pd-half-l">
-                              <div className="pd-half-face text-lg font-extrabold sm:text-xl">{btnLabel}</div>
+                      {/* จำนวนที่เหลือ (ซ้าย) + ปุ่มเริ่มสุ่ม — เว้นระยะกว้างกันชน/ซ้อนกับปุ่ม (รวมตอน hover ขยาย + เงาด้านซ้าย) */}
+                      <div className="flex items-center justify-center gap-8 sm:gap-14">
+                        <div className="pd-oval flex flex-none flex-col items-center rounded-[50%] px-5 py-1.5 sm:min-w-[7.5rem] sm:px-7">
+                          <span className="text-[10px] font-bold tracking-widest text-[#8f0f1a]">เหลือ</span>
+                          <span className="font-mono text-3xl font-extrabold leading-none text-[#e0243c] [text-shadow:0_2px_0_#fff0b0,0_3px_0_#b27d00] sm:text-4xl">
+                            <span aria-hidden className="pd-live mr-1 align-middle text-sm text-green-600">
+                              ●
+                            </span>
+                            {total}
+                          </span>
+                          <span className="text-[10px] font-bold tracking-widest text-[#8f0f1a]">ใบ</span>
+                        </div>
+
+                        <div className="relative min-w-[9rem] max-w-[15rem] flex-1">
+                          <button
+                            type="button"
+                            onClick={pressSpin}
+                            disabled={spinning || total === 0}
+                            className={`pd-btn-red relative min-h-14 w-full overflow-hidden rounded-2xl text-lg font-extrabold disabled:cursor-not-allowed sm:min-h-16 sm:text-xl ${
+                              spinning ? "opacity-0" : ""
+                            }`}
+                          >
+                            {btnLabel}
+                          </button>
+
+                          {/* ปุ่มหักเป็น 2 ท่อน (แสดงระหว่างสุ่ม พอสุ่มเสร็จกลับเป็นปุ่มปกติ) */}
+                          {spinning && (
+                            <div aria-hidden className="pointer-events-none absolute inset-0">
+                              <div className="pd-half-wrap pd-half-l">
+                                <div className="pd-half-face text-lg font-extrabold sm:text-xl">{btnLabel}</div>
+                              </div>
+                              <div className="pd-half-wrap pd-half-r">
+                                <div className="pd-half-face text-lg font-extrabold sm:text-xl">{btnLabel}</div>
+                              </div>
                             </div>
-                            <div className="pd-half-wrap pd-half-r">
-                              <div className="pd-half-face text-lg font-extrabold sm:text-xl">{btnLabel}</div>
+                          )}
+
+                          {/* เศษปุ่มที่แตกกระจายตอนค้อนกระทบ */}
+                          {quake && (
+                            <div aria-hidden className="pointer-events-none absolute inset-0 z-20">
+                              <span className="pd-flash" />
+                              {SHARDS.map((p, i) => (
+                                <span
+                                  key={i}
+                                  className="pd-shard"
+                                  style={
+                                    {
+                                      "--dx": `${p.x}px`,
+                                      "--dy": `${p.y}px`,
+                                      "--dr": `${p.r}deg`,
+                                      width: p.s,
+                                      height: p.s,
+                                      background: i % 2 ? "#ff4b4b" : "#c0262d",
+                                    } as CSSProperties
+                                  }
+                                />
+                              ))}
                             </div>
-                          </div>
-                        )}
+                          )}
 
-                        {/* เศษปุ่มที่แตกกระจายตอนค้อนกระทบ */}
-                        {quake && (
-                          <div aria-hidden className="pointer-events-none absolute inset-0 z-20">
-                            <span className="pd-flash" />
-                            {SHARDS.map((p, i) => (
-                              <span
-                                key={i}
-                                className="pd-shard"
-                                style={
-                                  {
-                                    "--dx": `${p.x}px`,
-                                    "--dy": `${p.y}px`,
-                                    "--dr": `${p.r}deg`,
-                                    width: p.s,
-                                    height: p.s,
-                                    background: i % 2 ? "#ff4b4b" : "#c0262d",
-                                  } as CSSProperties
-                                }
-                              />
-                            ))}
-                          </div>
-                        )}
-
-                        {/* ค้อนทุบปุ่ม */}
-                        {hammer && (
-                          <div aria-hidden className="pd-hammer">
-                            <span className="pd-hammer-loop" />
-                            <span className="pd-hammer-handle" />
-                            <span className="pd-hammer-head" />
-                          </div>
-                        )}
+                          {/* ค้อนทุบปุ่ม */}
+                          {hammer && (
+                            <div aria-hidden className="pd-hammer">
+                              <span className="pd-hammer-loop" />
+                              <span className="pd-hammer-handle" />
+                              <span className="pd-hammer-head" />
+                            </div>
+                          )}
+                        </div>
                       </div>
+
                       <div aria-hidden className="mt-4 flex gap-2">
                         <span className="h-2.5 flex-1 rounded-full bg-[#ff4fc0] shadow-[0_3px_0_#a02d82]" />
                         <span className="h-2.5 flex-1 rounded-full bg-[#ff4fc0] shadow-[0_3px_0_#a02d82]" />
@@ -1308,19 +1504,35 @@ export default function SpinPage() {
                     </div>
                   </div>
 
-                  {/* แผงจำนวนตั๋วคงเหลือ */}
+                  {/* แผงผู้ถูกรางวัลล่าสุด (แสดงหลังปิดการ์ดผู้ถูกรางวัล) */}
                   <div className="pd-gold rounded-[1.6rem] p-1">
-                    <div className="pd-count-plate flex items-center justify-center rounded-[1.4rem] py-3 sm:py-4">
-                      <div className="pd-oval flex min-w-[9rem] flex-col items-center rounded-[50%] px-8 py-2 sm:min-w-[12rem]">
-                        <span className="text-[10px] font-bold tracking-widest text-[#8f0f1a]">เหลือ</span>
-                        <span className="font-mono text-4xl font-extrabold leading-none text-[#e0243c] [text-shadow:0_2px_0_#fff0b0,0_4px_0_#b27d00] sm:text-5xl lg:text-6xl">
-                          <span aria-hidden className="pd-live mr-1.5 align-middle text-base text-green-600">
-                            ●
+                    <div className="pd-count-plate rounded-[1.4rem] p-2 sm:p-2.5">
+                      {latest && !winner ? (
+                        <div
+                          key={latest.code}
+                          className="pd-gold-card pd-row-pop flex items-center gap-4 rounded-[1.1rem] border-2 border-[#fff3b0] px-4 py-3 shadow-[0_4px_0_#b27d00] [text-shadow:0_1px_0_rgba(255,255,255,0.45)] sm:gap-5 sm:px-5 sm:py-4"
+                        >
+                          <span
+                            aria-hidden
+                            className="flex h-16 w-16 flex-none items-center justify-center rounded-full bg-[#e50914] text-3xl font-bold uppercase text-white ring-2 ring-white/80 [text-shadow:none] sm:h-20 sm:w-20 sm:text-4xl"
+                          >
+                            {Array.from(latest.name.trim())[0] ?? "?"}
                           </span>
-                          {total}
-                        </span>
-                        <span className="text-[10px] font-bold tracking-widest text-[#8f0f1a]">ใบ</span>
-                      </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xl font-extrabold text-[#5a3500] sm:text-2xl">{latest.name}</p>
+                            {(latest.company || latest.department) && (
+                              <p className="truncate text-sm font-bold text-[#7a4b00]">
+                                {[latest.company, latest.department].filter(Boolean).join(" · ")}
+                              </p>
+                            )}
+                            <p className="font-mono text-sm font-semibold text-[#7a4b00]">{latest.empCode}</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="rounded-2xl border border-dashed border-white/20 py-5 text-center text-sm text-white/50">
+                          {winner ? "กำลังประกาศผล..." : "ยังไม่มีผู้ถูกรางวัล"}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -1426,7 +1638,7 @@ export default function SpinPage() {
                   ยังไม่มีผู้ถูกรางวัล
                 </p>
               ) : (
-                <ul className="pd-noscroll pd-gold-card mt-3 max-h-[28rem] min-h-0 flex-1 divide-y divide-[#8a5a00]/25 overflow-y-auto rounded-2xl border-2 border-[#fff3b0] shadow-[0_5px_0_#b27d00] lg:max-h-none">
+                <ul className="pd-noscroll pd-gold-list mt-3 max-h-[28rem] min-h-0 flex-1 divide-y divide-[#ffd54a]/25 overflow-y-auto rounded-2xl border-2 border-[#d9a516] shadow-[0_5px_0_#4a2c00] lg:max-h-none">
                   {winners.map((w, i) => (
                     <li
                       key={w.code}
@@ -1435,12 +1647,12 @@ export default function SpinPage() {
                       }`}
                     >
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-extrabold text-[#5a3500]">
+                        <p className="pd-gold-text truncate text-sm font-extrabold">
                           {winners.length - i}. {w.name}
                         </p>
-                        <p className="font-mono text-xs font-semibold text-[#7a4b00]">{w.empCode}</p>
+                        <p className="pd-gold-text-sub font-mono text-xs font-semibold">{w.empCode}</p>
                       </div>
-                      <p className="shrink-0 text-xs font-semibold text-[#7a4b00]">{fmt(w.wonAt)}</p>
+                      <p className="pd-gold-text-sub shrink-0 text-xs font-semibold">{fmt(w.wonAt)}</p>
                     </li>
                   ))}
                 </ul>
@@ -1455,36 +1667,40 @@ export default function SpinPage() {
         <section
           ref={winnerCardRef}
           aria-label="ผู้ถูกรางวัล"
-          className={`pd-gold-frame fixed inset-x-3 bottom-4 z-[46] mx-auto max-w-2xl rounded-[2rem] p-1.5 sm:bottom-6 ${
+          className={`pd-gold-frame fixed inset-x-3 bottom-4 z-[46] mx-auto max-w-md rounded-[1.6rem] p-1.5 sm:bottom-6 ${
             winnerClosing ? "pd-card-out" : ""
           }`}
         >
-          <div className="pd-gold-card relative rounded-[1.7rem] px-5 py-8 text-center [text-shadow:0_1px_0_rgba(255,255,255,0.45)] sm:px-8 sm:py-10">
+          <div className="pd-gold-card relative rounded-[1.3rem] px-4 pb-4 pt-3 [text-shadow:0_1px_0_rgba(255,255,255,0.45)] sm:px-5 sm:pb-5">
             <button
               type="button"
               onClick={closeWinner}
               disabled={winnerClosing}
-              className="absolute right-4 top-4 min-h-9 rounded-full border-2 border-[#6b4200]/60 bg-white/30 px-4 text-sm font-bold text-[#5a3500]"
+              className="absolute right-3 top-3 min-h-8 rounded-full border-2 border-[#6b4200]/60 bg-white/30 px-3 text-xs font-bold text-[#5a3500] sm:text-sm"
             >
               ปิด
             </button>
-            <p className="text-sm font-extrabold tracking-widest text-[#7a4b00] sm:text-base">ยินดีด้วย! ผู้ถูกรางวัล</p>
-            <span
-              aria-hidden
-              className="mx-auto mt-4 flex h-28 w-28 items-center justify-center rounded-full bg-[#e50914] text-6xl font-bold uppercase text-white ring-4 ring-white/80 [text-shadow:none] md:h-36 md:w-36 md:text-7xl"
-            >
-              {Array.from(winner.name.trim())[0] ?? "?"}
-            </span>
-            <p className="mt-4 break-words text-4xl font-extrabold text-[#5a3500] md:text-6xl">{winner.name}</p>
-            {(winner.company || winner.department) && (
-              <p className="mt-3 break-words text-base font-bold text-[#7a4b00] md:text-xl">
-                {[winner.company, winner.department].filter(Boolean).join(" · ")}
-              </p>
-            )}
-            <p className="mt-3 text-base font-semibold text-[#7a4b00] md:text-lg">
-              รหัสพนักงาน <span className="font-mono font-extrabold text-[#5a3500]">{winner.empCode}</span>
-            </p>
-            <p className="mt-1 break-all font-mono text-xs text-[#7a4b00]/70">{winner.code}</p>
+            <p className="pr-14 text-xs font-extrabold tracking-widest text-[#7a4b00] sm:text-sm">ยินดีด้วย! ผู้ถูกรางวัล</p>
+            <div className="mt-3 flex items-center gap-4">
+              <span
+                aria-hidden
+                className="flex h-16 w-16 flex-none items-center justify-center rounded-full bg-[#e50914] text-4xl font-bold uppercase text-white ring-4 ring-white/80 [text-shadow:none] sm:h-20 sm:w-20 sm:text-5xl"
+              >
+                {Array.from(winner.name.trim())[0] ?? "?"}
+              </span>
+              <div className="min-w-0 flex-1 text-left">
+                <p className="break-words text-2xl font-extrabold leading-tight text-[#5a3500] sm:text-3xl">{winner.name}</p>
+                {(winner.company || winner.department) && (
+                  <p className="mt-1 break-words text-sm font-bold text-[#7a4b00] sm:text-base">
+                    {[winner.company, winner.department].filter(Boolean).join(" · ")}
+                  </p>
+                )}
+                <p className="mt-1 text-sm font-semibold text-[#7a4b00]">
+                  รหัสพนักงาน <span className="font-mono font-extrabold text-[#5a3500]">{winner.empCode}</span>
+                </p>
+                <p className="mt-0.5 break-all font-mono text-[10px] text-[#7a4b00]/70">{winner.code}</p>
+              </div>
+            </div>
           </div>
         </section>
       )}
