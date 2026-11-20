@@ -13,6 +13,10 @@ const ZOOM_CENTER_Y = 0.6; // ตอนซูม ตัวเลขอยู่�
 const STEP_MS = 2000; // ระยะห่างระหว่างการหยุดแต่ละหลัก (รอ 2 วิก่อนแสดงเลขถัดไป)
 const POLL_MS = 3000; // รีเฟรชโหลสด: ตั๋วที่ admin เพิ่งอนุมัติจะหล่นเข้าโหลเอง
 const BULBS = 22; // จำนวนหลอดไฟประดับตู้
+const WIN_BULBS_X = 16; // จำนวนหลอดไฟขอบบน/ล่างของการ์ดผู้ถูกรางวัล
+const WIN_BULBS_Y = 6; // จำนวนหลอดไฟขอบซ้าย/ขวาของการ์ดผู้ถูกรางวัล
+const CURSOR_HIDE_MS = 5000; // ไม่ขยับเมาส์กี่ ms แล้วซ่อนเมาส์
+const LOGO_SRC = "/img/logo.png"; // โลโก้ที่แปะเป็นเทปบนหัวตู้และโหลตั๋ว
 const STRIP = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; // แถบตัวเลขที่เลื่อนวนในแต่ละหลัก
 
 const HIT_MS = 380; // เวลาที่ค้อนกระทบปุ่ม (ต้องตรงกับ keyframes pdHammer ที่ 38%)
@@ -60,12 +64,58 @@ type Winner = {
   wonAt: string | null;
   company: string | null; // บริษัทที่เลือกตอนสมัคร (บัญชีเก่า = null)
   department: string | null; // แผนก (สำนักงานใหญ่) หรือสาขา (หน้าร้าน)
+  userId: string | null; // ไอดีผู้ใช้ ใช้ดึงรูปโปรไฟล์จาก /api/avatar/[id]
+  avatarAt: string | null; // เวลาที่อัปโหลดรูปโปรไฟล์ (null = ไม่มีรูป)
 };
 // เข้าด้วยรหัสผ่าน admin อย่างเดียว (ไม่ต้อง login บัญชีผู้ใช้) ใช้ cookie ปลดล็อกเดียวกับหน้า /admin
 type Gate = "loading" | "ok" | "locked";
 
 const fmt = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "-";
+
+// รูปโปรไฟล์ผู้ถูกรางวัล: มีรูปแสดงรูป / ไม่มีหรือโหลดไม่ได้ แสดงตัวอักษรแรกของชื่อ
+// className = ขนาด + ขนาดตัวอักษร + ring
+function WinnerAvatar({ w, className }: { w: Winner; className: string }) {
+  const [failed, setFailed] = useState(false);
+  const src = w.userId && w.avatarAt ? `/api/avatar/${w.userId}?v=${encodeURIComponent(w.avatarAt)}` : "";
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (src && !failed) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        alt=""
+        aria-hidden
+        onError={() => setFailed(true)}
+        className={`block flex-none rounded-full bg-[#2a2a2a] object-cover ${className}`}
+      />
+    );
+  }
+  return (
+    <span
+      aria-hidden
+      className={`flex flex-none items-center justify-center rounded-full bg-[#e50914] font-bold uppercase text-white [text-shadow:none] ${className}`}
+    >
+      {Array.from(w.name.trim())[0] ?? "?"}
+    </span>
+  );
+}
+
+// โลโก้แปะเป็นเทปที่มุม (className = ตำแหน่ง/การหมุน)
+function LogoTape({ className, imgClassName }: { className: string; imgClassName: string }) {
+  return (
+    <div aria-hidden className={`pd-tape pointer-events-none absolute z-20 ${className}`}>
+      <div className="pd-tape-in">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={LOGO_SRC} alt="" draggable={false} className={`block w-auto object-contain ${imgClassName}`} />
+      </div>
+    </div>
+  );
+}
 
 // ค่าสุ่มคงที่ต่อรหัสตั๋ว (ตั๋วแต่ละใบอยู่ตำแหน่งเดิมทุกครั้งที่วาดใหม่)
 function hash(s: string) {
@@ -364,6 +414,26 @@ export default function SpinPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // ไม่ขยับเมาส์ CURSOR_HIDE_MS แล้วซ่อนเมาส์ (ขยับเมื่อไหร่โผล่กลับมา)
+  useEffect(() => {
+    const cls = "pd-nocursor";
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => {
+      document.body.classList.remove(cls);
+      if (t) clearTimeout(t);
+      t = setTimeout(() => document.body.classList.add(cls), CURSOR_HIDE_MS);
+    };
+    arm();
+    window.addEventListener("mousemove", arm);
+    window.addEventListener("mousedown", arm);
+    return () => {
+      window.removeEventListener("mousemove", arm);
+      window.removeEventListener("mousedown", arm);
+      if (t) clearTimeout(t);
+      document.body.classList.remove(cls);
+    };
   }, []);
 
   async function unlock(e: FormEvent) {
@@ -698,6 +768,36 @@ export default function SpinPage() {
     ];
   }
 
+  // กด Space: ยังไม่มีผู้ถูกรางวัล = เริ่มสุ่ม / ผลออกแล้ว = ปิดการ์ดผู้ถูกรางวัล (พิธีกรไม่ต้องแตะเมาส์)
+  // (ไม่ใส่ deps เพื่อให้ได้ state ล่าสุดทุกครั้งที่เรนเดอร์)
+  useEffect(() => {
+    const isTyping = (el: HTMLElement | null) =>
+      !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isTyping(e.target as HTMLElement | null)) return;
+      e.preventDefault(); // กันหน้าเลื่อน / กันปุ่มที่โฟกัสอยู่ถูกกดซ้ำ
+      if (e.repeat || gate !== "ok") return;
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      if (winner && !spinning) {
+        if (!winnerClosing) closeWinner();
+      } else if (!winner && !spinning) {
+        pressSpin();
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || isTyping(e.target as HTMLElement | null)) return;
+      e.preventDefault(); // Firefox กดปุ่มด้วย Space ตอนปล่อยปุ่ม
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  });
+
   // แสดงตั๋วล่าสุด SHOW_MAX ใบ (ตั๋วที่เพิ่งเข้าโหลอยู่ท้ายรายการ จึงเห็นตอนหล่นลงมา)
   const shown = useMemo(() => pool.slice(-SHOW_MAX), [pool]);
 
@@ -808,6 +908,10 @@ export default function SpinPage() {
         }
 
         .pd-room { background-color: #10131c; --pd-side: #172848; }
+
+        /* ซ่อนเมาส์เมื่อไม่ขยับเกิน 5 วินาที (ใส่ class ที่ body) */
+        .pd-nocursor,
+        .pd-nocursor * { cursor: none !important; }
 
         /* ===== พื้นหลังเบลอ: ไฟร้านอาหารด้านหลัง (อยู่หลังทุกส่วน คลิกทะลุได้) ===== */
         .pd-bokeh {
@@ -1142,6 +1246,15 @@ export default function SpinPage() {
           background: rgba(255, 255, 255, 0.06);
           box-shadow: 0 8px 0 rgba(255, 255, 255, 0.14);
         }
+        /* โลโก้แปะเป็นเทป (ขอบหยักซ้าย/ขวา เหมือนเทปกระดาษ) */
+        .pd-tape {
+          filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.45));
+        }
+        .pd-tape-in {
+          padding: 5px 16px;
+          background: linear-gradient(180deg, rgba(255, 251, 232, 0.94), rgba(240, 228, 190, 0.92));
+          clip-path: polygon(0 0, 4% 12%, 0 25%, 4% 38%, 0 50%, 4% 62%, 0 75%, 4% 88%, 0 100%, 100% 100%, 96% 88%, 100% 75%, 96% 62%, 100% 50%, 96% 38%, 100% 25%, 96% 12%, 100% 0);
+        }
         /* ไฟกลมใต้หน้าต่างเลข */
         .pd-lamp {
           animation: pdLamp 1.2s steps(1) infinite;
@@ -1326,7 +1439,7 @@ export default function SpinPage() {
               >
                 {/* ===== หัวตู้: ป้ายโค้ง + หลอดไฟ ===== */}
                 <div className="pd-gold pd-crown rounded-b-xl rounded-t-[2.8rem] p-1.5">
-                  <div className="pd-marquee rounded-b-lg rounded-t-[2.4rem] px-3 pb-3 pt-3 text-center">
+                  <div className="pd-marquee relative rounded-b-lg rounded-t-[2.4rem] px-3 pb-3 pt-3 text-center">
                     <div aria-hidden className="flex justify-between px-2">
                       {Array.from({ length: BULBS }).map((_, i) => (
                         <span
@@ -1342,6 +1455,9 @@ export default function SpinPage() {
                     <div className="pd-plate-green mx-auto mt-2 w-fit rounded-full border-2 border-[#ffd54a] px-6 py-0.5 text-xs font-extrabold tracking-[0.3em] text-[#fff6c9] sm:text-sm">
                       ลุ้นของรางวัล
                     </div>
+
+                    {/* โลโก้แปะเป็นเทปที่มุมป้าย */}
+                    <LogoTape className="-right-2 top-7 rotate-[9deg] sm:-right-3 sm:top-9" imgClassName="h-7 sm:h-9 lg:h-11" />
                   </div>
                 </div>
 
@@ -1512,12 +1628,10 @@ export default function SpinPage() {
                           key={latest.code}
                           className="pd-gold-card pd-row-pop flex items-center gap-4 rounded-[1.1rem] border-2 border-[#fff3b0] px-4 py-3 shadow-[0_4px_0_#b27d00] [text-shadow:0_1px_0_rgba(255,255,255,0.45)] sm:gap-5 sm:px-5 sm:py-4"
                         >
-                          <span
-                            aria-hidden
-                            className="flex h-16 w-16 flex-none items-center justify-center rounded-full bg-[#e50914] text-3xl font-bold uppercase text-white ring-2 ring-white/80 [text-shadow:none] sm:h-20 sm:w-20 sm:text-4xl"
-                          >
-                            {Array.from(latest.name.trim())[0] ?? "?"}
-                          </span>
+                          <WinnerAvatar
+                            w={latest}
+                            className="h-16 w-16 text-3xl ring-2 ring-white/80 sm:h-20 sm:w-20 sm:text-4xl"
+                          />
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-xl font-extrabold text-[#5a3500] sm:text-2xl">{latest.name}</p>
                             {(latest.company || latest.department) && (
@@ -1547,7 +1661,7 @@ export default function SpinPage() {
                   {idle && (
                     <p className="text-center text-[11px] text-white/80 sm:text-xs">
                       กดปุ่ม{`"เริ่มสุ่ม"`}
-                      <span className="hidden md:inline"> หรือดึงคันโยกด้านขวา</span> เพื่อสุ่มผู้ถูกรางวัล
+                      <span className="hidden md:inline"> หรือดึงคันโยกด้านขวา</span> หรือกด Space เพื่อสุ่มผู้ถูกรางวัล
                     </p>
                   )}
                 </div>
@@ -1584,49 +1698,54 @@ export default function SpinPage() {
             {/* ===== โหลตั๋ว ===== */}
             <section aria-label="โหลตั๋ว Lucky Draw" className="flex flex-none flex-col items-center">
               <div className="pd-gold h-4 w-40 rounded-t-xl sm:w-52" />
-              <div className="pd-jar relative h-64 w-full max-w-lg overflow-hidden rounded-b-[3rem] rounded-t-2xl border-4 border-white/30 lg:h-[36vh] lg:min-h-[15rem]">
-                {shown.map((t) => {
-                  const s = ticketStyle(t.code);
-                  // ตั๋วที่อยู่ตั้งแต่เปิดหน้า: หล่นตามจังหวะสุ่ม / ตั๋วที่เพิ่งเข้าโหล (admin เพิ่งอนุมัติ): หล่นทันที
-                  const delay = initialRef.current?.has(t.code) ? s.delay : 0;
-                  return (
-                    <div
-                      key={t.code}
-                      className="absolute flex h-8 w-14 flex-col items-center justify-center rounded-md pd-ticket border border-dashed border-white/50 bg-[#6b1d24] text-[8px] font-bold leading-tight text-white"
-                      style={
-                        {
-                          left: `${s.left}%`,
-                          bottom: `${s.bottom}%`,
-                          "--rot": `${s.rot}deg`,
-                          animation: `pdDrop ${s.dur}s cubic-bezier(.3,1.2,.5,1) ${delay}s both`,
-                        } as CSSProperties
-                      }
-                    >
-                      <span className="tracking-widest">LUCKY</span>
-                      <span className="font-mono text-[7px] opacity-80">{t.empCode}</span>
-                    </div>
-                  );
-                })}
-                {total === 0 && (
-                  <p className="absolute inset-0 flex items-center justify-center text-sm text-white/50">โหลว่างเปล่า</p>
-                )}
-                {/* แสงสะท้อนบนแก้วโหล */}
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute bottom-14 left-3 top-4 w-3 rounded-full bg-white/15 blur-[1px]"
-                />
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute bottom-20 left-8 top-10 w-1 rounded-full bg-white/10"
-                />
-                <div className="pointer-events-none absolute inset-x-0 bottom-3 text-center">
-                  <span className="rounded-full bg-black/60 px-4 py-1.5 text-sm font-bold">
-                    <span aria-hidden className="pd-live mr-1.5 text-green-400">
-                      ●
+              <div className="relative w-full max-w-lg">
+                <div className="pd-jar relative h-64 w-full overflow-hidden rounded-b-[3rem] rounded-t-2xl border-4 border-white/30 lg:h-[36vh] lg:min-h-[15rem]">
+                  {shown.map((t) => {
+                    const s = ticketStyle(t.code);
+                    // ตั๋วที่อยู่ตั้งแต่เปิดหน้า: หล่นตามจังหวะสุ่ม / ตั๋วที่เพิ่งเข้าโหล (admin เพิ่งอนุมัติ): หล่นทันที
+                    const delay = initialRef.current?.has(t.code) ? s.delay : 0;
+                    return (
+                      <div
+                        key={t.code}
+                        className="absolute flex h-8 w-14 flex-col items-center justify-center rounded-md pd-ticket border border-dashed border-white/50 bg-[#6b1d24] text-[8px] font-bold leading-tight text-white"
+                        style={
+                          {
+                            left: `${s.left}%`,
+                            bottom: `${s.bottom}%`,
+                            "--rot": `${s.rot}deg`,
+                            animation: `pdDrop ${s.dur}s cubic-bezier(.3,1.2,.5,1) ${delay}s both`,
+                          } as CSSProperties
+                        }
+                      >
+                        <span className="tracking-widest">LUCKY</span>
+                        <span className="font-mono text-[7px] opacity-80">{t.empCode}</span>
+                      </div>
+                    );
+                  })}
+                  {total === 0 && (
+                    <p className="absolute inset-0 flex items-center justify-center text-sm text-white/50">โหลว่างเปล่า</p>
+                  )}
+                  {/* แสงสะท้อนบนแก้วโหล */}
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute bottom-14 left-3 top-4 w-3 rounded-full bg-white/15 blur-[1px]"
+                  />
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute bottom-20 left-8 top-10 w-1 rounded-full bg-white/10"
+                  />
+                  <div className="pointer-events-none absolute inset-x-0 bottom-3 text-center">
+                    <span className="rounded-full bg-black/60 px-4 py-1.5 text-sm font-bold">
+                      <span aria-hidden className="pd-live mr-1.5 text-green-400">
+                        ●
+                      </span>
+                      เหลือ {total} ใบ
                     </span>
-                    เหลือ {total} ใบ
-                  </span>
+                  </div>
                 </div>
+
+                {/* โลโก้แปะเป็นเทปที่มุมโหลตั๋ว (อยู่นอก overflow-hidden ของโหล จะได้ไม่โดนตัด) */}
+                <LogoTape className="-right-3 top-3 rotate-[10deg]" imgClassName="h-8 sm:h-10" />
               </div>
             </section>
 
@@ -1642,15 +1761,21 @@ export default function SpinPage() {
                   {winners.map((w, i) => (
                     <li
                       key={w.code}
-                      className={`flex items-center justify-between gap-3 px-4 py-3 ${
+                      className={`flex items-center gap-3 px-4 py-3 ${
                         w.code === hiddenCode ? "invisible" : w.code === popCode ? "pd-row-pop" : ""
                       }`}
                     >
-                      <div className="min-w-0">
+                      <WinnerAvatar w={w} className="h-12 w-12 text-xl ring-2 ring-[#ffd54a]/70" />
+                      <div className="min-w-0 flex-1">
                         <p className="pd-gold-text truncate text-sm font-extrabold">
                           {winners.length - i}. {w.name}
                         </p>
-                        <p className="pd-gold-text-sub font-mono text-xs font-semibold">{w.empCode}</p>
+                        {(w.company || w.department) && (
+                          <p className="pd-gold-text-sub truncate text-xs font-semibold">
+                            {[w.company, w.department].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
+                        <p className="pd-gold-text-sub font-mono text-xs font-semibold">รหัส {w.empCode}</p>
                       </div>
                       <p className="pd-gold-text-sub shrink-0 text-xs font-semibold">{fmt(w.wonAt)}</p>
                     </li>
@@ -1662,44 +1787,91 @@ export default function SpinPage() {
         </div>
       </main>
 
-      {/* ===== ผู้ถูกรางวัล (การ์ดลอยเหนือหน้า เลื่อนขึ้นจากด้านล่าง กดปิดแล้วเลื่อนลง) ===== */}
+      {/* ===== ผู้ถูกรางวัล (การ์ดลอยเหนือหน้า เลื่อนขึ้นจากด้านล่าง กด Space หรือปุ่มปิดแล้วเลื่อนลง) ===== */}
       {winner && !spinning && (
         <section
           ref={winnerCardRef}
           aria-label="ผู้ถูกรางวัล"
-          className={`pd-gold-frame fixed inset-x-3 bottom-4 z-[46] mx-auto max-w-md rounded-[1.6rem] p-1.5 sm:bottom-6 ${
+          className={`pd-gold-frame fixed inset-x-3 bottom-4 z-[46] mx-auto max-w-3xl rounded-[2rem] p-1.5 sm:bottom-6 ${
             winnerClosing ? "pd-card-out" : ""
           }`}
         >
-          <div className="pd-gold-card relative rounded-[1.3rem] px-4 pb-4 pt-3 [text-shadow:0_1px_0_rgba(255,255,255,0.45)] sm:px-5 sm:pb-5">
-            <button
-              type="button"
-              onClick={closeWinner}
-              disabled={winnerClosing}
-              className="absolute right-3 top-3 min-h-8 rounded-full border-2 border-[#6b4200]/60 bg-white/30 px-3 text-xs font-bold text-[#5a3500] sm:text-sm"
-            >
-              ปิด
-            </button>
-            <p className="pr-14 text-xs font-extrabold tracking-widest text-[#7a4b00] sm:text-sm">ยินดีด้วย! ผู้ถูกรางวัล</p>
-            <div className="mt-3 flex items-center gap-4">
-              <span
-                aria-hidden
-                className="flex h-16 w-16 flex-none items-center justify-center rounded-full bg-[#e50914] text-4xl font-bold uppercase text-white ring-4 ring-white/80 [text-shadow:none] sm:h-20 sm:w-20 sm:text-5xl"
-              >
-                {Array.from(winner.name.trim())[0] ?? "?"}
-              </span>
-              <div className="min-w-0 flex-1 text-left">
-                <p className="break-words text-2xl font-extrabold leading-tight text-[#5a3500] sm:text-3xl">{winner.name}</p>
-                {(winner.company || winner.department) && (
-                  <p className="mt-1 break-words text-sm font-bold text-[#7a4b00] sm:text-base">
-                    {[winner.company, winner.department].filter(Boolean).join(" · ")}
-                  </p>
-                )}
-                <p className="mt-1 text-sm font-semibold text-[#7a4b00]">
-                  รหัสพนักงาน <span className="font-mono font-extrabold text-[#5a3500]">{winner.empCode}</span>
-                </p>
-                <p className="mt-0.5 break-all font-mono text-[10px] text-[#7a4b00]/70">{winner.code}</p>
+          {/* ป้ายไฟรอบการ์ด (ดวงไฟกระพริบแบบเดียวกับหัวตู้) */}
+          <div className="pd-marquee rounded-[1.7rem] px-3 py-3 sm:px-4 sm:py-4">
+            <div aria-hidden className="flex justify-between px-2">
+              {Array.from({ length: WIN_BULBS_X }).map((_, i) => (
+                <span
+                  key={i}
+                  className="pd-bulb pd-bulb-fast h-2.5 w-2.5 rounded-full sm:h-3 sm:w-3"
+                  style={{ animationDelay: i % 2 ? "0s" : "-0.14s" }}
+                />
+              ))}
+            </div>
+
+            <div className="my-2.5 flex items-stretch gap-2.5 sm:my-3 sm:gap-3">
+              <div aria-hidden className="flex flex-col justify-between py-1">
+                {Array.from({ length: WIN_BULBS_Y }).map((_, i) => (
+                  <span
+                    key={i}
+                    className="pd-bulb pd-bulb-fast h-2.5 w-2.5 rounded-full sm:h-3 sm:w-3"
+                    style={{ animationDelay: i % 2 ? "0s" : "-0.14s" }}
+                  />
+                ))}
               </div>
+
+              <div className="pd-gold-card relative min-w-0 flex-1 rounded-[1.3rem] px-4 pb-5 pt-4 [text-shadow:0_1px_0_rgba(255,255,255,0.45)] sm:px-6 sm:pb-6 sm:pt-5">
+                <button
+                  type="button"
+                  onClick={closeWinner}
+                  disabled={winnerClosing}
+                  className="absolute right-3 top-3 min-h-9 rounded-full border-2 border-[#6b4200]/60 bg-white/30 px-4 text-xs font-bold text-[#5a3500] sm:text-sm"
+                >
+                  ปิด (Space)
+                </button>
+                <p className="pr-28 text-sm font-extrabold tracking-widest text-[#7a4b00] sm:text-base">
+                  ยินดีด้วย! ผู้ถูกรางวัล
+                </p>
+                <div className="mt-4 flex items-center gap-5 sm:gap-7">
+                  <WinnerAvatar
+                    w={winner}
+                    className="h-24 w-24 text-5xl ring-4 ring-white/80 sm:h-36 sm:w-36 sm:text-7xl"
+                  />
+                  <div className="min-w-0 flex-1 text-left">
+                    <p className="break-words text-3xl font-extrabold leading-tight text-[#5a3500] sm:text-5xl">
+                      {winner.name}
+                    </p>
+                    {(winner.company || winner.department) && (
+                      <p className="mt-1.5 break-words text-base font-bold text-[#7a4b00] sm:text-xl">
+                        {[winner.company, winner.department].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
+                    <p className="mt-1.5 text-base font-semibold text-[#7a4b00] sm:text-xl">
+                      รหัสพนักงาน <span className="font-mono font-extrabold text-[#5a3500]">{winner.empCode}</span>
+                    </p>
+                    <p className="mt-0.5 break-all font-mono text-xs text-[#7a4b00]/70">{winner.code}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div aria-hidden className="flex flex-col justify-between py-1">
+                {Array.from({ length: WIN_BULBS_Y }).map((_, i) => (
+                  <span
+                    key={i}
+                    className="pd-bulb pd-bulb-fast h-2.5 w-2.5 rounded-full sm:h-3 sm:w-3"
+                    style={{ animationDelay: i % 2 ? "-0.14s" : "0s" }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            <div aria-hidden className="flex justify-between px-2">
+              {Array.from({ length: WIN_BULBS_X }).map((_, i) => (
+                <span
+                  key={i}
+                  className="pd-bulb pd-bulb-fast h-2.5 w-2.5 rounded-full sm:h-3 sm:w-3"
+                  style={{ animationDelay: i % 2 ? "-0.14s" : "0s" }}
+                />
+              ))}
             </div>
           </div>
         </section>

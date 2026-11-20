@@ -319,9 +319,56 @@ const IconTrash = ({ className }: IconProps) => (
     <path d="M9 7V4h6v3" />
   </Icon>
 );
+const IconCamera = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+    <circle cx="12" cy="13" r="3.5" />
+  </Icon>
+);
 
 const iconOf = (id: TicketId, className?: string) =>
   id === "booth" ? <IconTicket className={className} /> : <IconGift className={className} />;
+
+// รูปโปรไฟล์วงกลม: มีรูป (user.avatarAt) แสดงรูปจาก /api/avatar/[id] / ไม่มีหรือโหลดไม่ได้ แสดงตัวอักษรย่อ
+// className = ขนาด + ขนาดตัวอักษร (เช่น "h-8 w-8 text-sm") / fallbackCls = สีพื้นและตัวอักษรของวงกลมตัวอักษรย่อ
+function Avatar({
+  user,
+  className = "h-10 w-10 text-base",
+  fallbackCls = "bg-[#e50914] text-white",
+}: {
+  user: User;
+  className?: string;
+  fallbackCls?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const src = user.avatarAt ? `/api/avatar/${user.id}?v=${encodeURIComponent(user.avatarAt)}` : "";
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (src && !failed) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        alt=""
+        aria-hidden
+        onError={() => setFailed(true)}
+        className={`block shrink-0 rounded-full bg-[#2a2a2a] object-cover ${className}`}
+      />
+    );
+  }
+  const letter = Array.from((user.name || user.username).trim())[0] ?? "?";
+  return (
+    <span
+      aria-hidden
+      className={`flex shrink-0 items-center justify-center rounded-full font-bold uppercase ${className} ${fallbackCls}`}
+    >
+      {letter}
+    </span>
+  );
+}
 
 // บาร์โค้ด Code128 จริง (เจ้าหน้าที่ยิงด้วยกล้องที่หน้า /ticket ได้) วาดเป็น SVG สีตามตัวหนังสือของตั๋ว
 // มีพื้นที่ว่างซ้ายขวาในตัว ต้องวางบนพื้นสีอ่อน (ตั๋วใช้พื้นขาว)
@@ -886,13 +933,11 @@ function TopNav({
                   : "border-white/10 bg-[#1f1f1f] text-white hover:bg-white/10"
               }`}
             >
-              <span
-                className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold uppercase ${
-                  view === "profile" ? "bg-white text-[#e50914]" : "bg-[#e50914] text-white"
-                }`}
-              >
-                {(user.name || user.username).charAt(0)}
-              </span>
+              <Avatar
+                user={user}
+                className="h-8 w-8 text-sm"
+                fallbackCls={view === "profile" ? "bg-white text-[#e50914]" : "bg-[#e50914] text-white"}
+              />
               <span className="max-w-[10rem] truncate">{user.name}</span>
             </button>
           )}
@@ -1250,6 +1295,11 @@ export default function Home() {
   const [accBusy, setAccBusy] = useState(false);
   const [returnToPay, setReturnToPay] = useState(false); // ถูกส่งมากรอกรหัสพนักงานจากการกดชำระเงิน: บันทึกแล้วกลับไปหน้าชำระเงิน
 
+  // รูปโปรไฟล์ (เก็บใน Google Drive โฟลเดอร์ profile ผ่าน /api/profile/avatar)
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState("");
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
   // ตั๋วของฉัน (แท็บ "ready" = ตั๋วทั้งหมดที่ได้รับ ทั้งที่ยังไม่ใช้และใช้แล้ว / "status" = รายการโอนเงินที่ค้างอยู่)
   const [tab, setTab] = useState<"ready" | "status">("ready");
   const [sheet, setSheet] = useState<TicketId | null>(null);
@@ -1411,8 +1461,11 @@ export default function Home() {
   }
 
   // LoginForm / RegisterForm เรียกตอนสำเร็จ: เก็บ user โหลดตั๋ว แล้วเด้งกลับหน้าที่ต้องการ
+  // ดึง user จาก /api/auth/me อีกครั้ง เพื่อให้ได้ข้อมูลรูปโปรไฟล์ครบ (ผล login/register อาจไม่มี avatarAt)
   async function handleAuthed(u: User) {
     applyUser(u);
+    const me = await api<{ user: User | null }>("/api/auth/me");
+    if (me.ok && me.data.user) applyUser(me.data.user);
     const o = await api<{ orders: Order[] }>("/api/orders");
     if (o.ok) setOrders(o.data.orders);
     go(afterAuth);
@@ -1430,6 +1483,7 @@ export default function Home() {
     setAccEmp("");
     setAccSaved(false);
     setAccError("");
+    setAvatarError("");
     setSheet(null);
     setBarcodeCode(null);
     go("home");
@@ -1589,6 +1643,55 @@ export default function Home() {
       setPayPhone(r.data.user.phone);
       go("pay");
     }
+  }
+
+  // อัปโหลดรูปโปรไฟล์: ย่อรูปใหญ่ก่อนส่ง เซิร์ฟเวอร์ครอปจัตุรัส 512×512 แล้วเก็บลง Drive โฟลเดอร์ profile
+  async function uploadAvatarFile(file: File) {
+    if (avatarBusy) return;
+    setAvatarError("");
+    if (!file.type.startsWith("image/")) {
+      setAvatarError("เลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setAvatarError("รูปใหญ่เกินไป เลือกรูปอื่น");
+      return;
+    }
+    setAvatarBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("avatar", await shrinkImage(file));
+      const res = await fetch("/api/profile/avatar", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        needLogin("profile");
+        return;
+      }
+      if (!res.ok) {
+        setAvatarError(data.error ?? "อัปโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
+        return;
+      }
+      setUser((prev) => (prev ? { ...prev, avatarAt: data.avatarAt as string } : prev));
+    } catch {
+      setAvatarError("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
+  // ลบรูปโปรไฟล์ กลับไปใช้ตัวอักษรย่อ
+  async function removeAvatar() {
+    if (avatarBusy) return;
+    setAvatarBusy(true);
+    setAvatarError("");
+    const r = await api("/api/profile/avatar", "DELETE");
+    setAvatarBusy(false);
+    if (!r.ok) {
+      if (r.status === 401) return needLogin("profile");
+      setAvatarError(r.error);
+      return;
+    }
+    setUser((prev) => (prev ? { ...prev, avatarAt: null } : prev));
   }
 
   // โปรไฟล์: มีอะไรเปลี่ยนจากข้อมูลบัญชีไหม (ใช้เปิดปุ่มบันทึก / ยกเลิก)
@@ -1825,9 +1928,9 @@ export default function Home() {
                     type="button"
                     onClick={() => go("profile")}
                     aria-label="โปรไฟล์"
-                    className="flex h-11 w-11 items-center justify-center rounded-full bg-[#e50914] text-base font-bold uppercase text-white ring-2 ring-white/20 transition active:scale-95"
+                    className="rounded-full ring-2 ring-white/20 transition active:scale-95"
                   >
-                    {(user.name || user.username).charAt(0)}
+                    <Avatar user={user} className="h-11 w-11 text-base" />
                   </button>
                 ) : (
                   <button
@@ -2468,12 +2571,53 @@ export default function Home() {
             ) : (
               <div className="md:mt-6 md:grid md:grid-cols-[18rem_minmax(0,1fr)] md:items-start md:gap-6">
                 <div className="mt-6 flex flex-col items-center rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center text-white md:col-start-1 md:row-start-1 md:mt-0">
-                  <span
-                    aria-hidden
-                    className="flex h-44 w-44 shrink-0 items-center justify-center rounded-full bg-[#e50914] text-7xl font-bold uppercase text-white md:h-56 md:w-56 md:text-8xl"
-                  >
-                    {Array.from((user.name || user.username).trim())[0] ?? "?"}
-                  </span>
+                  <div className="relative">
+                    <Avatar user={user} className="h-44 w-44 text-7xl md:h-56 md:w-56 md:text-8xl" />
+                    {avatarBusy && (
+                      <span
+                        role="status"
+                        className="absolute inset-0 flex items-center justify-center rounded-full bg-black/60 text-sm font-semibold"
+                      >
+                        กำลังอัปโหลด...
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => avatarInputRef.current?.click()}
+                      disabled={avatarBusy}
+                      aria-label={user.avatarAt ? "เปลี่ยนรูปโปรไฟล์" : "อัปโหลดรูปโปรไฟล์"}
+                      className="absolute bottom-1 right-1 flex h-12 w-12 items-center justify-center rounded-full border-4 border-[#1f1f1f] bg-white text-black shadow-[0_2px_8px_rgba(0,0,0,0.5)] transition active:scale-90 disabled:opacity-60"
+                    >
+                      <IconCamera className="h-6 w-6" />
+                    </button>
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="sr-only"
+                      tabIndex={-1}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = ""; // เลือกรูปเดิมซ้ำได้
+                        if (f) uploadAvatarFile(f);
+                      }}
+                    />
+                  </div>
+                  {user.avatarAt && (
+                    <button
+                      type="button"
+                      onClick={removeAvatar}
+                      disabled={avatarBusy}
+                      className="mt-3 rounded-full px-4 py-1.5 text-xs font-semibold text-white/70 transition hover:bg-white/10 active:opacity-60 disabled:opacity-50"
+                    >
+                      ลบรูปโปรไฟล์
+                    </button>
+                  )}
+                  {avatarError && (
+                    <p role="alert" className="mt-2 text-sm font-medium text-red-500">
+                      {avatarError}
+                    </p>
+                  )}
                   <p className="mt-3 max-w-full truncate text-lg font-bold md:text-xl">{user.name}</p>
                   <p className="max-w-full truncate text-xs text-white/60 md:text-sm">@{user.username}</p>
                 </div>

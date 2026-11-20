@@ -1,6 +1,7 @@
 import type { Db } from "mongodb";
 
-// เก็บรูปสลีปลง Google Drive ผ่าน Google Apps Script (apps-script/Code.gs)
+// เก็บรูปสลีปและรูปโปรไฟล์ลง Google Drive ผ่าน Google Apps Script (apps-script/Code.gs)
+// สลีป = โฟลเดอร์หลัก / รูปโปรไฟล์ = โฟลเดอร์ย่อย profile (สคริปต์สร้างให้เอง)
 // สคริปต์รันเป็นบัญชีของคุณ ไฟล์จึงอยู่ใน Drive ของคุณ ไม่ต้องใช้ OAuth / googleapis
 // ต้องตั้ง GAS_URL (ลงท้าย /exec) และ GAS_SECRET (ตรงกับ SECRET ในสคริปต์) ใน .env.local
 
@@ -50,4 +51,31 @@ export async function downloadSlip(fileId: string): Promise<Buffer> {
   const r = await callGas({ action: "download", fileId });
   if (!r.data) throw new Error("Apps Script ไม่ส่งข้อมูลรูปกลับมา");
   return Buffer.from(r.data, "base64");
+}
+
+/* ---------- รูปโปรไฟล์ (โฟลเดอร์ย่อย profile) ---------- */
+
+// อัปโหลดรูปโปรไฟล์ (jpg) → คืน fileId
+export async function uploadAvatar(name: string, jpg: Buffer): Promise<string> {
+  const r = await callGas({
+    action: "upload",
+    folder: "profile",
+    name,
+    mimeType: "image/jpeg",
+    data: jpg.toString("base64"),
+  });
+  if (!r.fileId) throw new Error("Apps Script ไม่ส่ง fileId กลับมา");
+  return r.fileId;
+}
+
+// ดึงรูปโปรไฟล์จากโฟลเดอร์ profile ตาม fileId
+export async function downloadAvatar(fileId: string): Promise<Buffer> {
+  const r = await callGas({ action: "download", folder: "profile", fileId });
+  if (!r.data) throw new Error("Apps Script ไม่ส่งข้อมูลรูปกลับมา");
+  return Buffer.from(r.data, "base64");
+}
+
+// ลบรูปโปรไฟล์ (ย้ายลงถังขยะใน Drive)
+export async function deleteAvatar(fileId: string): Promise<void> {
+  await callGas({ action: "delete", folder: "profile", fileId });
 }

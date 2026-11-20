@@ -20,9 +20,9 @@ function deny(status: 401 | 403) {
   return NextResponse.json({ error: status === 401 ? "กรุณาเข้าสู่ระบบ" : "ไม่มีสิทธิ์" }, { status });
 }
 
-// บริษัท + แผนก (สำนักงานใหญ่) หรือสาขา (หน้าร้าน) ของเจ้าของตั๋ว ตามที่เลือกตอนสมัคร
+// บริษัท + แผนก (สำนักงานใหญ่) หรือสาขา (หน้าร้าน) + รูปโปรไฟล์ ของเจ้าของตั๋ว ตามที่เลือกตอนสมัคร
 // บัญชีเก่าที่ไม่มีข้อมูลนี้ = null
-type Org = { company: string | null; department: string | null };
+type Org = { company: string | null; department: string | null; avatarAt: string | null };
 
 async function orgOfUsers(db: Db, userIds: (ObjectId | undefined)[]): Promise<Map<string, Org>> {
   const ids = userIds.filter((x): x is ObjectId => !!x);
@@ -30,7 +30,7 @@ async function orgOfUsers(db: Db, userIds: (ObjectId | undefined)[]): Promise<Ma
   if (ids.length === 0) return out;
   const users = await db
     .collection("users")
-    .find({ _id: { $in: ids } }, { projection: { companyId: 1, departmentId: 1, branchId: 1 } })
+    .find({ _id: { $in: ids } }, { projection: { companyId: 1, departmentId: 1, branchId: 1, avatarAt: 1 } })
     .toArray();
   for (const u of users) {
     const cid = typeof u.companyId === "number" ? u.companyId : null;
@@ -40,7 +40,8 @@ async function orgOfUsers(db: Db, userIds: (ObjectId | undefined)[]): Promise<Ma
     const dept = cid && did ? (departmentsOf(cid).find((d) => d.id === did)?.name ?? null) : null;
     const branchDoc = cid && bid ? branchesOf(cid).find((b) => b.id === bid) : undefined;
     const branch = branchDoc ? branchFullLabel(branchDoc) : null;
-    out.set(u._id.toString(), { company, department: dept ?? branch });
+    const avatarAt = typeof u.avatarAt === "string" && u.avatarAt ? u.avatarAt : null;
+    out.set(u._id.toString(), { company, department: dept ?? branch, avatarAt });
   }
   return out;
 }
@@ -72,7 +73,8 @@ export async function GET() {
     total, // จำนวนตั๋วในโหลทั้งหมด
     pool: pool.map((d) => ({ code: d.code as string, empCode: d.empCode as string })), // สูงสุด 1000 ใบ ไว้แสดงตอนตั๋วหล่นลงโหล
     winners: winners.map((d) => {
-      const org = orgs.get(String(d.userId ?? ""));
+      const uid = d.userId ? String(d.userId) : "";
+      const org = orgs.get(uid);
       return {
         code: d.code as string,
         empCode: d.empCode as string,
@@ -80,6 +82,8 @@ export async function GET() {
         wonAt: (d.wonAt as string | undefined) ?? null,
         company: org?.company ?? null,
         department: org?.department ?? null,
+        userId: uid || null,
+        avatarAt: org?.avatarAt ?? null,
       };
     }),
   });
@@ -105,7 +109,8 @@ export async function POST() {
     );
     if (r.matchedCount === 1) {
       const remaining = await orders.countDocuments(POOL_FILTER);
-      const org = (await orgOfUsers(db, [pick.userId as ObjectId | undefined])).get(String(pick.userId ?? ""));
+      const uid = pick.userId ? String(pick.userId) : "";
+      const org = (await orgOfUsers(db, [pick.userId as ObjectId | undefined])).get(uid);
       return NextResponse.json({
         winner: {
           code: pick.code as string,
@@ -114,6 +119,8 @@ export async function POST() {
           wonAt,
           company: org?.company ?? null,
           department: org?.department ?? null,
+          userId: uid || null,
+          avatarAt: org?.avatarAt ?? null,
         },
         remaining,
       });

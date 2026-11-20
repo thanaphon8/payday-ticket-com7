@@ -72,3 +72,12 @@ export function compressSlip(buf: Buffer) {
     .jpeg({ quality: 80 })
     .toBuffer();
 }
+
+// รูปโปรไฟล์: ครอปจัตุรัสกลางภาพ 512×512 JPG (~30-80KB)
+export function compressAvatar(buf: Buffer) {
+  return sharp(buf, { failOn: "none" })
+    .rotate()
+    .resize(512, 512, { fit: "cover" })
+    .jpeg({ quality: 85 })
+    .toBuffer();
+}

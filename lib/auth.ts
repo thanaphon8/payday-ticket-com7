@@ -26,6 +26,7 @@ export type SessionUser = {
   companyId?: number | null;
   departmentId?: number | null;
   branchId?: number | null;
+  avatarAt?: string | null; // ISO: เวลาที่อัปโหลดรูปโปรไฟล์ล่าสุด (null = ยังไม่มีรูป) ใช้ต่อท้าย URL กันแคชรูปเก่า
   bannedUntil?: string | null; // ISO: ถูกแบนจนถึงเวลานี้ (null = ไม่ถูกแบน หรือหมดเวลาแบนแล้ว)
   isAdmin?: boolean; // เลิกใช้แล้ว (admin แยกเป็นรหัสผ่านต่างหาก) คงไว้กันโค้ดเก่าพัง
 };
@@ -103,6 +104,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     companyId: typeof u.companyId === "number" ? u.companyId : null,
     departmentId: typeof u.departmentId === "number" ? u.departmentId : null,
     branchId: typeof u.branchId === "number" ? u.branchId : null,
+    avatarAt: typeof u.avatarFileId === "string" && typeof u.avatarAt === "string" ? u.avatarAt : null,
     bannedUntil:
       typeof u.bannedUntil === "string" && Date.parse(u.bannedUntil) > Date.now() ? u.bannedUntil : null,
   };

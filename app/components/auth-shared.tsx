@@ -14,6 +14,7 @@ export const USERNAME_RE = /^[a-zA-Z0-9._]{3,20}$/;
 
 // empCode = รหัสพนักงานของบัญชี (null = บัญชีเก่าที่ยังไม่เคยกรอก)
 // companyId / departmentId / branchId ตั้งตอนสมัครครั้งเดียว (บัญชีเก่าจะไม่มี)
+// avatarAt = เวลาอัปโหลดรูปโปรไฟล์ล่าสุด (null/ไม่มี = ยังไม่มีรูป ใช้ตัวอักษรย่อแทน)
 export type User = {
   id: string;
   username: string;
@@ -23,6 +24,7 @@ export type User = {
   companyId?: number | null;
   departmentId?: number | null;
   branchId?: number | null;
+  avatarAt?: string | null;
 };
 
 export type AuthMode = "login" | "register";
