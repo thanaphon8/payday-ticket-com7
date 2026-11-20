@@ -370,6 +370,214 @@ function Avatar({
   );
 }
 
+/* ---------- ปรับรูปโปรไฟล์ก่อนบันทึก ----------
+   เลือกรูปแล้วเปิดหน้าต่างนี้: ลากรูปเพื่อขยับ / เลื่อนแถบหรือหมุนล้อเมาส์เพื่อซูม / กด "บันทึก"
+   จึงตัดตามกรอบวงกลมเป็นรูปจัตุรัส 512×512 แล้วส่งไปอัปโหลด */
+const AVATAR_FRAME = 280; // ขนาดกรอบวงกลมบนจอ (px)
+const AVATAR_OUT = 512; // ขนาดรูปที่บันทึกจริง (px)
+const AVATAR_MAX_ZOOM = 4;
+
+function AvatarCropper({
+  file,
+  busy,
+  error,
+  onCancel,
+  onSave,
+}: {
+  file: File;
+  busy: boolean;
+  error: string;
+  onCancel: () => void;
+  onSave: (f: File) => void;
+}) {
+  const [src, setSrc] = useState("");
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [loadErr, setLoadErr] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [off, setOff] = useState({ x: 0, y: 0 }); // ระยะที่รูปเลื่อนจากกึ่งกลางกรอบ
+  const drag = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    setSrc(url);
+    setImg(null);
+    setLoadErr(false);
+    setZoom(1);
+    setOff({ x: 0, y: 0 });
+    const im = new Image();
+    im.onload = () => setImg(im);
+    im.onerror = () => setLoadErr(true);
+    im.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  // กด Esc ปิด (ระหว่างบันทึกไม่ปิด)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
+
+  const F = AVATAR_FRAME;
+  const base = img ? F / Math.min(img.naturalWidth, img.naturalHeight) : 1; // ขนาดพอดีเต็มกรอบ (cover)
+  const dw = img ? img.naturalWidth * base * zoom : 0;
+  const dh = img ? img.naturalHeight * base * zoom : 0;
+
+  // รูปต้องคลุมกรอบเต็มเสมอ ไม่ให้เห็นขอบว่าง
+  const clamp = (x: number, y: number, w: number, h: number) => ({
+    x: Math.max(-(w - F) / 2, Math.min((w - F) / 2, x)),
+    y: Math.max(-(h - F) / 2, Math.min((h - F) / 2, y)),
+  });
+
+  const changeZoom = (z: number) => {
+    if (!img) return;
+    const nz = Math.max(1, Math.min(AVATAR_MAX_ZOOM, z));
+    setZoom(nz);
+    setOff((o) => clamp(o.x, o.y, img.naturalWidth * base * nz, img.naturalHeight * base * nz));
+  };
+
+  const move = (dx: number, dy: number) => setOff((o) => clamp(o.x + dx, o.y + dy, dw, dh));
+
+  const save = () => {
+    if (!img || busy) return;
+    const k = AVATAR_OUT / F;
+    const canvas = document.createElement("canvas");
+    canvas.width = AVATAR_OUT;
+    canvas.height = AVATAR_OUT;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, AVATAR_OUT, AVATAR_OUT);
+    ctx.drawImage(img, (F / 2 + off.x - dw / 2) * k, (F / 2 + off.y - dh / 2) * k, dw * k, dh * k);
+    canvas.toBlob(
+      (b) => {
+        if (b) onSave(new File([b], `avatar-${Date.now()}.jpg`, { type: "image/jpeg" }));
+      },
+      "image/jpeg",
+      0.9,
+    );
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="avatar-crop-title"
+      className="pd-fade fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+    >
+      <div className="pd-dialog w-full max-w-sm rounded-3xl bg-[#1f1f1f] p-6 text-center text-white">
+        <h2 id="avatar-crop-title" className="text-lg font-bold">
+          ปรับรูปโปรไฟล์
+        </h2>
+        <p className="mt-1 text-xs text-white/60">ลากรูปเพื่อขยับ เลื่อนแถบเพื่อซูม แล้วกดบันทึก</p>
+
+        <div
+          tabIndex={0}
+          role="img"
+          aria-label="กรอบปรับรูปโปรไฟล์ ใช้ปุ่มลูกศรเพื่อขยับรูป"
+          style={{ width: F, height: F, touchAction: "none" }}
+          className="relative mx-auto mt-5 cursor-grab select-none overflow-hidden rounded-full bg-[#2a2a2a] ring-4 ring-white/20 active:cursor-grabbing"
+          onPointerDown={(e) => {
+            if (!img || busy) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            drag.current = { px: e.clientX, py: e.clientY, ox: off.x, oy: off.y };
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current;
+            if (!d) return;
+            setOff(clamp(d.ox + (e.clientX - d.px), d.oy + (e.clientY - d.py), dw, dh));
+          }}
+          onPointerUp={() => {
+            drag.current = null;
+          }}
+          onPointerCancel={() => {
+            drag.current = null;
+          }}
+          onWheel={(e) => changeZoom(zoom - e.deltaY * 0.002)}
+          onKeyDown={(e) => {
+            const step = 10;
+            if (e.key === "ArrowLeft") move(step, 0);
+            else if (e.key === "ArrowRight") move(-step, 0);
+            else if (e.key === "ArrowUp") move(0, step);
+            else if (e.key === "ArrowDown") move(0, -step);
+            else return;
+            e.preventDefault();
+          }}
+        >
+          {img && src && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={src}
+              alt=""
+              draggable={false}
+              style={{
+                width: dw,
+                height: dh,
+                left: F / 2 + off.x - dw / 2,
+                top: F / 2 + off.y - dh / 2,
+              }}
+              className="pointer-events-none absolute max-w-none select-none"
+            />
+          )}
+          {!img && !loadErr && (
+            <span className="absolute inset-0 flex items-center justify-center text-sm text-white/60">
+              กำลังโหลดรูป...
+            </span>
+          )}
+          {loadErr && (
+            <span className="absolute inset-0 flex items-center justify-center px-6 text-sm text-red-400">
+              เปิดรูปนี้ไม่ได้ เลือกรูปอื่น
+            </span>
+          )}
+        </div>
+
+        <div className="mx-auto mt-5 flex items-center gap-3" style={{ maxWidth: F }}>
+          <IconMinus className="h-4 w-4 shrink-0 text-white/60" />
+          <input
+            type="range"
+            min={1}
+            max={AVATAR_MAX_ZOOM}
+            step={0.01}
+            value={zoom}
+            onChange={(e) => changeZoom(Number(e.target.value))}
+            disabled={!img || busy}
+            aria-label="ซูมรูป"
+            className="h-2 w-full cursor-pointer accent-[#e50914] disabled:opacity-50"
+          />
+          <IconPlus className="h-4 w-4 shrink-0 text-white/60" />
+        </div>
+
+        {error && (
+          <p role="alert" className="mt-3 text-sm font-medium text-red-500">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-5 flex gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="flex-1 rounded-2xl border border-white/40 py-3 text-sm font-semibold transition active:scale-[0.98] disabled:opacity-60"
+          >
+            ยกเลิก
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={!img || busy}
+            className="flex-1 rounded-2xl bg-[#e50914] py-3 text-sm font-bold text-white transition active:scale-[0.98] disabled:opacity-60"
+          >
+            {busy ? "กำลังบันทึก..." : "บันทึก"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // บาร์โค้ด Code128 จริง (เจ้าหน้าที่ยิงด้วยกล้องที่หน้า /ticket ได้) วาดเป็น SVG สีตามตัวหนังสือของตั๋ว
 // มีพื้นที่ว่างซ้ายขวาในตัว ต้องวางบนพื้นสีอ่อน (ตั๋วใช้พื้นขาว)
 function Barcode({ code, className = "block h-16 w-full" }: { code: string; className?: string }) {
@@ -1001,6 +1209,34 @@ async function shrinkImage(file: File): Promise<File> {
   }
 }
 
+// ส่งฟอร์มด้วย XMLHttpRequest เพื่อรู้ความคืบหน้าการอัปโหลด (fetch ดึงความคืบหน้าขาขึ้นไม่ได้)
+// onProgress ได้ค่า 0–1 / ล้มเหลวที่เครือข่าย = reject
+function sendForm(
+  url: string,
+  body: FormData,
+  onProgress: (ratio: number) => void,
+): Promise<{ status: number; data: { error?: string } }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let data: { error?: string } = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        /* ignore */
+      }
+      resolve({ status: xhr.status, data });
+    };
+    xhr.onerror = () => reject(new Error("network"));
+    xhr.onabort = () => reject(new Error("abort"));
+    xhr.send(body);
+  });
+}
+
 function SlipPay({
   paymentId,
   onBack,
@@ -1019,6 +1255,8 @@ function SlipPay({
   const [shrunk, setShrunk] = useState<File | null>(null); // รูปที่ย่อเตรียมไว้แล้ว (ย่อตั้งแต่เลือกรูป กดส่งแล้วไม่ต้องรอ)
   const [preview, setPreview] = useState("");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0); // ความคืบหน้าตอนส่งสลีป 0–100
+  const [stage, setStage] = useState<"upload" | "verify">("upload"); // upload = กำลังอัปโหลดรูป / verify = รอเซิร์ฟเวอร์ตรวจสลีป
   const [err, setErr] = useState("");
   const [qrFailed, setQrFailed] = useState(false);
 
@@ -1089,18 +1327,33 @@ function SlipPay({
     };
   }, [file]);
 
+  // อัปโหลดเสร็จแล้วแต่เซิร์ฟเวอร์ยังตรวจสลีปอยู่: ค่อย ๆ ขยับหลอดไปจนเกือบเต็ม (ไม่ถึง 100 จนกว่าจะตอบกลับ)
+  useEffect(() => {
+    if (!busy || stage !== "verify") return;
+    const t = setInterval(() => {
+      setProgress((p) => (p >= 95 ? p : Math.min(95, p + Math.max(0.4, (95 - p) * 0.06))));
+    }, 400);
+    return () => clearInterval(t);
+  }, [busy, stage]);
+
   async function upload() {
     if (!file || busy) return;
     if (file.size > 25 * 1024 * 1024) return setErr("รูปใหญ่เกินไป เลือกรูปอื่น");
     setBusy(true);
     setErr("");
+    setProgress(0);
+    setStage("upload");
     try {
       const fd = new FormData();
       fd.append("slip", shrunk ?? (await shrinkImage(file)));
-      const res = await fetch(`/api/payments/${paymentId}/slip`, { method: "POST", body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 401) return onNeedLogin();
-      if (!res.ok) return setErr(data.error ?? "ส่งสลีปไม่สำเร็จ ลองใหม่อีกครั้ง");
+      // ช่วงอัปโหลดรูปใช้ 0–70% ที่เหลือเป็นช่วงรอเซิร์ฟเวอร์ตรวจสลีป
+      const { status, data } = await sendForm(`/api/payments/${paymentId}/slip`, fd, (ratio) => {
+        setProgress(Math.round(ratio * 70));
+        if (ratio >= 1) setStage("verify");
+      });
+      if (status === 401) return onNeedLogin();
+      if (status < 200 || status >= 300) return setErr(data.error ?? "ส่งสลีปไม่สำเร็จ ลองใหม่อีกครั้ง");
+      setProgress(100);
       setFile(null);
       setPay((p) => (p ? { ...p, status: "reviewing", rejectReason: undefined } : p));
     } catch {
@@ -1112,6 +1365,7 @@ function SlipPay({
 
   const secsLeft = pay ? Math.max(0, Math.ceil((new Date(pay.expiresAt).getTime() - now) / 1000)) : 0;
   const open = pay && (pay.status === "awaiting_slip" || pay.status === "rejected");
+  const pct = Math.min(100, Math.floor(progress));
 
   return (
     <section aria-label="โอนเงินและส่งสลีป" className="md:mx-auto md:max-w-4xl">
@@ -1131,41 +1385,72 @@ function SlipPay({
             </div>
           )}
 
-          <div className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center md:mt-0 md:p-6">
-            <p className="text-xs text-white/50">โอนตามยอดนี้เป๊ะ ๆ</p>
-            <p className="mt-1 text-4xl font-extrabold">{baht(pay.amount)}</p>
-
-            <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-white p-2 md:max-w-[19rem]">
-              {qrFailed || !pay.qrUrl ? (
-                <p className="px-4 text-sm text-red-600">แสดง QR ไม่ได้ ปิดหน้านี้แล้วเปิดใหม่</p>
-              ) : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={pay.qrUrl}
-                  alt={`QR พร้อมเพย์ ยอด ${baht(pay.amount)}`}
-                  className="h-full w-full object-contain"
-                  onError={() => setQrFailed(true)}
-                />
-              )}
-            </div>
-
-            <p className="mt-3 text-sm text-white/60">สแกนด้วยแอปธนาคาร (ยอดและรหัสอ้างอิงอยู่ใน QR แล้ว)</p>
-            <p className="mt-1 text-xs text-white/50">
-              รหัสอ้างอิง <span className="font-mono font-bold text-white">{pay.ref}</span>
-            </p>
-            {pay.qrUrl && (
-              <a
-                href={pay.qrUrl}
-                download={`payday-${pay.ref}.png`}
-                className="mt-3 inline-block rounded-full border border-white/40 px-4 py-2 text-xs font-semibold"
+          {busy ? (
+            // ระหว่างส่งสลีป: ซ่อน QR แล้วแสดงหลอดความคืบหน้าแทน
+            <div
+              role="status"
+              aria-live="polite"
+              className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center md:mt-0 md:p-6"
+            >
+              <p className="text-xs text-white/50">กำลังส่งสลีป กรุณาอย่าปิดหน้านี้</p>
+              <p className="mt-1 text-5xl font-extrabold tabular-nums">{pct}%</p>
+              <div
+                role="progressbar"
+                aria-label="ความคืบหน้าการส่งสลีป"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={pct}
+                className="mt-5 h-3 w-full overflow-hidden rounded-full bg-white/15"
               >
-                บันทึก QR Code
-              </a>
-            )}
-            <p className="mt-3 text-sm font-bold">
-              {secsLeft > 0 ? `ส่งสลีปภายใน ${fmtCountdown(secsLeft)}` : "หมดเวลาแล้ว กำลังตรวจสอบ..."}
-            </p>
-          </div>
+                <div
+                  className="h-full rounded-full bg-[#e50914] transition-[width] duration-300 ease-out"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <p className="mt-4 text-sm font-semibold">
+                {stage === "upload" ? "กำลังอัปโหลดรูปสลีป" : "กำลังตรวจสอบสลีป อาจใช้เวลาสักครู่"}
+              </p>
+              <p className="mt-1 text-xs text-white/50">
+                ยอด {baht(pay.amount)} · รหัสอ้างอิง <span className="font-mono font-bold text-white">{pay.ref}</span>
+              </p>
+            </div>
+          ) : (
+            <div className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center md:mt-0 md:p-6">
+              <p className="text-xs text-white/50">โอนตามยอดนี้เป๊ะ ๆ</p>
+              <p className="mt-1 text-4xl font-extrabold">{baht(pay.amount)}</p>
+
+              <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-white p-2 md:max-w-[19rem]">
+                {qrFailed || !pay.qrUrl ? (
+                  <p className="px-4 text-sm text-red-600">แสดง QR ไม่ได้ ปิดหน้านี้แล้วเปิดใหม่</p>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={pay.qrUrl}
+                    alt={`QR พร้อมเพย์ ยอด ${baht(pay.amount)}`}
+                    className="h-full w-full object-contain"
+                    onError={() => setQrFailed(true)}
+                  />
+                )}
+              </div>
+
+              <p className="mt-3 text-sm text-white/60">สแกนด้วยแอปธนาคาร (ยอดและรหัสอ้างอิงอยู่ใน QR แล้ว)</p>
+              <p className="mt-1 text-xs text-white/50">
+                รหัสอ้างอิง <span className="font-mono font-bold text-white">{pay.ref}</span>
+              </p>
+              {pay.qrUrl && (
+                <a
+                  href={pay.qrUrl}
+                  download={`payday-${pay.ref}.png`}
+                  className="mt-3 inline-block rounded-full border border-white/40 px-4 py-2 text-xs font-semibold"
+                >
+                  บันทึก QR Code
+                </a>
+              )}
+              <p className="mt-3 text-sm font-bold">
+                {secsLeft > 0 ? `ส่งสลีปภายใน ${fmtCountdown(secsLeft)}` : "หมดเวลาแล้ว กำลังตรวจสอบ..."}
+              </p>
+            </div>
+          )}
 
           <div className="pd-rise mt-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:mt-0 md:p-6" style={stagger(1)}>
             <h2 className="text-base font-bold">ส่งสลีปโอนเงิน</h2>
@@ -1178,6 +1463,7 @@ function SlipPay({
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
                 className="sr-only"
+                disabled={busy}
                 onChange={(e) => {
                   setFile(e.target.files?.[0] ?? null);
                   setErr("");
@@ -1298,6 +1584,7 @@ export default function Home() {
   // รูปโปรไฟล์ (เก็บใน Google Drive โฟลเดอร์ profile ผ่าน /api/profile/avatar)
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarError, setAvatarError] = useState("");
+  const [avatarDraft, setAvatarDraft] = useState<File | null>(null); // รูปที่เลือกแล้ว รอผู้ใช้ปรับตำแหน่งและกดบันทึก
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // ตั๋วของฉัน (แท็บ "ready" = ตั๋วทั้งหมดที่ได้รับ ทั้งที่ยังไม่ใช้และใช้แล้ว / "status" = รายการโอนเงินที่ค้างอยู่)
@@ -1484,6 +1771,7 @@ export default function Home() {
     setAccSaved(false);
     setAccError("");
     setAvatarError("");
+    setAvatarDraft(null);
     setSheet(null);
     setBarcodeCode(null);
     go("home");
@@ -1645,8 +1933,8 @@ export default function Home() {
     }
   }
 
-  // อัปโหลดรูปโปรไฟล์: ย่อรูปใหญ่ก่อนส่ง เซิร์ฟเวอร์ครอปจัตุรัส 512×512 แล้วเก็บลง Drive โฟลเดอร์ profile
-  async function uploadAvatarFile(file: File) {
+  // เลือกรูปโปรไฟล์: ตรวจไฟล์ แล้วเปิดหน้าต่างให้ผู้ใช้ปรับตำแหน่ง (ยังไม่อัปโหลดจนกว่าจะกดบันทึก)
+  function pickAvatarFile(file: File) {
     if (avatarBusy) return;
     setAvatarError("");
     if (!file.type.startsWith("image/")) {
@@ -1657,6 +1945,14 @@ export default function Home() {
       setAvatarError("รูปใหญ่เกินไป เลือกรูปอื่น");
       return;
     }
+    setAvatarDraft(file);
+  }
+
+  // อัปโหลดรูปโปรไฟล์ (รูปที่ปรับแล้ว): เซิร์ฟเวอร์ครอปจัตุรัส 512×512 แล้วเก็บลง Drive โฟลเดอร์ profile
+  // คืน true เมื่อบันทึกสำเร็จ
+  async function uploadAvatarFile(file: File): Promise<boolean> {
+    if (avatarBusy) return false;
+    setAvatarError("");
     setAvatarBusy(true);
     try {
       const fd = new FormData();
@@ -1664,19 +1960,28 @@ export default function Home() {
       const res = await fetch("/api/profile/avatar", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (res.status === 401) {
+        setAvatarDraft(null);
         needLogin("profile");
-        return;
+        return false;
       }
       if (!res.ok) {
         setAvatarError(data.error ?? "อัปโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
-        return;
+        return false;
       }
       setUser((prev) => (prev ? { ...prev, avatarAt: data.avatarAt as string } : prev));
+      return true;
     } catch {
       setAvatarError("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
+      return false;
     } finally {
       setAvatarBusy(false);
     }
+  }
+
+  // กดบันทึกในหน้าต่างปรับรูป: อัปโหลดสำเร็จแล้วค่อยปิดหน้าต่าง
+  async function saveAvatarDraft(file: File) {
+    const ok = await uploadAvatarFile(file);
+    if (ok) setAvatarDraft(null);
   }
 
   // ลบรูปโปรไฟล์ กลับไปใช้ตัวอักษรย่อ
@@ -2573,7 +2878,7 @@ export default function Home() {
                 <div className="mt-6 flex flex-col items-center rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center text-white md:col-start-1 md:row-start-1 md:mt-0">
                   <div className="relative">
                     <Avatar user={user} className="h-44 w-44 text-7xl md:h-56 md:w-56 md:text-8xl" />
-                    {avatarBusy && (
+                    {avatarBusy && !avatarDraft && (
                       <span
                         role="status"
                         className="absolute inset-0 flex items-center justify-center rounded-full bg-black/60 text-sm font-semibold"
@@ -2599,7 +2904,7 @@ export default function Home() {
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         e.target.value = ""; // เลือกรูปเดิมซ้ำได้
-                        if (f) uploadAvatarFile(f);
+                        if (f) pickAvatarFile(f);
                       }}
                     />
                   </div>
@@ -2613,7 +2918,7 @@ export default function Home() {
                       ลบรูปโปรไฟล์
                     </button>
                   )}
-                  {avatarError && (
+                  {avatarError && !avatarDraft && (
                     <p role="alert" className="mt-2 text-sm font-medium text-red-500">
                       {avatarError}
                     </p>
@@ -2748,6 +3053,20 @@ export default function Home() {
         ))}
 
       {showNav && <BottomNav view={navView} badges={badges} golden={hasNewWin} onGo={go} />}
+
+      {/* ===== หน้าต่างปรับรูปโปรไฟล์ (ลากขยับ/ซูม แล้วกดบันทึก) ===== */}
+      {avatarDraft && (
+        <AvatarCropper
+          file={avatarDraft}
+          busy={avatarBusy}
+          error={avatarError}
+          onCancel={() => {
+            setAvatarDraft(null);
+            setAvatarError("");
+          }}
+          onSave={saveAvatarDraft}
+        />
+      )}
 
       {/* ===== popup ยืนยันการยกเลิกรายการโอนเงิน ===== */}
       {cancelTarget && (
