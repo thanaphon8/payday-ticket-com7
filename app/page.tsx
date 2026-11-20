@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { Prompt } from "next/font/google";
 import { code128Bars } from "@/lib/code128";
@@ -112,6 +112,7 @@ type Order = {
   at: string;
   used?: boolean;
   usedAt?: string;
+  usedBoothName?: string; // ซุ้มที่ยิงตั๋วใบนี้ (จากเซิร์ฟเวอร์)
   empCode?: string; // รหัสพนักงาน (ตั๋ว Lucky Draw)
   won?: boolean; // ตั๋วใบนี้ถูกรางวัลแล้ว
   wonAt?: string;
@@ -691,12 +692,14 @@ const TicketPass = memo(function TicketPass({
   order,
   scanned = false,
   calm = false,
+  fresh = false,
   onBarcode,
 }: {
   def: TicketDef;
   order: Order;
   scanned?: boolean;
   calm?: boolean;
+  fresh?: boolean; // เพิ่งถูกยิงเมื่อกี้: ตราประทับรอให้หน้าบาร์โค้ดปิดก่อนค่อยเด้งขึ้น
   onBarcode?: (code: string) => void;
 }) {
   const isPaper = def.id === "booth" && order.part === "paper";
@@ -705,6 +708,7 @@ const TicketPass = memo(function TicketPass({
   const subHeading = isPaper ? "PAPER TICKET · ไม่มีมูลค่า" : isValue ? "BOOTH PLAY TICKET" : def.sub;
   const tapBarcode = !!onBarcode && def.id === "booth" && !scanned && !order.used;
   const usedWord = isValue ? "ใช้แล้ว" : "รับแล้ว"; // ตั๋วมีมูลค่า = ใช้แล้ว / ตั๋วไม่มีมูลค่า = รับแล้ว
+  const usedAtLabel = isValue ? "ใช้ที่" : "รับที่";
 
   const pass = (
     <Perforated
@@ -762,6 +766,11 @@ const TicketPass = memo(function TicketPass({
           // ตั๋วที่สแกนแล้ว ไม่แสดงบาร์โค้ดอีก (กันยิงซ้ำ) แสดงแค่สถานะ + รหัส
           <div className="px-5 pb-5 pt-4 text-center">
             <p className="text-base font-extrabold tracking-wide">{usedWord}</p>
+            {order.usedBoothName && (
+              <p className="mt-1 text-sm font-bold">
+                {usedAtLabel} {order.usedBoothName}
+              </p>
+            )}
             <p className="mt-2 break-all font-mono text-xs font-bold tracking-wider">{order.code}</p>
           </div>
         ) : tapBarcode ? (
@@ -821,9 +830,14 @@ const TicketPass = memo(function TicketPass({
       <div className="pd-scanned">{shown}</div>
       <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
         <div className="flex flex-col items-center gap-2">
-          <span className="pd-stamp rounded-2xl border-4 border-red-500 bg-black/40 px-6 py-2 text-4xl font-extrabold tracking-widest text-red-500 shadow-[0_4px_20px_rgba(0,0,0,0.5)]">
+          <span style={fresh ? { animationDelay: "0.45s" } : undefined} className="pd-stamp rounded-2xl border-4 border-red-500 bg-black/40 px-6 py-2 text-4xl font-extrabold tracking-widest text-red-500 shadow-[0_4px_20px_rgba(0,0,0,0.5)]">
             {usedWord}
           </span>
+          {order.usedBoothName && (
+            <span className="rounded-full bg-black/70 px-4 py-1.5 text-sm font-bold text-white">
+              {usedAtLabel} {order.usedBoothName}
+            </span>
+          )}
           {order.usedAt && (
             <span className="rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
               {fmtTime(order.usedAt)}
@@ -842,7 +856,17 @@ const TicketPass = memo(function TicketPass({
    จอแนวตั้ง: หมุนเนื้อหา 90° ด้วย CSS (ไม่ต้องหมุนจอ) / จอแนวนอน: ไม่หมุน
    แตะที่ไหนก็ได้เพื่อปิด แสดงทีละใบ กันผู้ยิงตั๋วยิงผิดใบ
    ตั๋วเล่นซุ้ม (฿50) = พื้นขาว กรอบกรมท่า / ตั๋วรับตั๋วกระดาษ = พื้นครีม กรอบส้มน้ำตาล เพื่อให้ staff แยกออกทันที */
-function BarcodeFullscreen({ order, def, onClose }: { order: Order; def: TicketDef; onClose: () => void }) {
+function BarcodeFullscreen({
+  order,
+  def,
+  leaving = false,
+  onClose,
+}: {
+  order: Order;
+  def: TicketDef;
+  leaving?: boolean; // ตั๋วถูกยิงแล้ว: เฟดหน้าบาร์โค้ดออกนุ่ม ๆ ก่อนถอดออก
+  onClose: () => void;
+}) {
   const isPaper = def.id === "booth" && order.part === "paper";
   return (
     <div
@@ -850,7 +874,7 @@ function BarcodeFullscreen({ order, def, onClose }: { order: Order; def: TicketD
       aria-modal="true"
       aria-label="บาร์โค้ดตั๋ว"
       onClick={onClose}
-      className={`pd-fade fixed inset-0 z-[60] border-[14px] text-black ${
+      className={`${leaving ? "pd-fade-out" : "pd-fade"} fixed inset-0 z-[60] border-[14px] text-black ${
         isPaper ? "border-[#b45309] bg-[#fff1c2]" : "border-[#0f1b4d] bg-white"
       }`}
     >
@@ -1593,6 +1617,11 @@ export default function Home() {
   const [sheetClosing, setSheetClosing] = useState(false); // กำลังเล่นแอนิเมชันปิดหน้าต่างแสดงตั๋ว
   const closingRef = useRef(false);
   const [barcodeCode, setBarcodeCode] = useState<string | null>(null); // รหัสตั๋วที่เปิดบาร์โค้ดเต็มจอแนวนอนอยู่
+  const [barcodeLeaving, setBarcodeLeaving] = useState(false); // ตั๋วถูกยิงแล้ว กำลังเฟดหน้าบาร์โค้ดออก
+  const [settling, setSettling] = useState<string[]>([]); // ตั๋วที่เพิ่งถูกยิง: ค้างตำแหน่งเดิมให้เห็นตราประทับก่อน แล้วค่อยเลื่อนลงล่าง
+  const prevUsedRef = useRef<Map<string, boolean>>(new Map());
+  const flipRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const flipPos = useRef<Map<string, number>>(new Map());
   const [seenWon, setSeenWon] = useState<string[]>([]); // ตั๋วถูกรางวัลที่ผู้ใช้เห็นแล้ว
 
   const userId = user?.id ?? null;
@@ -1671,12 +1700,12 @@ export default function Home() {
       }
     };
     if (view === "tickets") loadTickets();
-    const t = setInterval(loadTickets, sheet ? 3000 : 10000);
+    const t = setInterval(loadTickets, barcodeCode ? 1500 : sheet ? 3000 : 10000);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
-  }, [view, user, sheet]);
+  }, [view, user, sheet, barcodeCode]);
 
   const defOf = (id: TicketId) => TICKETS.find((t) => t.id === id)!;
   const cartLines = TICKETS.flatMap((t) => {
@@ -2039,7 +2068,8 @@ export default function Home() {
         .filter((o) => o.ticket === sheet)
         .sort(
           (a, b) =>
-            Number(a.used === true) - Number(b.used === true) ||
+            Number(a.used === true && !settling.includes(a.code)) -
+              Number(b.used === true && !settling.includes(b.code)) ||
             Number(b.won === true) - Number(a.won === true),
         )
     : [];
@@ -2057,10 +2087,65 @@ export default function Home() {
   const barcodeOrder = barcodeCode ? (orders.find((o) => o.code === barcodeCode) ?? null) : null;
 
   // ปิดบาร์โค้ดเต็มจออัตโนมัติ: หน้าต่างแสดงตั๋วปิดแล้ว หรือตั๋วใบนั้นถูกสแกนแล้ว (จะขึ้นตราประทับในหน้าต่างแสดงตั๋วแทน)
+  // ตั๋วถูกยิง: เฟดหน้าบาร์โค้ดออก 0.3 วิ แล้วถอดออก (หน้าต่างปิดไปแล้วถอดทันที)
   useEffect(() => {
-    if (!barcodeCode) return;
-    if (!sheet || orders.some((o) => o.code === barcodeCode && o.used)) setBarcodeCode(null);
+    if (!barcodeCode) {
+      setBarcodeLeaving(false);
+      return;
+    }
+    if (!sheet) {
+      setBarcodeCode(null);
+      return;
+    }
+    if (!orders.some((o) => o.code === barcodeCode && o.used)) {
+      setBarcodeLeaving(false);
+      return;
+    }
+    setBarcodeLeaving(true);
+    const t = setTimeout(() => {
+      setBarcodeCode(null);
+      setBarcodeLeaving(false);
+    }, 300);
+    return () => clearTimeout(t);
   }, [barcodeCode, sheet, orders]);
+
+  // จับจังหวะที่ตั๋วเปลี่ยนจากยังไม่ใช้ → ใช้แล้ว: ให้ค้างตำแหน่งเดิม 1.8 วิ (เห็นตราประทับ + ซุ้ม) แล้วค่อยเลื่อนลงไปอยู่ท้ายรายการ
+  useEffect(() => {
+    const fresh: string[] = [];
+    for (const o of orders) {
+      if (prevUsedRef.current.get(o.code) === false && o.used) fresh.push(o.code);
+      prevUsedRef.current.set(o.code, o.used === true);
+    }
+    if (fresh.length === 0) return;
+    setSettling((p) => Array.from(new Set([...p, ...fresh])));
+    setTimeout(() => setSettling((p) => p.filter((c) => !fresh.includes(c))), 1800);
+  }, [orders]);
+
+  // แอนิเมชันตั๋วเลื่อนไปตำแหน่งใหม่ (FLIP): จำตำแหน่งเดิมของแต่ละใบ แล้วไหลจากที่เก่าไปที่ใหม่
+  useLayoutEffect(() => {
+    if (!sheet) {
+      flipPos.current = new Map();
+      return;
+    }
+    const next = new Map<string, number>();
+    flipRefs.current.forEach((el, code) => next.set(code, el.offsetTop));
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!reduce) {
+      flipRefs.current.forEach((el, code) => {
+        const prev = flipPos.current.get(code);
+        const cur = next.get(code);
+        if (prev === undefined || cur === undefined) return;
+        const dy = prev - cur;
+        if (Math.abs(dy) < 2) return;
+        el.style.transition = "none";
+        el.style.transform = `translateY(${dy}px)`;
+        void el.offsetHeight;
+        el.style.transition = "transform 0.7s cubic-bezier(0.22, 1, 0.36, 1)";
+        el.style.transform = "";
+      });
+    }
+    flipPos.current = next;
+  });
 
   // ระยะเว้นด้านล่างของหน้า: หน้าซื้อ/ชำระเงินมีแถบสรุปยอดติดขอบล่าง ต้องเว้นที่ให้ทั้งมือถือและคอมพิวเตอร์
   // หน้า auth ซ่อน <main> ไว้ (ฟอร์มวาดนอก <main> ทับเต็มจอ)
@@ -3127,7 +3212,7 @@ export default function Home() {
           onClick={closeSheet}
         >
           <div
-            className={`max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-[#1f1f1f] p-5 pb-8 text-white md:max-w-3xl md:rounded-3xl md:p-8 ${
+            className={`relative max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-[#1f1f1f] p-5 pb-8 text-white md:max-w-3xl md:rounded-3xl md:p-8 ${
               sheetClosing ? "pd-sheet-out" : "pd-sheet"
             }`}
             onClick={(e) => e.stopPropagation()}
@@ -3173,14 +3258,22 @@ export default function Home() {
                   )}
                   <div className="mt-4 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
                     {g.list.map((o) => (
-                      <TicketPass
+                      <div
                         key={o.code}
-                        def={sheetDef}
-                        order={o}
-                        scanned={o.used === true}
-                        calm
-                        onBarcode={setBarcodeCode}
-                      />
+                        ref={(el) => {
+                          if (el) flipRefs.current.set(o.code, el);
+                          else flipRefs.current.delete(o.code);
+                        }}
+                      >
+                        <TicketPass
+                          def={sheetDef}
+                          order={o}
+                          scanned={o.used === true}
+                          fresh={settling.includes(o.code)}
+                          calm
+                          onBarcode={setBarcodeCode}
+                        />
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -3192,7 +3285,12 @@ export default function Home() {
 
       {/* ===== บาร์โค้ดเต็มจอแนวนอน (แตะตั๋วเข้าซุ้มในหน้าต่างแสดงตั๋ว) ===== */}
       {sheet && barcodeOrder && (
-        <BarcodeFullscreen order={barcodeOrder} def={defOf(barcodeOrder.ticket)} onClose={() => setBarcodeCode(null)} />
+        <BarcodeFullscreen
+          order={barcodeOrder}
+          def={defOf(barcodeOrder.ticket)}
+          leaving={barcodeLeaving}
+          onClose={() => setBarcodeCode(null)}
+        />
       )}
     </div>
   );

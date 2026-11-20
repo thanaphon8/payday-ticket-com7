@@ -56,6 +56,7 @@ export function toOrder(d: WithId<Document>) {
     at: d.at as string,
     used: d.used === true,
     usedAt: (d.usedAt as string | undefined) ?? undefined,
+    usedBoothName: (d.usedBoothName as string | undefined) ?? undefined, // ซุ้มที่ยิงตั๋วใบนี้
     empCode: (d.empCode as string | undefined) ?? undefined,
     won: d.won === true,
     wonAt: (d.wonAt as string | undefined) ?? undefined,
