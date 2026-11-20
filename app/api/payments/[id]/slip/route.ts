@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
-import { getSessionUser } from "@/lib/auth";
+import { banMessage, banUser, getSessionUser } from "@/lib/auth";
 import { MAX_SLIPS_PER_PAYMENT, expireStale, fulfillPayment } from "@/lib/tickets";
 import { compressSlip, readSlip } from "@/lib/slip";
 import { checkSlip, ocrSlip } from "@/lib/slipOcr";
@@ -10,19 +10,24 @@ import { uploadSlip } from "@/lib/drive";
 const MAX_BYTES = 8 * 1024 * 1024;
 const OK_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
-// โหมดทดสอบ: ALLOW_DUP_SLIP=1 ใน .env = ใช้สลีปใบเดิมซ้ำได้ (ไม่เช็กว่าเคยใช้) และไม่เช็กว่าเวลาโอนต้องหลังสร้างรายการ
+// โหมดทดสอบ: ALLOW_DUP_SLIP=1 ใน .env = ใช้สลีปใบเดิมซ้ำได้ (ไม่เช็กว่าเคยใช้) ไม่เช็กว่าเวลาโอนต้องตรงกับออเดอร์ และไม่แบน
 // ก่อนขึ้นใช้งานจริง ลบบรรทัดนี้ออกจาก .env แล้วรีสตาร์ท ระบบจะกลับมากันสลีปซ้ำเหมือนเดิม
 const allowDupSlip = () => process.env.ALLOW_DUP_SLIP === "1";
 
 // รับสลีป (multipart field "slip"):
+// 0) ผู้ใช้ที่ถูกแบนส่งสลีปไม่ได้
 // 1) อ่าน QR บนสลีป → ได้ transRef  2) กันสลีปซ้ำด้วย unique index  3) เก็บรูปลง Drive
 // 4) OCR อ่านยอด/ผู้รับ/เวลาโอน เทียบกับรายการ เก็บผลไว้ใน slips.check ให้ admin ดู
+//    (เวลาโอนต้องเป็นวันเดียวกับออเดอร์ และไม่เกิน 1 ชั่วโมงหลังสร้างออเดอร์)
 // 5) เปลี่ยนสถานะเป็น reviewing รอ admin อนุมัติ
-// 6) ถ้า check.ok = ผ่านทุกข้อ → อนุมัติอัตโนมัติ + ออกตั๋วทันที (ไม่ผ่านก็ค้างรอ admin ตรวจ)
+// 6) ถ้า check.ok = ผ่านทุกข้อ → อนุมัติอัตโนมัติ + ออกตั๋วทันที
+//    ถ้าอ่านสลีปได้แต่ไม่ผ่านข้อใดข้อหนึ่ง (ยอดเงิน / ผู้รับ / วันเวลาโอน) → แบนผู้ใช้ 1 ชั่วโมง รายการค้างรอ admin ตรวจ (admin ปลดแบนได้)
+//    อ่านสลีปไม่ได้ (OCR ว่าง/error/timeout) → ไม่แบน ค้างรอ admin ตรวจ
 // เร็วขึ้น: OCR + บีบรูปเริ่มทำพร้อมกับอ่าน QR เลย (ไม่รอกัน) ส่วนอัปโหลด Drive เริ่มหลังจองเลขสลีปได้แล้ว
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionUser().catch(() => null);
   if (!user) return NextResponse.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
+  if (user.bannedUntil) return NextResponse.json({ error: banMessage(user.bannedUntil) }, { status: 403 });
 
   const { id } = await params;
   if (!ObjectId.isValid(id)) return NextResponse.json({ error: "ไม่พบรายการชำระเงิน" }, { status: 404 });
@@ -88,6 +93,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   let autoOk = false;
+  let shouldBan = false;
   try {
     // อัปโหลด Drive กับ OCR (เริ่มไปแล้ว) รอผลพร้อมกัน (ocrSlip ไม่โยน error ถ้าอ่านไม่ได้จะได้ค่าว่าง)
     const [fileId, ocr] = await Promise.all([
@@ -96,9 +102,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     ]);
     const check = checkSlip(ocr, {
       amount: pay.amount as number,
-      since: dup ? "1970-01-01T00:00:00.000Z" : (pay.createdAt as string),
+      since: pay.createdAt as string,
+      skipTime: dup,
     });
     autoOk = check.ok === true;
+    shouldBan = check.shouldBan === true;
     await slips.updateOne({ _id: slipId }, { $set: { fileId, check } });
   } catch (e) {
     console.error("อัปสลีปขึ้น Drive ไม่สำเร็จ:", e);
@@ -114,6 +122,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (upd.modifiedCount === 0) {
     await slips.deleteOne({ _id: slipId });
     return NextResponse.json({ error: "รายการนี้ส่งสลีปไปแล้ว" }, { status: 409 });
+  }
+
+  // อ่านสลีปได้แต่ไม่ผ่านเงื่อนไขข้อใดข้อหนึ่ง → แบน 1 ชั่วโมง (รายการยังค้าง reviewing ให้ admin ตรวจ/ปลดแบนได้)
+  if (shouldBan) {
+    try {
+      const until = await banUser(userId, "สลีปไม่ผ่านการตรวจอัตโนมัติ (ยอดเงิน / ผู้รับเงิน / วันเวลาโอน)");
+      await slips.updateOne({ _id: slipId }, { $set: { "check.banned": true } });
+      return NextResponse.json({ ok: true, status: "reviewing", banned: true, bannedUntil: until });
+    } catch (e) {
+      console.error("แบนผู้ใช้ไม่สำเร็จ:", e);
+    }
   }
 
   // ผ่านทุกข้อ → อนุมัติอัตโนมัติ (ทำเหมือนตอน admin กดอนุมัติ) ถ้าพลาดตรงไหนปล่อยค้าง reviewing ให้ admin จัดการต่อ

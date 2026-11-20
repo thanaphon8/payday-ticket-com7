@@ -18,6 +18,8 @@ export type SlipOcr = {
   transferAt: string | null;
   rawText: string;
   error: string | null;
+  // true = OCR อ่านรูปได้จริง (ไม่ error และเจออย่างน้อยหนึ่งค่า ยอด/ผู้รับ/วันเวลา) ใช้ตัดสินว่าแบนได้ไหม
+  readable: boolean;
 };
 export type SlipCheck = {
   amount: number | null;
@@ -26,12 +28,17 @@ export type SlipCheck = {
   timeOk: boolean;
   transferAt: string | null;
   ok: boolean;
+  shouldBan?: boolean; // อ่านสลีปได้ แต่ไม่ผ่านเงื่อนไขอย่างน้อย 1 ข้อ (ยอดเงิน / ผู้รับ / วันเวลาโอน)
+  banned?: boolean; // ระบบแบนผู้ซื้อไปแล้วจากสลีปใบนี้
   rawText?: string; // ข้อความดิบที่ OCR อ่านได้ ไว้ตรวจปัญหาช่วงทดสอบ
   error?: string | null;
 };
 
 // ชื่อผู้รับที่ยอมรับ (บิลของร้านจะแสดงเป็นชื่อบริษัทนี้บนสลีป)
 export const RECEIVER_NAME_DEFAULT = "บริษัท คอมเซเว่น จำกัด (มหาชน)";
+
+// เวลาโอนต้องไม่เกินกี่นาทีหลังสร้างออเดอร์ (และต้องเป็นวันเดียวกับออเดอร์ตามเวลาไทย)
+export const MAX_TRANSFER_DELAY_MIN = 60;
 
 const INIT_WAIT_MS = 25_000; // รอ worker พร้อมได้นานแค่ไหนต่อหนึ่งคำขอ (โหลดภาษาต่อเบื้องหลังได้)
 const OCR_WAIT_MS = 30_000; // เวลารวมสำหรับอ่านรูปหลังจาก worker พร้อมแล้ว
@@ -209,7 +216,15 @@ function analyze(text: string) {
 
 // ไม่โยน error: อ่านไม่ได้ = ค่าว่าง ให้ admin ตรวจเอง (error เก็บใน out.error)
 export async function ocrSlip(buf: Buffer): Promise<SlipOcr> {
-  const out: SlipOcr = { amount: null, amounts: [], receiverOk: false, transferAt: null, rawText: "", error: null };
+  const out: SlipOcr = {
+    amount: null,
+    amounts: [],
+    receiverOk: false,
+    transferAt: null,
+    rawText: "",
+    error: null,
+    readable: false,
+  };
   const texts: string[] = [];
 
   try {
@@ -237,23 +252,41 @@ export async function ocrSlip(buf: Buffer): Promise<SlipOcr> {
 
   out.amount = out.amounts[0] ?? null;
   out.rawText = texts.join("\n-----\n").slice(0, 1200);
+  // อ่านได้จริง = ไม่ error และเจออย่างน้อยหนึ่งค่า (ว่าง/error/timeout = อ่านไม่ได้ ไม่แบน ให้ admin ตรวจ)
+  out.readable = !out.error && (out.amounts.length > 0 || out.receiverOk || out.transferAt !== null);
   return out;
 }
 
-// since = เวลาที่สร้างรายการ (สลีปต้องโอนหลังจากนี้)
-export function checkSlip(o: SlipOcr, expect: { amount: number; since: string }): SlipCheck {
+// วันที่ตามเวลาไทย (YYYY-MM-DD) ของเวลา ms
+const thaiDay = (ms: number) => new Date(ms + 7 * 3_600_000).toISOString().slice(0, 10);
+
+// since = เวลาที่สร้างรายการ
+// เวลาโอนผ่านเมื่อ: วันเดียวกับออเดอร์ (เวลาไทย) และโอนหลังสร้างออเดอร์ไม่เกิน MAX_TRANSFER_DELAY_MIN นาที (เผื่อนาฬิกาคลาดก่อนสร้าง 2 นาที)
+// skipTime = โหมดทดสอบ: ไม่เทียบกับเวลาออเดอร์ และไม่แบน
+export function checkSlip(
+  o: SlipOcr,
+  expect: { amount: number; since: string; skipTime?: boolean },
+): SlipCheck {
   const amountOk = o.amounts.some((a) => Math.abs(a - expect.amount) < 0.005);
   const t = o.transferAt ? Date.parse(o.transferAt) : NaN;
   const since = Date.parse(expect.since);
+  const notFuture = Number.isFinite(t) && t <= Date.now() + 10 * 60_000;
   const timeOk =
-    Number.isFinite(t) && Number.isFinite(since) && t >= since - 2 * 60_000 && t <= Date.now() + 10 * 60_000;
+    notFuture &&
+    (expect.skipTime === true ||
+      (Number.isFinite(since) &&
+        thaiDay(t) === thaiDay(since) &&
+        t >= since - 2 * 60_000 &&
+        t <= since + MAX_TRANSFER_DELAY_MIN * 60_000));
+  const ok = amountOk && o.receiverOk && timeOk;
   return {
     amount: amountOk ? expect.amount : o.amount,
     amountOk,
     receiverOk: o.receiverOk,
     timeOk,
     transferAt: o.transferAt,
-    ok: amountOk && o.receiverOk && timeOk,
+    ok,
+    shouldBan: expect.skipTime !== true && o.readable && !ok,
     rawText: o.rawText,
     error: o.error,
   };

@@ -7,7 +7,17 @@ const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600
 
 type Gate = "loading" | "locked" | "ok";
 type ResultKind = "ok" | "duplicate" | "wrong_type" | "invalid";
-type ScanResult = { result: ResultKind; code: string; name?: string; phone?: string; usedAt?: string };
+type BoothInfo = { id: string; name: string; kind: "play" | "paper" };
+type ScanResult = {
+  result: ResultKind;
+  code: string;
+  name?: string;
+  phone?: string;
+  usedAt?: string;
+  usedByName?: string;
+  price?: number;
+  msg?: string;
+};
 type HistoryRow = { code: string; result: ResultKind; name?: string; at: string };
 
 const COOLDOWN_MS = 4000; // รหัสเดิมยิงซ้ำภายในกี่ ms ให้ข้าม (กันกล้องอ่านซ้ำรัว ๆ)
@@ -15,9 +25,11 @@ const COOLDOWN_MS = 4000; // รหัสเดิมยิงซ้ำภาย
 const META: Record<ResultKind, { title: string; sub: string; bg: string }> = {
   ok: { title: "ผ่าน", sub: "ตัดตั๋วแล้ว", bg: "bg-green-600" },
   duplicate: { title: "ตั๋วนี้ใช้แล้ว", sub: "ห้ามให้ผ่าน", bg: "bg-red-600" },
-  wrong_type: { title: "ไม่ใช่ตั๋วเข้าซุ้ม", sub: "ตั๋วประเภทนี้ยิงที่นี่ไม่ได้", bg: "bg-amber-500" },
+  wrong_type: { title: "ตั๋วผิดประเภท", sub: "ตั๋วประเภทนี้ยิงที่นี่ไม่ได้", bg: "bg-amber-500" },
   invalid: { title: "ไม่พบตั๋ว", sub: "รหัสไม่ถูกต้อง", bg: "bg-red-600" },
 };
+
+const baht = (n: number) => `฿${n.toLocaleString("th-TH")}`;
 
 const fmt = (iso?: string) =>
   iso
@@ -49,6 +61,8 @@ function tone(ok: boolean) {
 
 export default function TicketScanPage() {
   const [gate, setGate] = useState<Gate>("loading");
+  const [booth, setBooth] = useState<BoothInfo | null>(null); // บัญชีซุ้มที่ล็อกอินอยู่
+  const [user, setUser] = useState("");
   const [pw, setPw] = useState("");
   const [pwErr, setPwErr] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
@@ -61,6 +75,7 @@ export default function TicketScanPage() {
   const [manual, setManual] = useState("");
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [okCount, setOkCount] = useState(0);
+  const [okAmount, setOkAmount] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const busyRef = useRef(false);
@@ -68,11 +83,14 @@ export default function TicketScanPage() {
   const lastRef = useRef<{ code: string; at: number }>({ code: "", at: 0 });
   const scanRef = useRef<(raw: string) => void>(() => {});
 
-  // เช็กว่าปลดล็อกอยู่แล้วหรือยัง (cookie 12 ชั่วโมง)
+  // เช็กว่าล็อกอินซุ้มอยู่แล้วหรือยัง (cookie 12 ชั่วโมง)
   useEffect(() => {
     fetch("/api/ticket/login", { cache: "no-store" })
       .then((r) => r.json())
-      .then((d: { unlocked?: boolean }) => setGate(d.unlocked ? "ok" : "locked"))
+      .then((d: { unlocked?: boolean; booth?: BoothInfo | null }) => {
+        setBooth(d.booth ?? null);
+        setGate(d.unlocked ? "ok" : "locked");
+      })
       .catch(() => setGate("locked"));
   }, []);
 
@@ -115,10 +133,22 @@ export default function TicketScanPage() {
           setNote(data.error ?? "ยิงไม่สำเร็จ ลองใหม่อีกครั้ง");
           return;
         }
-        const r: ScanResult = { result: data.result, code: data.code ?? code, name: data.name, phone: data.phone, usedAt: data.usedAt };
+        const r: ScanResult = {
+          result: data.result,
+          code: data.code ?? code,
+          name: data.name,
+          phone: data.phone,
+          usedAt: data.usedAt,
+          usedByName: data.usedByName,
+          price: data.price,
+          msg: data.msg,
+        };
         showResult(r);
         tone(r.result === "ok");
-        if (r.result === "ok") setOkCount((n) => n + 1);
+        if (r.result === "ok") {
+          setOkCount((n) => n + 1);
+          setOkAmount((a) => a + (r.price ?? 0));
+        }
         setHistory((h) => [{ code: r.code, result: r.result, name: r.name, at: new Date().toISOString() }, ...h].slice(0, 8));
       } catch {
         lastRef.current = { code: "", at: 0 };
@@ -132,7 +162,7 @@ export default function TicketScanPage() {
   );
   scanRef.current = submit;
 
-  // เปิดกล้องหลังปลดล็อก (และเมื่อกดปุ่มเปิดกล้อง): อ่านเฉพาะ Code128
+  // เปิดกล้องหลังล็อกอิน (และเมื่อกดปุ่มเปิดกล้อง): อ่านเฉพาะ Code128
   // ปิดกล้อง = หยุดสตรีมและปล่อยกล้องคืนเครื่องจริง ๆ
   useEffect(() => {
     if (gate !== "ok" || !camOn) return;
@@ -187,19 +217,23 @@ export default function TicketScanPage() {
 
   async function unlock(e: FormEvent) {
     e.preventDefault();
-    if (!pw || pwBusy) return;
+    if (!user.trim() || !pw || pwBusy) return;
     setPwBusy(true);
     setPwErr("");
     try {
       const res = await fetch("/api/ticket/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw }),
+        body: JSON.stringify({ username: user.trim(), password: pw }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) setPwErr(data.error ?? "เข้าสู่ระบบไม่สำเร็จ");
       else {
         setPw("");
+        setBooth((data.booth as BoothInfo | undefined) ?? null);
+        setOkCount(0);
+        setOkAmount(0);
+        setHistory([]);
         setGate("ok");
       }
     } catch {
@@ -213,7 +247,10 @@ export default function TicketScanPage() {
     showResult(null);
     setHistory([]);
     setOkCount(0);
+    setOkAmount(0);
     setCamOn(true);
+    setBooth(null);
+    setUser("");
     setGate("locked");
   }
 
@@ -231,27 +268,39 @@ export default function TicketScanPage() {
             <p className="mt-3 text-sm text-white/60">กำลังโหลด...</p>
           ) : (
             <>
-              <p className="mt-3 text-sm text-white/60">กรอกรหัสผ่านเจ้าหน้าที่เพื่อเริ่มสแกน</p>
-              <form onSubmit={unlock} className="mt-5">
+              <p className="mt-3 text-sm text-white/60">เข้าสู่ระบบด้วยบัญชีของซุ้มเพื่อเริ่มสแกน</p>
+              <form onSubmit={unlock} className="mt-5 flex flex-col gap-3">
+                <input
+                  type="text"
+                  value={user}
+                  onChange={(e) => setUser(e.target.value)}
+                  placeholder="ชื่อผู้ใช้ของซุ้ม"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoFocus
+                  maxLength={60}
+                  className={inputCls}
+                />
                 <input
                   type="password"
                   value={pw}
                   onChange={(e) => setPw(e.target.value)}
-                  placeholder="รหัสผ่านเจ้าหน้าที่"
+                  placeholder="รหัสผ่าน"
                   autoComplete="current-password"
-                  autoFocus
                   maxLength={200}
                   className={inputCls}
                 />
                 {pwErr && (
-                  <p role="alert" className="mt-3 text-sm font-medium text-red-500">
+                  <p role="alert" className="text-sm font-medium text-red-500">
                     {pwErr}
                   </p>
                 )}
                 <button
                   type="submit"
-                  disabled={pwBusy || pw.length === 0}
-                  className="mt-4 min-h-12 w-full rounded-2xl bg-[#e50914] py-3 text-sm font-bold text-white disabled:opacity-60"
+                  disabled={pwBusy || pw.length === 0 || user.trim().length === 0}
+                  className="mt-1 min-h-12 w-full rounded-2xl bg-[#e50914] py-3 text-sm font-bold text-white disabled:opacity-60"
                 >
                   {pwBusy ? "กำลังตรวจสอบ..." : "เข้าสู่หน้าสแกน"}
                 </button>
@@ -264,21 +313,28 @@ export default function TicketScanPage() {
   }
 
   const meta = result ? META[result.result] : null;
+  const isPaperBooth = booth?.kind === "paper";
+  const resultSub = result
+    ? (result.msg ?? (result.result === "ok" && isPaperBooth ? "ให้ตั๋วกระดาษได้" : META[result.result].sub))
+    : "";
 
   return (
     <div className={shell}>
       <main className="mx-auto w-full max-w-md px-4 pb-10 pt-5 md:max-w-2xl">
         <header className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-bold">สแกนรับตั๋ว</h1>
-            <p className="mt-0.5 text-xs text-white/60">ผ่านแล้วรอบนี้ {okCount} ใบ</p>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-white/60">สแกนรับตั๋ว</p>
+            <h1 className="truncate text-2xl font-bold">{booth?.name ?? "สแกนรับตั๋ว"}</h1>
+            <p className="mt-0.5 text-xs text-white/60">
+              ผ่านแล้วรอบนี้ {okCount} ใบ{isPaperBooth ? "" : ` · ${baht(okAmount)}`}
+            </p>
           </div>
           <button
             type="button"
             onClick={lock}
-            className="min-h-11 rounded-full border border-white/40 px-5 py-2.5 text-sm font-bold"
+            className="min-h-11 shrink-0 rounded-full border border-white/40 px-5 py-2.5 text-sm font-bold"
           >
-            ล็อก
+            ออกจากระบบ
           </button>
         </header>
 
@@ -336,7 +392,7 @@ export default function TicketScanPage() {
           <input
             value={manual}
             onChange={(e) => setManual(e.target.value.toUpperCase())}
-            placeholder="PD-BT-XXXXXXXX"
+            placeholder={isPaperBooth ? "PD-BP-XXXXXXXX" : "PD-BT-XXXXXXXX"}
             aria-label="กรอกรหัสตั๋ว"
             autoCapitalize="characters"
             autoComplete="off"
@@ -395,7 +451,10 @@ export default function TicketScanPage() {
             </div>
           )}
           <p className="text-5xl font-extrabold md:text-6xl">{meta.title}</p>
-          <p className="mt-2 text-lg font-semibold">{meta.sub}</p>
+          <p className="mt-2 text-lg font-semibold">{resultSub}</p>
+          {result.result === "ok" && (result.price ?? 0) > 0 && (
+            <p className="mt-2 text-2xl font-extrabold">มูลค่า {baht(result.price ?? 0)}</p>
+          )}
           {result.name && (
             <p className="mt-6 text-xl font-bold">
               {result.name}
@@ -404,7 +463,10 @@ export default function TicketScanPage() {
           )}
           <p className="mt-2 break-all font-mono text-sm opacity-90">{result.code}</p>
           {result.result === "duplicate" && result.usedAt && (
-            <p className="mt-2 text-sm font-semibold">ยิงครั้งแรกเมื่อ {fmt(result.usedAt)}</p>
+            <p className="mt-2 text-sm font-semibold">
+              ยิงครั้งแรกเมื่อ {fmt(result.usedAt)}
+              {result.usedByName ? ` ที่ ${result.usedByName}` : ""}
+            </p>
           )}
           <button
             type="button"

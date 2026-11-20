@@ -3,19 +3,19 @@ import { promisify } from "util";
 import { cookies } from "next/headers";
 import { ObjectId } from "mongodb";
 import { getDb } from "./mongodb";
+import { BOOTHS, boothById, boothCreds, type Booth } from "./booths";
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>;
 
 export const COOKIE = "payday-session";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 วัน
 
-// admin และเจ้าหน้าที่สแกนตั๋ว ใช้รหัสผ่านแยกกัน ไม่ผูกกับบัญชีผู้ใช้
-// ตั้งใน .env.local: ADMIN_PASSWORD (หน้า /admin) และ STAFF_PASSWORD (หน้า /ticket) ยาวอย่างน้อย 8 ตัว
-// ไม่ตั้งหรือสั้นไป = ปิดหน้านั้นทั้งหมด (fail closed)
+// admin ใช้รหัสผ่านเดียว (ADMIN_PASSWORD) / ซุ้มและจุดรับตั๋วกระดาษใช้ username + รหัสผ่านของแต่ละบัญชี (ดู lib/booths.ts)
+// ไม่ตั้งหรือสั้นไป = ปิดบัญชีนั้นทั้งหมด (fail closed)
 export const ADMIN_COOKIE = "payday-admin";
 export const ADMIN_MAX_AGE = 60 * 60 * 12; // 12 ชั่วโมง
-export const STAFF_COOKIE = "payday-staff";
-export const STAFF_MAX_AGE = 60 * 60 * 12; // 12 ชั่วโมง
+export const BOOTH_COOKIE = "payday-booth";
+export const BOOTH_MAX_AGE = 60 * 60 * 12; // 12 ชั่วโมง
 
 export type SessionUser = {
   id: string;
@@ -26,6 +26,7 @@ export type SessionUser = {
   companyId?: number | null;
   departmentId?: number | null;
   branchId?: number | null;
+  bannedUntil?: string | null; // ISO: ถูกแบนจนถึงเวลานี้ (null = ไม่ถูกแบน หรือหมดเวลาแบนแล้ว)
   isAdmin?: boolean; // เลิกใช้แล้ว (admin แยกเป็นรหัสผ่านต่างหาก) คงไว้กันโค้ดเก่าพัง
 };
 
@@ -71,7 +72,7 @@ export async function createSession(userId: string) {
   });
 }
 
-// ออกจากระบบของผู้ใช้ทั่วไปเท่านั้น (ไม่ยุ่งกับ cookie admin / เจ้าหน้าที่)
+// ออกจากระบบของผู้ใช้ทั่วไปเท่านั้น (ไม่ยุ่งกับ cookie admin / ซุ้ม)
 export async function destroySession() {
   const jar = await cookies();
   jar.delete(COOKIE);
@@ -102,23 +103,77 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     companyId: typeof u.companyId === "number" ? u.companyId : null,
     departmentId: typeof u.departmentId === "number" ? u.departmentId : null,
     branchId: typeof u.branchId === "number" ? u.branchId : null,
+    bannedUntil:
+      typeof u.bannedUntil === "string" && Date.parse(u.bannedUntil) > Date.now() ? u.bannedUntil : null,
   };
 }
 
-/* ---------- รหัสผ่านแยกสำหรับ admin / เจ้าหน้าที่ ---------- */
-type Role = "admin" | "staff";
+/* ---------- แบนผู้ใช้ (อัตโนมัติจากสลีปไม่ผ่าน หรือ admin แบนเอง) ----------
+   ถูกแบน = สร้างรายการชำระเงินและส่งสลีปไม่ได้ (ดูตั๋วเดิมและเข้าสู่ระบบได้ตามปกติ)
+   เก็บใน users.bannedUntil (ISO) หมดเวลาแล้วใช้งานได้เองโดยไม่ต้องล้างค่า / admin ปลดแบนก่อนเวลาได้ที่หน้า admin
+   แบนถาวร = bannedUntil เป็นปี 9999 (ปลดได้โดย admin เท่านั้น) */
+export const BAN_MINUTES = 60;
+export const PERMANENT_BAN_ISO = "9999-12-31T00:00:00.000Z";
+export const isPermanentBan = (until: string) => Date.parse(until) >= Date.parse("9000-01-01T00:00:00.000Z");
+
+// minutes = null → แบนถาวร / คืนเวลาที่แบนถึง (ISO)
+export async function banUser(
+  userId: string | ObjectId,
+  reason: string,
+  minutes: number | null = BAN_MINUTES,
+): Promise<string> {
+  const now = Date.now();
+  const until = minutes === null ? PERMANENT_BAN_ISO : new Date(now + minutes * 60_000).toISOString();
+  const db = await getDb();
+  await db.collection("users").updateOne(
+    { _id: new ObjectId(String(userId)) },
+    { $set: { bannedUntil: until, banReason: reason, bannedAt: new Date(now).toISOString() } },
+  );
+  return until;
+}
+
+export async function unbanUser(userId: string | ObjectId) {
+  const db = await getDb();
+  await db
+    .collection("users")
+    .updateOne(
+      { _id: new ObjectId(String(userId)) },
+      { $unset: { bannedUntil: "", banReason: "", bannedAt: "" } },
+    );
+}
+
+// ข้อความแจ้งผู้ใช้ที่ถูกแบน
+export function banMessage(until: string) {
+  if (isPermanentBan(until))
+    return "บัญชีถูกระงับการสร้างรายการและส่งสลีปถาวร หากเข้าใจผิดกรุณาติดต่อเจ้าหน้าที่";
+  const t = new Date(until);
+  const sameDay = t.getTime() - Date.now() < 12 * 3_600_000;
+  const when = sameDay
+    ? `${t.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" })} น.`
+    : `${t.toLocaleString("th-TH", {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "Asia/Bangkok",
+      })} น.`;
+  return `บัญชีถูกระงับการสร้างรายการและส่งสลีปชั่วคราวถึง ${when} หากเข้าใจผิดกรุณาติดต่อเจ้าหน้าที่`;
+}
+
+/* ---------- รหัสผ่านแยกสำหรับ admin ---------- */
+type Role = "admin";
 
 const ROLES: Record<Role, { cookie: string; maxAge: number; env: string }> = {
   admin: { cookie: ADMIN_COOKIE, maxAge: ADMIN_MAX_AGE, env: "ADMIN_PASSWORD" },
-  staff: { cookie: STAFF_COOKIE, maxAge: STAFF_MAX_AGE, env: "STAFF_PASSWORD" },
 };
+
+const safeEq = (a: string, b: string) =>
+  timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
 
 function verifyRolePassword(role: Role, pw: string) {
   const expected = process.env[ROLES[role].env];
   if (!expected || expected.length < 8) return false;
-  const a = createHash("sha256").update(pw).digest();
-  const b = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(a, b);
+  return safeEq(pw, expected);
 }
 
 // cookie ปลดล็อก: เวลาหมดอายุ + ลายเซ็น HMAC ผูกกับ role (cookie admin เอาไปใช้กับหน้าสแกนไม่ได้ และกลับกัน)
@@ -157,17 +212,9 @@ export const verifyAdminPassword = (pw: string) => verifyRolePassword("admin", p
 export const createAdminUnlock = () => createRoleUnlock("admin");
 export const destroyAdminUnlock = () => destroyRoleUnlock("admin");
 
-export const verifyStaffPassword = (pw: string) => verifyRolePassword("staff", pw);
-export const createStaffUnlock = () => createRoleUnlock("staff");
-export const destroyStaffUnlock = () => destroyRoleUnlock("staff");
-
-// สถานะสำหรับหน้า admin / หน้าสแกน: ปลดล็อกด้วยรหัสผ่านแล้วหรือยัง
+// สถานะสำหรับหน้า admin: ปลดล็อกด้วยรหัสผ่านแล้วหรือยัง
 export async function getAdminState(): Promise<{ unlocked: boolean }> {
   return { unlocked: await hasRoleUnlock("admin") };
-}
-
-export async function getStaffState(): Promise<{ unlocked: boolean }> {
-  return { unlocked: await hasRoleUnlock("staff") };
 }
 
 // ใช้ใน /api/admin/*: ok=false → ตอบ 401 (ยังไม่ได้กรอกรหัส admin หรือหมดอายุ)
@@ -179,10 +226,66 @@ export async function requireAdmin(): Promise<
   return { ok: true, user: { id: "admin" } };
 }
 
-// ใช้ใน /api/ticket/*: ok=false → ตอบ 401 (ยังไม่ได้กรอกรหัสเจ้าหน้าที่หรือหมดอายุ)
-export async function requireStaff(): Promise<{ ok: true } | { ok: false; status: 401 }> {
-  if (!(await hasRoleUnlock("staff"))) return { ok: false, status: 401 };
-  return { ok: true };
+/* ---------- บัญชีซุ้ม / จุดรับตั๋วกระดาษ (หน้า /ticket) ---------- */
+export type BoothInfo = Pick<Booth, "id" | "name" | "kind">;
+export const boothInfo = (b: Booth): BoothInfo => ({ id: b.id, name: b.name, kind: b.kind });
+
+// ตรวจ username + รหัสผ่านกับทุกบัญชีเสมอ (ไม่หยุดเมื่อเจอ) กันวัดเวลาเดา username
+export function verifyBoothLogin(username: string, password: string): Booth | null {
+  let found: Booth | null = null;
+  for (const b of BOOTHS) {
+    const c = boothCreds(b);
+    const valid = c.user.length > 0 && c.password.length >= 8;
+    const okUser = safeEq(username, c.user);
+    const okPass = safeEq(password, c.password);
+    if (valid && okUser && okPass && !found) found = b;
+  }
+  return found;
+}
+
+// cookie ปลดล็อกของซุ้ม: ผูก id ซุ้ม + เวลาหมดอายุ + ลายเซ็น HMAC
+export async function createBoothUnlock(boothId: string) {
+  const exp = Math.floor(Date.now() / 1000) + BOOTH_MAX_AGE;
+  const jar = await cookies();
+  jar.set(BOOTH_COOKIE, `${boothId}.${exp}.${sign(`booth:${boothId}:${exp}`)}`, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: BOOTH_MAX_AGE,
+  });
+}
+
+export async function destroyBoothUnlock() {
+  const jar = await cookies();
+  jar.delete(BOOTH_COOKIE);
+}
+
+async function getBoothSession(): Promise<Booth | null> {
+  const jar = await cookies();
+  const raw = jar.get(BOOTH_COOKIE)?.value;
+  if (!raw) return null;
+  const [id, exp, sig] = raw.split(".");
+  if (!id || !exp || !sig) return null;
+
+  const a = Buffer.from(sig);
+  const b = Buffer.from(sign(`booth:${id}:${exp}`));
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  if (Number(exp) < Date.now() / 1000) return null;
+  return boothById(id) ?? null;
+}
+
+// สถานะสำหรับหน้า /ticket: ล็อกอินอยู่ไหม + เป็นบัญชีไหน
+export async function getBoothState(): Promise<{ unlocked: boolean; booth: BoothInfo | null }> {
+  const b = await getBoothSession();
+  return { unlocked: !!b, booth: b ? boothInfo(b) : null };
+}
+
+// ใช้ใน /api/ticket/*: ok=false → ตอบ 401 (ยังไม่ล็อกอินหรือหมดอายุ)
+export async function requireBooth(): Promise<{ ok: true; booth: Booth } | { ok: false; status: 401 }> {
+  const b = await getBoothSession();
+  if (!b) return { ok: false, status: 401 };
+  return { ok: true, booth: b };
 }
 
 /* ---------- กันเดารหัสผ่าน (นับในหน่วยความจำ รีเซ็ตเมื่อเซิร์ฟเวอร์รีสตาร์ต) ---------- */

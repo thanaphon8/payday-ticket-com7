@@ -6,7 +6,7 @@ import { Prompt } from "next/font/google";
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
 
 type ListTab = "reviewing" | "approved" | "auto" | "rejected";
-type Tab = ListTab | "summary" | "scans";
+type Tab = ListTab | "summary" | "scans" | "bans";
 type SlipCheck = {
   amount: number | null;
   amountOk: boolean;
@@ -14,6 +14,8 @@ type SlipCheck = {
   timeOk: boolean;
   transferAt: string | null;
   ok: boolean;
+  shouldBan?: boolean;
+  banned?: boolean;
   rawText?: string;
   error?: string | null;
 };
@@ -46,7 +48,7 @@ type Summary = {
   daily: { date: string; orders: number; booth: number; lucky: number; amount: number }[];
   generatedAt: string;
 };
-// ประวัติการยิงบาร์โค้ดตั๋วเข้างาน (มาจากหน้า /ticket)
+// ประวัติการยิงบาร์โค้ดตั๋วเข้างาน (มาจากหน้า /ticket ของแต่ละซุ้ม)
 type ScanRow = {
   id: string;
   code: string;
@@ -56,12 +58,42 @@ type ScanRow = {
   phone: string | null;
   ticket: string | null;
   firstUsedAt: string | null;
+  boothId: string | null;
+  boothName: string | null;
+  amount: number | null;
 };
-type ScanData = { total: number; rejected: number; scans: ScanRow[] };
+// สรุปรายซุ้ม: count = จำนวนตั๋วที่ยิงผ่าน / amount = เงินรวมที่ซุ้มนั้นยิงได้ / rejected = ยิงไม่ผ่านกี่ครั้ง
+type BoothStat = {
+  id: string;
+  name: string;
+  kind: "play" | "paper";
+  count: number;
+  amount: number;
+  rejected: number;
+  lastAt: string | null;
+};
+type ScanData = { total: number; rejected: number; booths: BoothStat[]; scans: ScanRow[] };
+// ผู้ใช้ที่ถูกแบนอยู่ (อัตโนมัติจากสลีปไม่ผ่าน หรือ admin แบนเอง)
+type BanRow = {
+  id: string;
+  username: string;
+  name: string;
+  phone: string;
+  bannedUntil: string;
+  bannedAt: string | null;
+  banReason: string | null;
+};
+type BanDuration = "1h" | "24h" | "7d" | "permanent";
 
 const POLL_MS = 10_000;
 const RECEIVER_LABEL = "บริษัท คอมเซเว่น จำกัด (มหาชน)";
 const REASONS = ["ยอดเงินไม่ตรง", "ไม่พบรายการเข้าบัญชี", "สลีปไม่ชัด/อ่านไม่ได้", "สลีปไม่ใช่ของรายการนี้"];
+const BAN_OPTIONS: [BanDuration, string][] = [
+  ["1h", "1 ชั่วโมง"],
+  ["24h", "24 ชั่วโมง"],
+  ["7d", "7 วัน"],
+  ["permanent", "ถาวร"],
+];
 const BANKS: Record<string, string> = {
   "002": "กรุงเทพ",
   "004": "กสิกรไทย",
@@ -76,7 +108,7 @@ const BANKS: Record<string, string> = {
 const SCAN_LABEL: Record<string, { label: string; cls: string }> = {
   ok: { label: "ผ่าน", cls: "bg-green-600 text-white" },
   duplicate: { label: "ซ้ำ (ใช้แล้ว)", cls: "bg-red-600 text-white" },
-  wrong_type: { label: "ไม่ใช่ตั๋วซุ้ม", cls: "bg-yellow-400 text-[#14402c]" },
+  wrong_type: { label: "ตั๋วผิดประเภท", cls: "bg-yellow-400 text-[#14402c]" },
   invalid: { label: "ไม่พบตั๋ว", cls: "bg-red-600 text-white" },
 };
 
@@ -96,6 +128,8 @@ const fmtSec = (iso: string | null) =>
     : "-";
 const fmtDay = (ymd: string) =>
   new Date(`${ymd}T00:00:00+07:00`).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "2-digit" });
+// แบนถาวร = bannedUntil เป็นปี 9999
+const isForever = (iso: string) => iso.startsWith("9999");
 
 function beep() {
   try {
@@ -133,7 +167,7 @@ function Row({ ok, label, value }: { ok: boolean; label: string; value: string }
   );
 }
 
-// เครื่องหมายย่อด้านขวาของรายการ: ok = ✓ เขียว / false = ! เหลือง / null = ยังไม่ได้ตรวจ (เทา)
+// เครื่องหมายย่อด้านขวาของรายการ: ok = ✓ เขียว (ผ่านการอ่านสลีปจริงเทียบออเดอร์) / false = ! เหลือง / null = ยังไม่ได้ตรวจ (เทา)
 function Mark({ ok, label }: { ok: boolean | null; label: string }) {
   const cls =
     ok === null ? "bg-[#e3ecd6] text-[#6b7f6f]" : ok ? "bg-green-600 text-white" : "bg-yellow-400 text-[#14402c]";
@@ -184,10 +218,14 @@ export default function AdminPage() {
   const [counts, setCounts] = useState<Counts>({ reviewing: 0, approved: 0, auto: 0, rejected: 0 });
   const [summary, setSummary] = useState<Summary | null>(null);
   const [scanData, setScanData] = useState<ScanData | null>(null);
+  const [banList, setBanList] = useState<BanRow[] | null>(null);
+  const [boothFilter, setBoothFilter] = useState(""); // กรองประวัติสแกนเฉพาะซุ้ม ("" = ทุกซุ้ม)
   const [sound, setSound] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
+  const [banId, setBanId] = useState<string | null>(null); // รายการที่กำลังเลือกแบนผู้ซื้อ
+  const [banDur, setBanDur] = useState<BanDuration>("24h");
   const [detailId, setDetailId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [zoom, setZoom] = useState<string | null>(null);
@@ -199,15 +237,26 @@ export default function AdminPage() {
   const prevReviewing = useRef<number | null>(null);
   const soundRef = useRef(true);
   const tabRef = useRef<Tab>("reviewing");
+  const boothRef = useRef("");
   soundRef.current = sound;
   tabRef.current = tab;
+  boothRef.current = boothFilter;
 
   const load = useCallback(async () => {
     try {
       const current = tabRef.current;
-      const listStatus: ListTab = current === "summary" || current === "scans" ? "reviewing" : current;
+      const special = current === "summary" || current === "scans" || current === "bans";
+      const listStatus: ListTab =
+        current === "summary" || current === "scans" || current === "bans" ? "reviewing" : current;
+      const scansUrl = `/api/admin/scans${boothRef.current ? `?booth=${encodeURIComponent(boothRef.current)}` : ""}`;
       const extraUrl =
-        current === "summary" ? "/api/admin/summary" : current === "scans" ? "/api/admin/scans" : null;
+        current === "summary"
+          ? "/api/admin/summary"
+          : current === "scans"
+            ? scansUrl
+            : current === "bans"
+              ? "/api/admin/bans"
+              : null;
       const [res, extraRes] = await Promise.all([
         fetch(`/api/admin/payments?status=${listStatus}`, { cache: "no-store" }),
         extraUrl ? fetch(extraUrl, { cache: "no-store" }) : Promise.resolve(null),
@@ -220,18 +269,26 @@ export default function AdminPage() {
       const data = (await res.json()) as { counts: Counts; payments: Item[] };
       setGate("ok");
       setNote("");
-      if (current !== "summary" && current !== "scans") setItems(data.payments);
+      if (!special) setItems(data.payments);
       setCounts(data.counts);
       if (prevReviewing.current !== null && data.counts.reviewing > prevReviewing.current && soundRef.current) beep();
       prevReviewing.current = data.counts.reviewing;
 
       if (extraRes) {
         if (!extraRes.ok) {
-          setNote(current === "summary" ? "โหลดสรุปยอดไม่ได้ กำลังลองใหม่" : "โหลดประวัติสแกนไม่ได้ กำลังลองใหม่");
+          setNote(
+            current === "summary"
+              ? "โหลดสรุปยอดไม่ได้ กำลังลองใหม่"
+              : current === "scans"
+                ? "โหลดประวัติสแกนไม่ได้ กำลังลองใหม่"
+                : "โหลดรายชื่อผู้ถูกแบนไม่ได้ กำลังลองใหม่",
+          );
         } else if (current === "summary") {
           setSummary((await extraRes.json()) as Summary);
-        } else {
+        } else if (current === "scans") {
           setScanData((await extraRes.json()) as ScanData);
+        } else {
+          setBanList(((await extraRes.json()) as { bans: BanRow[] }).bans);
         }
       }
     } catch {
@@ -243,7 +300,7 @@ export default function AdminPage() {
     load();
     const t = setInterval(load, POLL_MS);
     return () => clearInterval(t);
-  }, [load, tab]);
+  }, [load, tab, boothFilter]);
 
   useEffect(() => {
     document.title = counts.reviewing > 0 ? `(${counts.reviewing}) รอตรวจสลีป · Admin` : "Admin · Payday Park";
@@ -286,10 +343,13 @@ export default function AdminPage() {
     setItems([]);
     setSummary(null);
     setScanData(null);
+    setBanList(null);
+    setBoothFilter("");
     setCounts({ reviewing: 0, approved: 0, auto: 0, rejected: 0 });
     setDetailId(null);
     setConfirmId(null);
     setRejectId(null);
+    setBanId(null);
     setZoom(null);
     prevReviewing.current = null;
     setGate("locked");
@@ -313,6 +373,49 @@ export default function AdminPage() {
     setConfirmId(null);
     setRejectId(null);
     setReason("");
+    load();
+  }
+
+  // admin แบนผู้ซื้อของรายการนี้เอง (แบนอย่างเดียว รายการยังค้างรอตรวจ)
+  async function banBuyer(paymentId: string, duration: BanDuration) {
+    setBusyId(paymentId);
+    setNote("");
+    try {
+      const res = await fetch("/api/admin/bans", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "ban", paymentId, duration }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setNote(data.error ?? "แบนไม่สำเร็จ");
+      } else {
+        setNote("");
+      }
+    } catch {
+      setNote("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้");
+    }
+    setBusyId(null);
+    setBanId(null);
+    load();
+  }
+
+  // ปลดแบนผู้ใช้ก่อนครบเวลา
+  async function unban(userId: string) {
+    setBusyId(userId);
+    setNote("");
+    try {
+      const res = await fetch("/api/admin/bans", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, action: "unban" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) setNote(data.error ?? "ปลดแบนไม่สำเร็จ");
+    } catch {
+      setNote("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้");
+    }
+    setBusyId(null);
     load();
   }
 
@@ -374,10 +477,22 @@ export default function AdminPage() {
     ["rejected", "ปฏิเสธ"],
     ["summary", "สรุปยอด"],
     ["scans", "สแกนตั๋ว"],
+    ["bans", "ถูกแบน"],
   ];
 
   const heading =
-    tab === "summary" ? "สรุปยอดขาย" : tab === "scans" ? "ประวัติสแกนตั๋ว" : tab === "auto" ? "อนุมัติอัตโนมัติ" : "ตรวจสลีป";
+    tab === "summary"
+      ? "สรุปยอดขาย"
+      : tab === "scans"
+        ? "ประวัติสแกนตั๋ว"
+        : tab === "bans"
+          ? "ผู้ใช้ที่ถูกแบน"
+          : tab === "auto"
+            ? "อนุมัติอัตโนมัติ"
+            : "ตรวจสลีป";
+
+  // เงินรวมที่ทุกซุ้มยิงได้ (ไม่นับจุดรับตั๋วกระดาษ เพราะไม่มีมูลค่า)
+  const boothTotal = scanData ? scanData.booths.reduce((s, b) => s + b.amount, 0) : 0;
 
   return (
     <div className={shell}>
@@ -389,10 +504,12 @@ export default function AdminPage() {
               {tab === "summary"
                 ? "ยอดขายนับจากรายการที่อนุมัติแล้วเท่านั้น รายการที่รอตรวจแสดงแยกไว้ต่างหาก"
                 : tab === "scans"
-                  ? "ประวัติการยิงบาร์โค้ดตั๋วเข้างานจากหน้า /ticket ว่ายิงให้ใคร เวลาไหน ตั๋ว 1 ใบยิงผ่านได้ครั้งเดียว ครั้งต่อไปจะขึ้นว่าซ้ำ"
-                  : tab === "auto"
-                    ? "รายการที่ระบบอนุมัติให้เองเพราะตรวจสลีปผ่านครบทุกข้อ (ยอดเงิน ผู้รับ วันเวลาโอน เลขอ้างอิง) และออกตั๋วแล้ว รายการเหล่านี้อยู่ในแถบ “อนุมัติแล้ว” ด้วย"
-                    : "ระบบอ่านสลีปให้เบื้องต้น ✓ = ตรงกับรายการ / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
+                  ? "ประวัติการยิงบาร์โค้ดตั๋วเข้างานจากหน้า /ticket แยกตามบัญชีซุ้ม ดูได้ว่าซุ้มไหนยิงให้ใคร เวลาไหน และรวมเป็นเงินเท่าไหร่ ตั๋ว 1 ใบยิงผ่านได้ครั้งเดียว ครั้งต่อไปจะขึ้นว่าซ้ำ"
+                  : tab === "bans"
+                    ? "ผู้ซื้อที่ถูกแบนไม่ให้สร้างรายการและส่งสลีป มาจากระบบอัตโนมัติ (อ่านสลีปได้แต่ไม่ผ่านข้อใดข้อหนึ่ง: ยอดเงิน ผู้รับเงิน วันเวลาโอน แบน 1 ชั่วโมง) หรือ admin แบนเองจากการ์ดรายการ กดปลดแบนได้ก่อนครบเวลา"
+                    : tab === "auto"
+                      ? "รายการที่ระบบอนุมัติให้เองเพราะตรวจสลีปผ่านครบทุกข้อ (ยอดเงิน ผู้รับ วันเวลาโอน เลขอ้างอิง) และออกตั๋วแล้ว รายการเหล่านี้อยู่ในแถบ “อนุมัติแล้ว” ด้วย"
+                      : "ระบบอ่านรูปสลีปจริงแล้วเทียบกับออเดอร์ ✓ = ตรงกับรายการ (เวลาโอนต้องเป็นวันเดียวกับออเดอร์และไม่เกิน 1 ชั่วโมงหลังสร้างออเดอร์) / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
             </p>
           </div>
           <div className="flex shrink-0 gap-2 self-start">
@@ -414,7 +531,7 @@ export default function AdminPage() {
           </div>
         </header>
 
-        <div role="tablist" className="mt-5 grid grid-cols-3 gap-1 rounded-2xl bg-[#e3ecd6] p-1 sm:mt-6 sm:grid-cols-6">
+        <div role="tablist" className="mt-5 grid grid-cols-4 gap-1 rounded-2xl bg-[#e3ecd6] p-1 sm:mt-6 sm:grid-cols-7">
           {tabs.map(([id, label]) => (
             <button
               key={id}
@@ -427,10 +544,11 @@ export default function AdminPage() {
                 setDetailId(null);
                 setConfirmId(null);
                 setRejectId(null);
+                setBanId(null);
               }}
               className={`relative min-h-11 rounded-xl px-1 py-2.5 text-xs font-bold transition sm:text-sm ${tab === id ? "bg-[#14402c] text-white" : "text-[#4d6652]"}`}
             >
-              {id === "summary" || id === "scans" ? label : `${label} (${counts[id]})`}
+              {id === "summary" || id === "scans" || id === "bans" ? label : `${label} (${counts[id]})`}
               {id === "reviewing" && counts.reviewing > 0 && tab !== "reviewing" && (
                 <span className="absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full bg-red-500" />
               )}
@@ -535,25 +653,72 @@ export default function AdminPage() {
             </div>
           ) : (
             <section className="mt-5 sm:mt-6">
-              <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                <Stat title="ตั๋วที่ยิงผ่านแล้ว" value={`${num(scanData.total)} ใบ`} tone="dark" />
-                <Stat title="ยิงไม่ผ่าน" value={`${num(scanData.rejected)} ครั้ง`} sub="ซ้ำ / ไม่ใช่ตั๋วซุ้ม / ไม่พบ" />
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+                <Stat title="ตั๋วที่ยิงผ่านแล้ว" value={`${num(scanData.total)} ใบ`} sub="ทุกซุ้มรวมกัน" tone="dark" />
+                <Stat title="เงินรวมที่ซุ้มยิงได้" value={baht(boothTotal)} sub="ตั๋วเล่นซุ้ม ทุกซุ้มรวมกัน" tone="accent" />
+                <Stat title="ยิงไม่ผ่าน" value={`${num(scanData.rejected)} ครั้ง`} sub="ซ้ำ / ผิดประเภท / ไม่พบ" />
+              </div>
+
+              <h2 className="mt-6 text-base font-bold sm:text-lg">สรุปรายซุ้ม</h2>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+                {scanData.booths.map((b) => (
+                  <div key={b.id} className="min-w-0 rounded-3xl border border-[#e3ecd6] bg-white p-4 sm:p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="min-w-0 truncate text-base font-bold sm:text-lg">{b.name}</p>
+                      {b.kind === "paper" && (
+                        <span className="shrink-0 rounded-full bg-[#fff1c2] px-2.5 py-0.5 text-[11px] font-bold text-[#b45309] sm:text-xs">
+                          ตั๋วกระดาษ
+                        </span>
+                      )}
+                    </div>
+                    {b.kind === "paper" ? (
+                      <p className="mt-2 text-2xl font-extrabold sm:text-3xl">
+                        {num(b.count)} <span className="text-sm font-semibold text-[#4d6652]">ใบ · ไม่มีมูลค่า</span>
+                      </p>
+                    ) : (
+                      <>
+                        <p className="mt-2 text-2xl font-extrabold sm:text-3xl">{baht(b.amount)}</p>
+                        <p className="mt-1 text-sm font-semibold text-[#4d6652]">{num(b.count)} ใบ</p>
+                      </>
+                    )}
+                    <p className="mt-2 text-[11px] text-[#6b7f6f] sm:text-xs">
+                      ยิงไม่ผ่าน {num(b.rejected)} ครั้ง · ยิงล่าสุด {fmtSec(b.lastAt)}
+                    </p>
+                  </div>
+                ))}
               </div>
 
               <div className="mt-5 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
                 <div className="p-4">
                   <h2 className="text-base font-bold sm:text-lg">ประวัติล่าสุด</h2>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {[{ id: "", name: "ทุกซุ้ม" }, ...scanData.booths.map((b) => ({ id: b.id, name: b.name }))].map((c) => (
+                      <button
+                        key={c.id || "all"}
+                        type="button"
+                        onClick={() => setBoothFilter(c.id)}
+                        aria-pressed={boothFilter === c.id}
+                        className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold sm:text-sm ${
+                          boothFilter === c.id ? "bg-[#14402c] text-white" : "bg-[#e3ecd6] text-[#4d6652]"
+                        }`}
+                      >
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 {scanData.scans.length === 0 ? (
                   <p className="border-t border-[#e3ecd6] p-6 text-center text-sm text-[#4d6652]">ยังไม่มีการยิงตั๋ว</p>
                 ) : (
                   <div className="overflow-x-auto border-t border-[#e3ecd6]">
-                    <table className="w-full min-w-[560px] text-left text-xs sm:text-sm">
+                    <table className="w-full min-w-[680px] text-left text-xs sm:text-sm">
                       <thead className="bg-[#f8fbf3] text-[#4d6652]">
                         <tr>
                           <th className="px-4 py-2.5 font-semibold">เวลา</th>
+                          <th className="px-2 py-2.5 font-semibold">ซุ้มที่ยิง</th>
                           <th className="px-2 py-2.5 font-semibold">ชื่อผู้ถือตั๋ว</th>
                           <th className="px-2 py-2.5 font-semibold">รหัสตั๋ว</th>
+                          <th className="px-2 py-2.5 text-right font-semibold">มูลค่า</th>
                           <th className="px-4 py-2.5 text-right font-semibold">ผล</th>
                         </tr>
                       </thead>
@@ -563,6 +728,7 @@ export default function AdminPage() {
                           return (
                             <tr key={s.id} className="border-t border-[#e3ecd6] align-top">
                               <td className="whitespace-nowrap px-4 py-2.5 font-semibold">{fmtSec(s.at)}</td>
+                              <td className="px-2 py-2.5 font-semibold">{s.boothName ?? "-"}</td>
                               <td className="px-2 py-2.5">
                                 <p className="font-semibold">{s.name ?? "-"}</p>
                                 {s.phone && <p className="text-[#4d6652]">{s.phone}</p>}
@@ -572,6 +738,9 @@ export default function AdminPage() {
                                 {s.result === "duplicate" && s.firstUsedAt && (
                                   <p className="mt-0.5 text-[#6b7f6f]">ยิงครั้งแรก {fmtSec(s.firstUsedAt)}</p>
                                 )}
+                              </td>
+                              <td className="whitespace-nowrap px-2 py-2.5 text-right font-bold">
+                                {s.result === "ok" && s.amount !== null ? (s.amount > 0 ? baht(s.amount) : "ไม่มีมูลค่า") : "-"}
                               </td>
                               <td className="px-4 py-2.5 text-right">
                                 <span className={`inline-block whitespace-nowrap rounded-full px-3 py-1 font-bold ${r.cls}`}>
@@ -589,6 +758,46 @@ export default function AdminPage() {
 
               <p className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">แสดง 200 รายการล่าสุด · รีเฟรชอัตโนมัติทุก 10 วินาที</p>
             </section>
+          )
+        ) : tab === "bans" ? (
+          !banList ? (
+            <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+              กำลังโหลดรายชื่อผู้ถูกแบน...
+            </div>
+          ) : banList.length === 0 ? (
+            <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+              ไม่มีผู้ใช้ที่ถูกแบนอยู่ตอนนี้
+            </div>
+          ) : (
+            <ul className="mt-5 space-y-3 sm:mt-6">
+              {banList.map((b) => (
+                <li key={b.id} className="min-w-0 rounded-3xl border border-[#e3ecd6] bg-white p-4 sm:p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-bold sm:text-lg">{b.name || b.username}</p>
+                      <p className="text-xs text-[#4d6652] sm:text-sm">
+                        @{b.username} · {b.phone}
+                      </p>
+                      <p className="mt-2 text-xs font-semibold text-red-600 sm:text-sm">
+                        {isForever(b.bannedUntil) ? "แบนถาวร" : `แบนถึง ${fmtSec(b.bannedUntil)}`}
+                      </p>
+                      {b.bannedAt && (
+                        <p className="text-[11px] text-[#6b7f6f] sm:text-xs">ถูกแบนเมื่อ {fmtSec(b.bannedAt)}</p>
+                      )}
+                      {b.banReason && <p className="mt-1 text-[11px] text-[#6b7f6f] sm:text-xs">เหตุผล: {b.banReason}</p>}
+                    </div>
+                    <button
+                      type="button"
+                      disabled={busyId === b.id}
+                      onClick={() => unban(b.id)}
+                      className="min-h-11 shrink-0 rounded-2xl bg-[#14402c] px-5 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                    >
+                      {busyId === b.id ? "กำลังปลด..." : "ปลดแบน"}
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
           )
         ) : items.length === 0 ? (
           <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
@@ -641,6 +850,11 @@ export default function AdminPage() {
                             ⚡ อนุมัติอัตโนมัติโดยระบบ
                           </span>
                         )}
+                        {check?.banned && (
+                          <span className="mt-1 inline-block rounded-full bg-red-600 px-2.5 py-0.5 text-[11px] font-bold text-white sm:text-xs">
+                            ⛔ ระบบแบนผู้ซื้อ 1 ชม.
+                          </span>
+                        )}
                         <p className="mt-1 text-sm">
                           Ref1 <span className="break-all font-mono font-bold">{p.ref}</span>
                         </p>
@@ -670,7 +884,7 @@ export default function AdminPage() {
                           <Mark ok={check ? check.amountOk : null} label="ยอดเงิน" />
                           <Mark ok={check ? check.receiverOk : null} label="ผู้รับเงิน" />
                           <Mark ok={check ? check.timeOk : null} label="วันเวลาโอน" />
-                          <Mark ok={true} label="เลขอ้างอิง" />
+                          <Mark ok={check ? true : null} label="เลขอ้างอิง" />
                         </div>
                       )}
                     </div>
@@ -705,7 +919,9 @@ export default function AdminPage() {
                             label="วันเวลาโอน"
                             value={
                               check.transferAt
-                                ? `${fmt(check.transferAt)}${check.timeOk ? "" : " (ก่อนสร้างรายการ หรืออ่านผิด)"}`
+                                ? `สลีป ${fmt(check.transferAt)} · ออเดอร์ ${fmt(p.createdAt)}${
+                                    check.timeOk ? " (วันเดียวกัน ไม่เกิน 1 ชม.)" : " (ต้องเป็นวันเดียวกับออเดอร์ และโอนหลังสร้างออเดอร์ไม่เกิน 1 ชม.)"
+                                  }`
                                 : "อ่านวันเวลาจากสลีปไม่ได้"
                             }
                           />
@@ -713,6 +929,11 @@ export default function AdminPage() {
                         </ul>
                       ) : (
                         <p className="text-xs text-[#4d6652] sm:text-sm">สลีปนี้ยังไม่ได้ตรวจอัตโนมัติ กรุณาตรวจเอง</p>
+                      )}
+                      {check?.banned && (
+                        <p className="mt-3 text-xs font-semibold text-red-600 sm:text-sm">
+                          ระบบแบนผู้ซื้อคนนี้ 1 ชั่วโมงแล้ว เพราะสลีปไม่ผ่านการตรวจอัตโนมัติ ถ้าตรวจแล้วว่าสลีปถูกต้อง ไปปลดแบนได้ที่แถบ “ถูกแบน”
+                        </p>
                       )}
                       {check && (check.error || check.rawText !== undefined) && (
                         <details className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">
@@ -773,6 +994,42 @@ export default function AdminPage() {
                             </button>
                           </div>
                         </div>
+                      ) : banId === p.id ? (
+                        <div>
+                          <p className="text-xs font-semibold text-red-600 sm:text-sm">
+                            แบน {p.name} ({p.phone}) ไม่ให้สร้างรายการและส่งสลีป รายการนี้ยังค้างรอตรวจตามเดิม
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {BAN_OPTIONS.map(([d, label]) => (
+                              <button
+                                key={d}
+                                type="button"
+                                onClick={() => setBanDur(d)}
+                                aria-pressed={banDur === d}
+                                className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold sm:text-sm ${banDur === d ? "bg-[#14402c] text-white" : "bg-white"}`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setBanId(null)}
+                              className="min-h-12 flex-1 rounded-2xl border border-[#14402c] py-3 text-sm font-semibold"
+                            >
+                              ยกเลิก
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busyId === p.id}
+                              onClick={() => banBuyer(p.id, banDur)}
+                              className="min-h-12 flex-1 rounded-2xl bg-red-600 py-3 text-sm font-bold text-white disabled:opacity-60"
+                            >
+                              {busyId === p.id ? "กำลังแบน..." : "ยืนยันแบน"}
+                            </button>
+                          </div>
+                        </div>
                       ) : confirmId === p.id ? (
                         <div>
                           {!passed && (
@@ -805,6 +1062,7 @@ export default function AdminPage() {
                             onClick={() => {
                               setRejectId(p.id);
                               setConfirmId(null);
+                              setBanId(null);
                             }}
                             className="min-h-12 flex-1 rounded-2xl border border-red-300 py-3 text-sm font-semibold text-red-600"
                           >
@@ -813,8 +1071,20 @@ export default function AdminPage() {
                           <button
                             type="button"
                             onClick={() => {
+                              setBanId(p.id);
+                              setRejectId(null);
+                              setConfirmId(null);
+                            }}
+                            className="min-h-12 flex-1 rounded-2xl border border-red-600 bg-red-50 py-3 text-sm font-bold text-red-700"
+                          >
+                            แบน
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
                               setConfirmId(p.id);
                               setRejectId(null);
+                              setBanId(null);
                             }}
                             className="min-h-12 flex-1 rounded-2xl bg-[#14402c] py-3 text-sm font-bold text-white"
                           >

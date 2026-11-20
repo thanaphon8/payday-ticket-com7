@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
-import { getSessionUser, validPhone } from "@/lib/auth";
+import { banMessage, getSessionUser, validPhone } from "@/lib/auth";
 import {
   MAX_QTY,
   OPEN_STATUSES,
@@ -43,11 +43,13 @@ export async function GET() {
 // เริ่มซื้อ: body = { items: [{ ticket, qty }], name, phone }
 // รหัสพนักงานดึงจากบัญชีผู้ใช้ (ตั้งตอนสมัคร / ในโปรไฟล์) ไม่รับจากหน้าเว็บ
 // ซื้อ Lucky Draw แล้วบัญชียังไม่มีรหัสพนักงาน = ปฏิเสธ
+// ผู้ใช้ที่ถูกแบน (สลีปไม่ผ่านการตรวจอัตโนมัติ) สร้างรายการไม่ได้จนกว่าจะหมดเวลาแบนหรือ admin ปลดแบน
 // ยังไม่ออกตั๋ว สร้างรายการรอโอน + QR พร้อมเพย์ (ยอด + Ref1 ฝังใน QR)
 // ตั๋วถูกออกเมื่อ admin อนุมัติสลีปเท่านั้น (ดู /api/admin/payments/[id])
 export async function POST(req: Request) {
   const user = await getSessionUser().catch(() => null);
   if (!user) return NextResponse.json({ error: "กรุณาเข้าสู่ระบบ" }, { status: 401 });
+  if (user.bannedUntil) return NextResponse.json({ error: banMessage(user.bannedUntil) }, { status: 403 });
 
   const body = await req.json().catch(() => null);
   const name = String(body?.name ?? "").trim();
