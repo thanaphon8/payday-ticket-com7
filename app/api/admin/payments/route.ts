@@ -9,7 +9,8 @@ const LISTABLE = ["reviewing", "approved", "auto", "rejected"] as const;
 
 // รายการสำหรับหน้า admin: ?status=reviewing (ค่าเริ่มต้น) | approved | auto | rejected
 // auto = อนุมัติแล้วโดยระบบอัตโนมัติ (reviewedBy = "auto") ซึ่งยังนับรวมอยู่ใน approved ด้วย
-// คืน { counts: { reviewing, approved, auto, rejected }, payments: [...] }
+// คืน { counts: { reviewing, approved, auto, rejected, bans }, payments: [...] }
+// counts.bans = จำนวนผู้ใช้ที่ถูกแบนอยู่ตอนนี้ (ใช้แสดงจุดแดงที่เมนู "ถูกแบน")
 // slip.check = ผล OCR เทียบกับรายการ (null = สลีปเก่าที่ยังไม่เคยตรวจ)
 export async function GET(req: Request) {
   const guard = await requireAdmin();
@@ -23,11 +24,12 @@ export async function GET(req: Request) {
   await expireStale(db);
   const payments = db.collection("payments");
 
-  const [reviewing, approved, auto, rejected, docs] = await Promise.all([
+  const [reviewing, approved, auto, rejected, bans, docs] = await Promise.all([
     payments.countDocuments({ status: "reviewing" }),
     payments.countDocuments({ status: "approved" }),
     payments.countDocuments({ status: "approved", reviewedBy: "auto" }),
     payments.countDocuments({ status: "rejected" }),
+    db.collection("users").countDocuments({ bannedUntil: { $gt: new Date().toISOString() } }),
     payments
       .find(filter)
       // รอตรวจ: เก่าสุดก่อน (ตรวจตามคิว) / ประวัติ: ใหม่สุดก่อน
@@ -66,5 +68,5 @@ export async function GET(req: Request) {
     };
   });
 
-  return NextResponse.json({ counts: { reviewing, approved, auto, rejected }, payments: list });
+  return NextResponse.json({ counts: { reviewing, approved, auto, rejected, bans }, payments: list });
 }

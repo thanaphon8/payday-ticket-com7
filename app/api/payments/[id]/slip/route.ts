@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
-import { banMessage, banUser, getSessionUser } from "@/lib/auth";
+import { BAN_MINUTES, banMessage, banUser, getSessionUser } from "@/lib/auth";
 import { MAX_SLIPS_PER_PAYMENT, expireStale, fulfillPayment } from "@/lib/tickets";
 import { compressSlip, readSlip } from "@/lib/slip";
 import { checkSlip, ocrSlip } from "@/lib/slipOcr";
@@ -22,6 +22,7 @@ const allowDupSlip = () => process.env.ALLOW_DUP_SLIP === "1";
 // 5) เปลี่ยนสถานะเป็น reviewing รอ admin อนุมัติ
 // 6) ถ้า check.ok = ผ่านทุกข้อ → อนุมัติอัตโนมัติ + ออกตั๋วทันที
 //    ถ้าอ่านสลีปได้แต่ไม่ผ่านข้อใดข้อหนึ่ง (ยอดเงิน / ผู้รับ / วันเวลาโอน) → แบนผู้ใช้ 1 ชั่วโมง รายการค้างรอ admin ตรวจ (admin ปลดแบนได้)
+//    เก็บ banPaymentId ไว้ที่ผู้ใช้ เพื่อให้แถบ "ถูกแบน" ในหน้า admin แสดงรูปสลีปของรายการนี้
 //    อ่านสลีปไม่ได้ (OCR ว่าง/error/timeout) → ไม่แบน ค้างรอ admin ตรวจ
 // เร็วขึ้น: OCR + บีบรูปเริ่มทำพร้อมกับอ่าน QR เลย (ไม่รอกัน) ส่วนอัปโหลด Drive เริ่มหลังจองเลขสลีปได้แล้ว
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -127,7 +128,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // อ่านสลีปได้แต่ไม่ผ่านเงื่อนไขข้อใดข้อหนึ่ง → แบน 1 ชั่วโมง (รายการยังค้าง reviewing ให้ admin ตรวจ/ปลดแบนได้)
   if (shouldBan) {
     try {
-      const until = await banUser(userId, "สลีปไม่ผ่านการตรวจอัตโนมัติ (ยอดเงิน / ผู้รับเงิน / วันเวลาโอน)");
+      const until = await banUser(
+        userId,
+        "สลีปไม่ผ่านการตรวจอัตโนมัติ (ยอดเงิน / ผู้รับเงิน / วันเวลาโอน)",
+        BAN_MINUTES,
+        paymentId,
+      );
       await slips.updateOne({ _id: slipId }, { $set: { "check.banned": true } });
       return NextResponse.json({ ok: true, status: "reviewing", banned: true, bannedUntil: until });
     } catch (e) {

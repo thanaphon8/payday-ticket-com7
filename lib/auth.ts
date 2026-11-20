@@ -111,7 +111,8 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 /* ---------- แบนผู้ใช้ (อัตโนมัติจากสลีปไม่ผ่าน หรือ admin แบนเอง) ----------
    ถูกแบน = สร้างรายการชำระเงินและส่งสลีปไม่ได้ (ดูตั๋วเดิมและเข้าสู่ระบบได้ตามปกติ)
    เก็บใน users.bannedUntil (ISO) หมดเวลาแล้วใช้งานได้เองโดยไม่ต้องล้างค่า / admin ปลดแบนก่อนเวลาได้ที่หน้า admin
-   แบนถาวร = bannedUntil เป็นปี 9999 (ปลดได้โดย admin เท่านั้น) */
+   แบนถาวร = bannedUntil เป็นปี 9999 (ปลดได้โดย admin เท่านั้น)
+   banPaymentId = รายการที่ทำให้ถูกแบน (หน้า admin แถบ "ถูกแบน" ใช้แสดงรูปสลีปและผลตรวจ) */
 export const BAN_MINUTES = 60;
 export const PERMANENT_BAN_ISO = "9999-12-31T00:00:00.000Z";
 export const isPermanentBan = (until: string) => Date.parse(until) >= Date.parse("9000-01-01T00:00:00.000Z");
@@ -121,14 +122,19 @@ export async function banUser(
   userId: string | ObjectId,
   reason: string,
   minutes: number | null = BAN_MINUTES,
+  paymentId?: string | ObjectId | null,
 ): Promise<string> {
   const now = Date.now();
   const until = minutes === null ? PERMANENT_BAN_ISO : new Date(now + minutes * 60_000).toISOString();
+  const set = { bannedUntil: until, banReason: reason, bannedAt: new Date(now).toISOString() };
   const db = await getDb();
-  await db.collection("users").updateOne(
-    { _id: new ObjectId(String(userId)) },
-    { $set: { bannedUntil: until, banReason: reason, bannedAt: new Date(now).toISOString() } },
-  );
+  const users = db.collection("users");
+  const _id = new ObjectId(String(userId));
+  if (paymentId && ObjectId.isValid(String(paymentId))) {
+    await users.updateOne({ _id }, { $set: { ...set, banPaymentId: new ObjectId(String(paymentId)) } });
+  } else {
+    await users.updateOne({ _id }, { $set: set, $unset: { banPaymentId: "" } });
+  }
   return until;
 }
 
@@ -138,7 +144,7 @@ export async function unbanUser(userId: string | ObjectId) {
     .collection("users")
     .updateOne(
       { _id: new ObjectId(String(userId)) },
-      { $unset: { bannedUntil: "", banReason: "", bannedAt: "" } },
+      { $unset: { bannedUntil: "", banReason: "", bannedAt: "", banPaymentId: "" } },
     );
 }
 
