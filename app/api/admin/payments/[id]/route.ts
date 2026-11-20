@@ -39,17 +39,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (action === "reject") {
     const reason = String(body?.reason ?? "").trim().slice(0, 200);
     if (reason.length < 2) return NextResponse.json({ error: "ใส่เหตุผลที่ปฏิเสธ" }, { status: 400 });
-    // ปฏิเสธแล้วให้เวลาผู้ซื้อส่งสลีปใหม่อีก PAYMENT_TTL_MINUTES นาที
+    // ปฏิเสธแล้วให้เวลาผู้ซื้อส่งสลีปใหม่อีก PAYMENT_TTL_MINUTES นาที (ในออเดอร์เดิม)
+    // rejectCount / lastRejectReason เก็บไว้ถาวร ใช้ติดแท็ก "แก้ไข" เมื่อผู้ซื้อส่งสลีปใหม่ในออเดอร์เดิม และให้รายการยังอยู่ในแถบ "ปฏิเสธ"
     const r = await payments.updateOne(
       { _id: paymentId, status: "reviewing" },
       {
         $set: {
           status: "rejected",
           rejectReason: reason,
+          lastRejectReason: reason,
           reviewedAt: nowIso,
           reviewedBy: guard.user.id,
           expiresAt: new Date(Date.now() + PAYMENT_TTL_MINUTES * 60_000).toISOString(),
         },
+        $inc: { rejectCount: 1 },
       },
     );
     if (r.matchedCount === 0)

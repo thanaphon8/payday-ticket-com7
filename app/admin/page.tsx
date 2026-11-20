@@ -32,6 +32,9 @@ type Item = {
   booth: number;
   lucky: number;
   rejectReason: string | null;
+  avatarUrl: string | null;
+  // ไม่ใช่ null = ผู้ซื้อเคยถูกปฏิเสธมาก่อนแล้วส่งออเดอร์ใหม่ (count = จำนวนครั้งที่เคยถูกปฏิเสธ, lastReason = เหตุผลครั้งล่าสุด)
+  retry: { count: number; lastReason: string | null } | null;
   slip: { transRef: string; sendingBank: string; check: SlipCheck | null } | null;
 };
 // bans = จำนวนผู้ใช้ที่ถูกแบนอยู่ตอนนี้
@@ -80,6 +83,7 @@ type BanRow = {
   username: string;
   name: string;
   phone: string;
+  avatarUrl: string | null;
   bannedUntil: string;
   bannedAt: string | null;
   banReason: string | null;
@@ -159,6 +163,32 @@ function beep() {
   } catch {
     /* เบราว์เซอร์ไม่อนุญาตเสียง ข้ามได้ */
   }
+}
+
+// รูปโปรไฟล์ผู้ซื้อ (ไม่มีรูป/โหลดไม่ได้ = วงกลมตัวอักษรแรกของชื่อ)
+function Avatar({ src, name }: { src: string | null; name: string }) {
+  const [bad, setBad] = useState(false);
+  const initial = (name || "?").trim().charAt(0) || "?";
+  if (!src || bad) {
+    return (
+      <span
+        aria-hidden="true"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e3ecd6] text-base font-bold text-[#4d6652]"
+      >
+        {initial}
+      </span>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      onError={() => setBad(true)}
+      className="h-10 w-10 shrink-0 rounded-full bg-[#e3ecd6] object-cover"
+    />
+  );
 }
 
 // แถวในรายละเอียด (ตอนกดขยาย)
@@ -602,7 +632,9 @@ export default function AdminPage() {
         type="button"
         onClick={() => setSound((s) => !s)}
         aria-pressed={sound}
-        className={`min-h-11 rounded-full px-5 py-2.5 text-xs font-bold sm:text-sm ${sound ? "bg-[#d9f27a]" : "bg-white text-[#6b7f6f]"}`}
+        className={`min-h-11 rounded-full px-5 py-2.5 text-xs font-bold sm:text-sm ${
+          sound ? "bg-[#d9f27a]" : "border border-[#cfdcc0] bg-white text-[#6b7f6f]"
+        }`}
       >
         เสียงเตือน: {sound ? "เปิด" : "ปิด"}
       </button>
@@ -834,21 +866,38 @@ export default function AdminPage() {
           >
             <div className="min-w-0 flex-1">
               <p className="text-2xl font-extrabold sm:text-3xl">{baht(p.amount)}</p>
-              {p.auto && (
-                <span className="mt-1 inline-block rounded-full bg-[#d9f27a] px-2.5 py-0.5 text-[11px] font-bold sm:text-xs">
-                  ⚡ อนุมัติอัตโนมัติโดยระบบ
-                </span>
-              )}
-              {check?.banned && (
-                <span className="mt-1 inline-block rounded-full bg-red-600 px-2.5 py-0.5 text-[11px] font-bold text-white sm:text-xs">
-                  ⛔ ระบบแบนผู้ซื้อ 1 ชม.
-                </span>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {p.retry && (
+                  <span className="inline-block rounded-full bg-orange-500 px-2.5 py-0.5 text-[11px] font-bold text-white sm:text-xs">
+                    ✏️ แก้ไข{p.retry.count > 1 ? ` (ส่งใหม่ครั้งที่ ${p.retry.count + 1})` : " (ส่งใหม่หลังถูกปฏิเสธ)"}
+                  </span>
+                )}
+                {p.auto && (
+                  <span className="inline-block rounded-full bg-[#d9f27a] px-2.5 py-0.5 text-[11px] font-bold sm:text-xs">
+                    ⚡ อนุมัติอัตโนมัติโดยระบบ
+                  </span>
+                )}
+                {check?.banned && (
+                  <span className="inline-block rounded-full bg-red-600 px-2.5 py-0.5 text-[11px] font-bold text-white sm:text-xs">
+                    ⛔ ระบบแบนผู้ซื้อ 1 ชม.
+                  </span>
+                )}
+              </div>
+              {p.retry?.lastReason && (
+                <p className="mt-1 break-words text-[11px] font-semibold text-orange-600 sm:text-xs">
+                  ครั้งก่อนถูกปฏิเสธ: {p.retry.lastReason}
+                </p>
               )}
               <p className="mt-1 text-sm">
                 Ref1 <span className="break-all font-mono font-bold">{p.ref}</span>
               </p>
-              <p className="mt-2 truncate text-sm font-semibold">{p.name}</p>
-              <p className="text-xs text-[#4d6652] sm:text-sm">{p.phone}</p>
+              <div className="mt-2 flex items-center gap-2.5">
+                <Avatar key={p.avatarUrl ?? "none"} src={p.avatarUrl} name={p.name} />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{p.name}</p>
+                  <p className="text-xs text-[#4d6652] sm:text-sm">{p.phone}</p>
+                </div>
+              </div>
               <p className="mt-2 text-xs text-[#4d6652] sm:text-sm">
                 เข้าซุ้ม {p.booth} · Lucky Draw {p.lucky}
               </p>
@@ -946,293 +995,298 @@ export default function AdminPage() {
 
   return (
     <div className={shell}>
-      <div className="mx-auto w-full max-w-lg px-4 pb-16 pt-5 sm:max-w-3xl sm:px-6 sm:pt-8 md:flex md:max-w-6xl md:items-start md:gap-6">
-        {/* แถบรายการด้านข้าง (คอมพิวเตอร์) */}
-        <aside className="hidden md:sticky md:top-8 md:block md:w-60 md:shrink-0">
-          <div className="rounded-3xl border border-[#e3ecd6] bg-white p-3">
-            <p className="px-3 pb-2 pt-1 text-xs font-bold text-[#6b7f6f]">เมนูรายการ</p>
-            <nav role="tablist" aria-orientation="vertical" aria-label="เมนูรายการ" className="flex flex-col gap-1">
-              {tabs.map(([id, label]) => navItem(id, label, false))}
-            </nav>
-          </div>
-          <div className="mt-3 flex flex-col gap-2 [&>button]:w-full">{controlButtons}</div>
+      <div className="md:flex md:items-start">
+        {/* แถบรายการด้านข้าง (คอมพิวเตอร์) ชิดซ้ายเต็มความสูงหน้าจอ */}
+        <aside className="hidden md:sticky md:top-0 md:block md:h-screen md:w-64 md:shrink-0 md:overflow-y-auto md:border-r md:border-[#e3ecd6] md:bg-white md:p-4">
+          <p className="px-3 pb-2 pt-1 text-xs font-bold text-[#6b7f6f]">เมนูรายการ</p>
+          <nav role="tablist" aria-orientation="vertical" aria-label="เมนูรายการ" className="flex flex-col gap-1">
+            {tabs.map(([id, label]) => navItem(id, label, false))}
+          </nav>
+          <div className="mt-4 flex flex-col gap-2 border-t border-[#e3ecd6] pt-4 [&>button]:w-full">{controlButtons}</div>
         </aside>
 
-        <main className="min-w-0 flex-1">
-          <header>
-            <div className="flex items-center gap-3">
-              {/* ปุ่ม 3 ขีด เปิดเมนูรายการเต็มจอ (มือถือ) */}
-              <button
-                type="button"
-                onClick={() => setMenuOpen(true)}
-                aria-label={anyDot ? "เปิดเมนูรายการ (มีรายการใหม่)" : "เปิดเมนูรายการ"}
-                aria-haspopup="dialog"
-                aria-expanded={menuOpen}
-                className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#14402c] bg-white md:hidden"
-              >
-                <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
-                  <path d="M4 7h16M4 12h16M4 17h16" />
-                </svg>
-                {anyDot && (
-                  <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-[#f1f7e9] bg-red-500" />
-                )}
-              </button>
-              <h1 className="min-w-0 flex-1 truncate text-2xl font-bold sm:text-3xl">{heading}</h1>
-            </div>
-            <p className="mt-2 text-xs leading-relaxed text-[#4d6652] sm:text-sm">
-              {tab === "summary"
-                ? "ยอดขายนับจากรายการที่อนุมัติแล้วเท่านั้น รายการที่รอตรวจแสดงแยกไว้ต่างหาก"
-                : tab === "scans"
-                  ? "ประวัติการยิงบาร์โค้ดตั๋วเข้างานจากหน้า /ticket แยกตามบัญชีซุ้ม ดูได้ว่าซุ้มไหนยิงให้ใคร เวลาไหน และรวมเป็นเงินเท่าไหร่ ตั๋ว 1 ใบยิงผ่านได้ครั้งเดียว ครั้งต่อไปจะขึ้นว่าซ้ำ"
-                  : tab === "bans"
-                    ? "ผู้ซื้อที่ถูกแบนไม่ให้สร้างรายการและส่งสลีป (ระบบแบนเองเมื่ออ่านสลีปได้แต่ไม่ผ่านข้อใดข้อหนึ่ง: ยอดเงิน ผู้รับเงิน วันเวลาโอน หรือ admin แบนเอง) การ์ดแสดงสลีปและผลตรวจของรายการที่ทำให้ถูกแบน กดปลดแบนได้ก่อนครบเวลา ส่วนการอนุมัติ/ปฏิเสธรายการทำที่เมนู “รอตรวจ”"
-                    : tab === "auto"
-                      ? "รายการที่ระบบอนุมัติให้เองเพราะตรวจสลีปผ่านครบทุกข้อ (ยอดเงิน ผู้รับ วันเวลาโอน เลขอ้างอิง) และออกตั๋วแล้ว รายการเหล่านี้อยู่ในเมนู “อนุมัติแล้ว” ด้วย"
-                      : "ระบบอ่านรูปสลีปจริงแล้วเทียบกับออเดอร์ ✓ = ตรงกับรายการ (เวลาโอนต้องเป็นวันเดียวกับออเดอร์และไม่เกิน 1 ชั่วโมงหลังสร้างออเดอร์) / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
-            </p>
-            <div className="mt-3 flex gap-2 md:hidden">{controlButtons}</div>
-          </header>
-
-          {note && (
-            <p role="alert" className="mt-3 text-sm font-medium text-red-600">
-              {note}
-            </p>
-          )}
-
-          {tab === "summary" ? (
-            !summary ? (
-              <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
-                กำลังโหลดสรุปยอด...
-              </div>
-            ) : (
-              <section className="mt-5 sm:mt-6">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
-                  <Stat
-                    title="ยอดเงินรวมทั้งหมด"
-                    value={baht(summary.total.amount)}
-                    sub={`ตั๋วทั้งหมด ${num(summary.total.count)} ใบ`}
-                    tone="dark"
-                  />
-                  <Stat
-                    title="จำนวนผู้ซื้อ"
-                    value={`${num(summary.buyers)} คน`}
-                    sub={`${num(summary.orders)} ออเดอร์ที่อนุมัติแล้ว`}
-                    tone="accent"
-                  />
-                  <Stat
-                    title="ตั๋วเข้างาน (ซุ้ม)"
-                    value={`${num(summary.booth.count)} ใบ`}
-                    sub={`รวมเป็นเงิน ${baht(summary.booth.amount)}`}
-                  />
-                  <Stat
-                    title="ตั๋ว Lucky Draw"
-                    value={`${num(summary.lucky.count)} ใบ`}
-                    sub={`รวมเป็นเงิน ${baht(summary.lucky.amount)}`}
-                  />
-                  <Stat
-                    title="รอตรวจ (ยังไม่นับในยอดขาย)"
-                    value={`${num(summary.pending.count)} รายการ`}
-                    sub={`รวม ${baht(summary.pending.amount)}`}
-                  />
-                  <Stat title="ถูกปฏิเสธ" value={`${num(summary.rejected)} รายการ`} />
+        <div className="min-w-0 flex-1">
+          <div className="mx-auto w-full max-w-lg px-4 pb-16 pt-5 sm:max-w-3xl sm:px-6 sm:pt-8 md:max-w-4xl md:px-8">
+            <main className="min-w-0">
+              <header>
+                <div className="flex items-center gap-3">
+                  {/* ปุ่ม 3 ขีด เปิดเมนูรายการเต็มจอ (มือถือ) */}
+                  <button
+                    type="button"
+                    onClick={() => setMenuOpen(true)}
+                    aria-label={anyDot ? "เปิดเมนูรายการ (มีรายการใหม่)" : "เปิดเมนูรายการ"}
+                    aria-haspopup="dialog"
+                    aria-expanded={menuOpen}
+                    className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#14402c] bg-white md:hidden"
+                  >
+                    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
+                      <path d="M4 7h16M4 12h16M4 17h16" />
+                    </svg>
+                    {anyDot && (
+                      <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full border-2 border-[#f1f7e9] bg-red-500" />
+                    )}
+                  </button>
+                  <h1 className="min-w-0 flex-1 truncate text-2xl font-bold sm:text-3xl">{heading}</h1>
                 </div>
-
-                <div className="mt-5 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
-                  <div className="flex items-center justify-between gap-3 p-4">
-                    <h2 className="text-base font-bold sm:text-lg">ยอดขายรายวัน</h2>
-                    <a
-                      href="/api/admin/summary/csv"
-                      download
-                      className="min-h-10 shrink-0 rounded-full bg-[#14402c] px-4 py-2.5 text-xs font-bold text-white sm:text-sm"
-                    >
-                      ส่งออก CSV
-                    </a>
-                  </div>
-                  {summary.daily.length === 0 ? (
-                    <p className="border-t border-[#e3ecd6] p-6 text-center text-sm text-[#4d6652]">ยังไม่มียอดขาย</p>
-                  ) : (
-                    <div className="overflow-x-auto border-t border-[#e3ecd6]">
-                      <table className="w-full min-w-[420px] text-left text-xs sm:text-sm">
-                        <thead className="bg-[#f8fbf3] text-[#4d6652]">
-                          <tr>
-                            <th className="px-4 py-2.5 font-semibold">วันที่</th>
-                            <th className="px-2 py-2.5 text-right font-semibold">ออเดอร์</th>
-                            <th className="px-2 py-2.5 text-right font-semibold">เข้างาน</th>
-                            <th className="px-2 py-2.5 text-right font-semibold">Lucky</th>
-                            <th className="px-4 py-2.5 text-right font-semibold">ยอดเงิน</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {summary.daily.map((d) => (
-                            <tr key={d.date} className="border-t border-[#e3ecd6]">
-                              <td className="px-4 py-2.5 font-semibold">{fmtDay(d.date)}</td>
-                              <td className="px-2 py-2.5 text-right">{num(d.orders)}</td>
-                              <td className="px-2 py-2.5 text-right">{num(d.booth)}</td>
-                              <td className="px-2 py-2.5 text-right">{num(d.lucky)}</td>
-                              <td className="px-4 py-2.5 text-right font-bold">{baht(d.amount)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-
-                <p className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">
-                  อัปเดตล่าสุด {fmt(summary.generatedAt)} · รีเฟรชอัตโนมัติทุก 10 วินาที
+                <p className="mt-2 text-xs leading-relaxed text-[#4d6652] sm:text-sm">
+                  {tab === "summary"
+                    ? "ยอดขายนับจากรายการที่อนุมัติแล้วเท่านั้น รายการที่รอตรวจแสดงแยกไว้ต่างหาก"
+                    : tab === "scans"
+                      ? "ประวัติการยิงบาร์โค้ดตั๋วเข้างานจากหน้า /ticket แยกตามบัญชีซุ้ม ดูได้ว่าซุ้มไหนยิงให้ใคร เวลาไหน และรวมเป็นเงินเท่าไหร่ ตั๋ว 1 ใบยิงผ่านได้ครั้งเดียว ครั้งต่อไปจะขึ้นว่าซ้ำ"
+                      : tab === "bans"
+                        ? "ผู้ซื้อที่ถูกแบนไม่ให้สร้างรายการและส่งสลีป (ระบบแบนเองเมื่ออ่านสลีปได้แต่ไม่ผ่านข้อใดข้อหนึ่ง: ยอดเงิน ผู้รับเงิน วันเวลาโอน หรือ admin แบนเอง) การ์ดแสดงสลีปและผลตรวจของรายการที่ทำให้ถูกแบน กดปลดแบนได้ก่อนครบเวลา ส่วนการอนุมัติ/ปฏิเสธรายการทำที่เมนู “รอตรวจ”"
+                        : tab === "auto"
+                          ? "รายการที่ระบบอนุมัติให้เองเพราะตรวจสลีปผ่านครบทุกข้อ (ยอดเงิน ผู้รับ วันเวลาโอน เลขอ้างอิง) และออกตั๋วแล้ว รายการเหล่านี้อยู่ในเมนู “อนุมัติแล้ว” ด้วย"
+                          : "ระบบอ่านรูปสลีปจริงแล้วเทียบกับออเดอร์ ✓ = ตรงกับรายการ (เวลาโอนต้องเป็นวันเดียวกับออเดอร์และไม่เกิน 1 ชั่วโมงหลังสร้างออเดอร์) / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
                 </p>
-              </section>
-            )
-          ) : tab === "scans" ? (
-            !scanData ? (
-              <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
-                กำลังโหลดประวัติสแกน...
-              </div>
-            ) : (
-              <section className="mt-5 sm:mt-6">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
-                  <Stat title="ตั๋วที่ยิงผ่านแล้ว" value={`${num(scanData.total)} ใบ`} sub="ทุกซุ้มรวมกัน" tone="dark" />
-                  <Stat title="เงินรวมที่ซุ้มยิงได้" value={baht(boothTotal)} sub="ตั๋วเล่นซุ้ม ทุกซุ้มรวมกัน" tone="accent" />
-                  <Stat title="ยิงไม่ผ่าน" value={`${num(scanData.rejected)} ครั้ง`} sub="ซ้ำ / ผิดประเภท / ไม่พบ" />
-                </div>
+                <div className="mt-3 flex gap-2 md:hidden">{controlButtons}</div>
+              </header>
 
-                <h2 className="mt-6 text-base font-bold sm:text-lg">สรุปรายซุ้ม</h2>
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
-                  {scanData.booths.map((b) => (
-                    <div key={b.id} className="min-w-0 rounded-3xl border border-[#e3ecd6] bg-white p-4 sm:p-5">
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="min-w-0 truncate text-base font-bold sm:text-lg">{b.name}</p>
-                        {b.kind === "paper" && (
-                          <span className="shrink-0 rounded-full bg-[#fff1c2] px-2.5 py-0.5 text-[11px] font-bold text-[#b45309] sm:text-xs">
-                            ตั๋วกระดาษ
-                          </span>
-                        )}
-                      </div>
-                      {b.kind === "paper" ? (
-                        <p className="mt-2 text-2xl font-extrabold sm:text-3xl">
-                          {num(b.count)} <span className="text-sm font-semibold text-[#4d6652]">ใบ · ไม่มีมูลค่า</span>
-                        </p>
-                      ) : (
-                        <>
-                          <p className="mt-2 text-2xl font-extrabold sm:text-3xl">{baht(b.amount)}</p>
-                          <p className="mt-1 text-sm font-semibold text-[#4d6652]">{num(b.count)} ใบ</p>
-                        </>
-                      )}
-                      <p className="mt-2 text-[11px] text-[#6b7f6f] sm:text-xs">
-                        ยิงไม่ผ่าน {num(b.rejected)} ครั้ง · ยิงล่าสุด {fmtSec(b.lastAt)}
-                      </p>
+              {note && (
+                <p role="alert" className="mt-3 text-sm font-medium text-red-600">
+                  {note}
+                </p>
+              )}
+
+              {tab === "summary" ? (
+                !summary ? (
+                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                    กำลังโหลดสรุปยอด...
+                  </div>
+                ) : (
+                  <section className="mt-5 sm:mt-6">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+                      <Stat
+                        title="ยอดเงินรวมทั้งหมด"
+                        value={baht(summary.total.amount)}
+                        sub={`ตั๋วทั้งหมด ${num(summary.total.count)} ใบ`}
+                        tone="dark"
+                      />
+                      <Stat
+                        title="จำนวนผู้ซื้อ"
+                        value={`${num(summary.buyers)} คน`}
+                        sub={`${num(summary.orders)} ออเดอร์ที่อนุมัติแล้ว`}
+                        tone="accent"
+                      />
+                      <Stat
+                        title="ตั๋วเข้างาน (ซุ้ม)"
+                        value={`${num(summary.booth.count)} ใบ`}
+                        sub={`รวมเป็นเงิน ${baht(summary.booth.amount)}`}
+                      />
+                      <Stat
+                        title="ตั๋ว Lucky Draw"
+                        value={`${num(summary.lucky.count)} ใบ`}
+                        sub={`รวมเป็นเงิน ${baht(summary.lucky.amount)}`}
+                      />
+                      <Stat
+                        title="รอตรวจ (ยังไม่นับในยอดขาย)"
+                        value={`${num(summary.pending.count)} รายการ`}
+                        sub={`รวม ${baht(summary.pending.amount)}`}
+                      />
+                      <Stat title="ถูกปฏิเสธ" value={`${num(summary.rejected)} รายการ`} />
                     </div>
-                  ))}
-                </div>
 
-                <div className="mt-5 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
-                  <div className="p-4">
-                    <h2 className="text-base font-bold sm:text-lg">ประวัติล่าสุด</h2>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {[{ id: "", name: "ทุกซุ้ม" }, ...scanData.booths.map((b) => ({ id: b.id, name: b.name }))].map((c) => (
-                        <button
-                          key={c.id || "all"}
-                          type="button"
-                          onClick={() => setBoothFilter(c.id)}
-                          aria-pressed={boothFilter === c.id}
-                          className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold sm:text-sm ${
-                            boothFilter === c.id ? "bg-[#14402c] text-white" : "bg-[#e3ecd6] text-[#4d6652]"
-                          }`}
+                    <div className="mt-5 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+                      <div className="flex items-center justify-between gap-3 p-4">
+                        <h2 className="text-base font-bold sm:text-lg">ยอดขายรายวัน</h2>
+                        <a
+                          href="/api/admin/summary/csv"
+                          download
+                          className="min-h-10 shrink-0 rounded-full bg-[#14402c] px-4 py-2.5 text-xs font-bold text-white sm:text-sm"
                         >
-                          {c.name}
-                        </button>
+                          ส่งออก CSV
+                        </a>
+                      </div>
+                      {summary.daily.length === 0 ? (
+                        <p className="border-t border-[#e3ecd6] p-6 text-center text-sm text-[#4d6652]">ยังไม่มียอดขาย</p>
+                      ) : (
+                        <div className="overflow-x-auto border-t border-[#e3ecd6]">
+                          <table className="w-full min-w-[420px] text-left text-xs sm:text-sm">
+                            <thead className="bg-[#f8fbf3] text-[#4d6652]">
+                              <tr>
+                                <th className="px-4 py-2.5 font-semibold">วันที่</th>
+                                <th className="px-2 py-2.5 text-right font-semibold">ออเดอร์</th>
+                                <th className="px-2 py-2.5 text-right font-semibold">เข้างาน</th>
+                                <th className="px-2 py-2.5 text-right font-semibold">Lucky</th>
+                                <th className="px-4 py-2.5 text-right font-semibold">ยอดเงิน</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {summary.daily.map((d) => (
+                                <tr key={d.date} className="border-t border-[#e3ecd6]">
+                                  <td className="px-4 py-2.5 font-semibold">{fmtDay(d.date)}</td>
+                                  <td className="px-2 py-2.5 text-right">{num(d.orders)}</td>
+                                  <td className="px-2 py-2.5 text-right">{num(d.booth)}</td>
+                                  <td className="px-2 py-2.5 text-right">{num(d.lucky)}</td>
+                                  <td className="px-4 py-2.5 text-right font-bold">{baht(d.amount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
+                    <p className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">
+                      อัปเดตล่าสุด {fmt(summary.generatedAt)} · รีเฟรชอัตโนมัติทุก 10 วินาที
+                    </p>
+                  </section>
+                )
+              ) : tab === "scans" ? (
+                !scanData ? (
+                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                    กำลังโหลดประวัติสแกน...
+                  </div>
+                ) : (
+                  <section className="mt-5 sm:mt-6">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+                      <Stat title="ตั๋วที่ยิงผ่านแล้ว" value={`${num(scanData.total)} ใบ`} sub="ทุกซุ้มรวมกัน" tone="dark" />
+                      <Stat title="เงินรวมที่ซุ้มยิงได้" value={baht(boothTotal)} sub="ตั๋วเล่นซุ้ม ทุกซุ้มรวมกัน" tone="accent" />
+                      <Stat title="ยิงไม่ผ่าน" value={`${num(scanData.rejected)} ครั้ง`} sub="ซ้ำ / ผิดประเภท / ไม่พบ" />
+                    </div>
+
+                    <h2 className="mt-6 text-base font-bold sm:text-lg">สรุปรายซุ้ม</h2>
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+                      {scanData.booths.map((b) => (
+                        <div key={b.id} className="min-w-0 rounded-3xl border border-[#e3ecd6] bg-white p-4 sm:p-5">
+                          <div className="flex items-start justify-between gap-3">
+                            <p className="min-w-0 truncate text-base font-bold sm:text-lg">{b.name}</p>
+                            {b.kind === "paper" && (
+                              <span className="shrink-0 rounded-full bg-[#fff1c2] px-2.5 py-0.5 text-[11px] font-bold text-[#b45309] sm:text-xs">
+                                ตั๋วกระดาษ
+                              </span>
+                            )}
+                          </div>
+                          {b.kind === "paper" ? (
+                            <p className="mt-2 text-2xl font-extrabold sm:text-3xl">
+                              {num(b.count)} <span className="text-sm font-semibold text-[#4d6652]">ใบ · ไม่มีมูลค่า</span>
+                            </p>
+                          ) : (
+                            <>
+                              <p className="mt-2 text-2xl font-extrabold sm:text-3xl">{baht(b.amount)}</p>
+                              <p className="mt-1 text-sm font-semibold text-[#4d6652]">{num(b.count)} ใบ</p>
+                            </>
+                          )}
+                          <p className="mt-2 text-[11px] text-[#6b7f6f] sm:text-xs">
+                            ยิงไม่ผ่าน {num(b.rejected)} ครั้ง · ยิงล่าสุด {fmtSec(b.lastAt)}
+                          </p>
+                        </div>
                       ))}
                     </div>
-                  </div>
-                  {scanData.scans.length === 0 ? (
-                    <p className="border-t border-[#e3ecd6] p-6 text-center text-sm text-[#4d6652]">ยังไม่มีการยิงตั๋ว</p>
-                  ) : (
-                    <div className="overflow-x-auto border-t border-[#e3ecd6]">
-                      <table className="w-full min-w-[680px] text-left text-xs sm:text-sm">
-                        <thead className="bg-[#f8fbf3] text-[#4d6652]">
-                          <tr>
-                            <th className="px-4 py-2.5 font-semibold">เวลา</th>
-                            <th className="px-2 py-2.5 font-semibold">ซุ้มที่ยิง</th>
-                            <th className="px-2 py-2.5 font-semibold">ชื่อผู้ถือตั๋ว</th>
-                            <th className="px-2 py-2.5 font-semibold">รหัสตั๋ว</th>
-                            <th className="px-2 py-2.5 text-right font-semibold">มูลค่า</th>
-                            <th className="px-4 py-2.5 text-right font-semibold">ผล</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {scanData.scans.map((s) => {
-                            const r = SCAN_LABEL[s.result] ?? { label: s.result, cls: "bg-[#e3ecd6] text-[#14402c]" };
-                            return (
-                              <tr key={s.id} className="border-t border-[#e3ecd6] align-top">
-                                <td className="whitespace-nowrap px-4 py-2.5 font-semibold">{fmtSec(s.at)}</td>
-                                <td className="px-2 py-2.5 font-semibold">{s.boothName ?? "-"}</td>
-                                <td className="px-2 py-2.5">
-                                  <p className="font-semibold">{s.name ?? "-"}</p>
-                                  {s.phone && <p className="text-[#4d6652]">{s.phone}</p>}
-                                </td>
-                                <td className="px-2 py-2.5">
-                                  <p className="break-all font-mono">{s.code}</p>
-                                  {s.result === "duplicate" && s.firstUsedAt && (
-                                    <p className="mt-0.5 text-[#6b7f6f]">ยิงครั้งแรก {fmtSec(s.firstUsedAt)}</p>
-                                  )}
-                                </td>
-                                <td className="whitespace-nowrap px-2 py-2.5 text-right font-bold">
-                                  {s.result === "ok" && s.amount !== null ? (s.amount > 0 ? baht(s.amount) : "ไม่มีมูลค่า") : "-"}
-                                </td>
-                                <td className="px-4 py-2.5 text-right">
-                                  <span className={`inline-block whitespace-nowrap rounded-full px-3 py-1 font-bold ${r.cls}`}>
-                                    {r.label}
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
 
-                <p className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">แสดง 200 รายการล่าสุด · รีเฟรชอัตโนมัติทุก 10 วินาที</p>
-              </section>
-            )
-          ) : tab === "bans" ? (
-            !banList ? (
-              <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
-                กำลังโหลดรายชื่อผู้ถูกแบน...
-              </div>
-            ) : banList.length === 0 ? (
-              <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
-                ไม่มีผู้ใช้ที่ถูกแบนอยู่ตอนนี้
-              </div>
-            ) : (
-              <ul className="mt-5 space-y-4 sm:mt-6">
-                {banList.map((b) =>
-                  b.payment ? (
-                    renderPayment(b.payment, banFooter(b))
-                  ) : (
-                    <li key={b.id} className="min-w-0 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
-                      <p className="p-4 text-sm text-[#4d6652]">
-                        {b.name || b.username} · ไม่พบรายการที่ส่งสลีปของผู้ใช้นี้
-                      </p>
-                      {banFooter(b)}
-                    </li>
-                  ),
-                )}
-              </ul>
-            )
-          ) : items.length === 0 ? (
-            <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
-              {tab === "reviewing" ? "ไม่มีสลีปรอตรวจ" : "ยังไม่มีรายการ"}
-            </div>
-          ) : (
-            <ul className="mt-5 space-y-4 sm:mt-6">
-              {items.map((p) =>
-                renderPayment(p, tab === "reviewing" ? renderActions(p, p.slip?.check?.ok === true) : null),
+                    <div className="mt-5 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+                      <div className="p-4">
+                        <h2 className="text-base font-bold sm:text-lg">ประวัติล่าสุด</h2>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {[{ id: "", name: "ทุกซุ้ม" }, ...scanData.booths.map((b) => ({ id: b.id, name: b.name }))].map((c) => (
+                            <button
+                              key={c.id || "all"}
+                              type="button"
+                              onClick={() => setBoothFilter(c.id)}
+                              aria-pressed={boothFilter === c.id}
+                              className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold sm:text-sm ${
+                                boothFilter === c.id ? "bg-[#14402c] text-white" : "bg-[#e3ecd6] text-[#4d6652]"
+                              }`}
+                            >
+                              {c.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {scanData.scans.length === 0 ? (
+                        <p className="border-t border-[#e3ecd6] p-6 text-center text-sm text-[#4d6652]">ยังไม่มีการยิงตั๋ว</p>
+                      ) : (
+                        <div className="overflow-x-auto border-t border-[#e3ecd6]">
+                          <table className="w-full min-w-[680px] text-left text-xs sm:text-sm">
+                            <thead className="bg-[#f8fbf3] text-[#4d6652]">
+                              <tr>
+                                <th className="px-4 py-2.5 font-semibold">เวลา</th>
+                                <th className="px-2 py-2.5 font-semibold">ซุ้มที่ยิง</th>
+                                <th className="px-2 py-2.5 font-semibold">ชื่อผู้ถือตั๋ว</th>
+                                <th className="px-2 py-2.5 font-semibold">รหัสตั๋ว</th>
+                                <th className="px-2 py-2.5 text-right font-semibold">มูลค่า</th>
+                                <th className="px-4 py-2.5 text-right font-semibold">ผล</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {scanData.scans.map((s) => {
+                                const r = SCAN_LABEL[s.result] ?? { label: s.result, cls: "bg-[#e3ecd6] text-[#14402c]" };
+                                return (
+                                  <tr key={s.id} className="border-t border-[#e3ecd6] align-top">
+                                    <td className="whitespace-nowrap px-4 py-2.5 font-semibold">{fmtSec(s.at)}</td>
+                                    <td className="px-2 py-2.5 font-semibold">{s.boothName ?? "-"}</td>
+                                    <td className="px-2 py-2.5">
+                                      <p className="font-semibold">{s.name ?? "-"}</p>
+                                      {s.phone && <p className="text-[#4d6652]">{s.phone}</p>}
+                                    </td>
+                                    <td className="px-2 py-2.5">
+                                      <p className="break-all font-mono">{s.code}</p>
+                                      {s.result === "duplicate" && s.firstUsedAt && (
+                                        <p className="mt-0.5 text-[#6b7f6f]">ยิงครั้งแรก {fmtSec(s.firstUsedAt)}</p>
+                                      )}
+                                    </td>
+                                    <td className="whitespace-nowrap px-2 py-2.5 text-right font-bold">
+                                      {s.result === "ok" && s.amount !== null ? (s.amount > 0 ? baht(s.amount) : "ไม่มีมูลค่า") : "-"}
+                                    </td>
+                                    <td className="px-4 py-2.5 text-right">
+                                      <span className={`inline-block whitespace-nowrap rounded-full px-3 py-1 font-bold ${r.cls}`}>
+                                        {r.label}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+
+                    <p className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">แสดง 200 รายการล่าสุด · รีเฟรชอัตโนมัติทุก 10 วินาที</p>
+                  </section>
+                )
+              ) : tab === "bans" ? (
+                !banList ? (
+                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                    กำลังโหลดรายชื่อผู้ถูกแบน...
+                  </div>
+                ) : banList.length === 0 ? (
+                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                    ไม่มีผู้ใช้ที่ถูกแบนอยู่ตอนนี้
+                  </div>
+                ) : (
+                  <ul className="mt-5 space-y-4 sm:mt-6">
+                    {banList.map((b) =>
+                      b.payment ? (
+                        renderPayment(b.payment, banFooter(b))
+                      ) : (
+                        <li key={b.id} className="min-w-0 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+                          <div className="flex items-center gap-2.5 p-4">
+                            <Avatar key={b.avatarUrl ?? "none"} src={b.avatarUrl} name={b.name || b.username} />
+                            <p className="min-w-0 text-sm text-[#4d6652]">
+                              {b.name || b.username} · ไม่พบรายการที่ส่งสลีปของผู้ใช้นี้
+                            </p>
+                          </div>
+                          {banFooter(b)}
+                        </li>
+                      ),
+                    )}
+                  </ul>
+                )
+              ) : items.length === 0 ? (
+                <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                  {tab === "reviewing" ? "ไม่มีสลีปรอตรวจ" : "ยังไม่มีรายการ"}
+                </div>
+              ) : (
+                <ul className="mt-5 space-y-4 sm:mt-6">
+                  {items.map((p) =>
+                    renderPayment(p, tab === "reviewing" ? renderActions(p, p.slip?.check?.ok === true) : null),
+                  )}
+                </ul>
               )}
-            </ul>
-          )}
-        </main>
+            </main>
+          </div>
+        </div>
       </div>
 
       {/* เมนูรายการเต็มจอ (มือถือ) */}

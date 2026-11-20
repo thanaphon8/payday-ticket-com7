@@ -13,8 +13,29 @@ const DURATIONS: Record<string, number | null> = {
   permanent: null,
 };
 
+// แท็ก "แก้ไข" = ออเดอร์เดิมที่เคยถูกปฏิเสธ แล้วผู้ซื้อส่งสลีปใหม่เข้ามา (ตอนนี้รอตรวจ/อนุมัติแล้ว)
+// ออเดอร์ใหม่ที่ผู้ซื้อกดสร้างเอง (QR ใหม่) เป็นคนละรายการ จึงไม่ติดแท็ก
+function retryOf(d: Document) {
+  if (d.status !== "reviewing" && d.status !== "approved") return null;
+  const count =
+    typeof d.rejectCount === "number" && d.rejectCount > 0
+      ? d.rejectCount
+      : typeof d.rejectReason === "string" && d.rejectReason
+        ? 1
+        : 0;
+  if (count === 0) return null;
+  const last = (d.lastRejectReason as string | undefined) ?? (d.rejectReason as string | undefined) ?? null;
+  return { count, lastReason: last };
+}
+
+function avatarUrlOf(u: WithId<Document>) {
+  if (typeof u.avatarFileId !== "string") return null;
+  const v = u.avatarAt instanceof Date ? u.avatarAt.toISOString() : String(u.avatarAt ?? "");
+  return `/api/admin/users/${u._id.toString()}/avatar${v ? `?v=${encodeURIComponent(v)}` : ""}`;
+}
+
 // รูปแบบเดียวกับรายการในหน้า "รอตรวจ" (/api/admin/payments) เพื่อให้การ์ดหน้าถูกแบนแสดงเหมือนกัน
-function toItem(d: WithId<Document>, slip: WithId<Document> | undefined) {
+function toItem(d: WithId<Document>, slip: WithId<Document> | undefined, avatarUrl: string | null) {
   const tickets = (d.tickets as PaymentTicket[] | undefined) ?? [];
   return {
     id: d._id.toString(),
@@ -29,6 +50,8 @@ function toItem(d: WithId<Document>, slip: WithId<Document> | undefined) {
     booth: tickets.filter((t) => t.ticket === "booth").length,
     lucky: tickets.filter((t) => t.ticket === "lucky").length,
     rejectReason: (d.rejectReason as string | undefined) ?? null,
+    avatarUrl,
+    retry: retryOf(d),
     slip: slip
       ? {
           transRef: slip.transRef as string,
@@ -41,7 +64,7 @@ function toItem(d: WithId<Document>, slip: WithId<Document> | undefined) {
 
 // รายชื่อผู้ใช้ที่ถูกแบนอยู่ตอนนี้ (bannedUntil ยังไม่ถึงเวลา) พร้อมรายการ + สลีปที่ทำให้ถูกแบน
 // รายการที่ทำให้ถูกแบน = users.banPaymentId / แบนเก่าที่ไม่ได้เก็บไว้ ใช้รายการล่าสุดที่เคยส่งสลีปแทน (payment = null ถ้าไม่เคยส่ง)
-// คืน { bans: [{ id, username, name, phone, bannedUntil, bannedAt, banReason, payment }] } (แบนถาวร bannedUntil = ปี 9999)
+// คืน { bans: [{ id, username, name, phone, avatarUrl, bannedUntil, bannedAt, banReason, payment }] } (แบนถาวร bannedUntil = ปี 9999)
 export async function GET() {
   const guard = await requireAdmin();
   if (!guard.ok)
@@ -75,15 +98,17 @@ export async function GET() {
   return NextResponse.json({
     bans: users.map((u, i) => {
       const p = payOf[i];
+      const avatarUrl = avatarUrlOf(u);
       return {
         id: u._id.toString(),
         username: (u.username as string | undefined) ?? "",
         name: (u.name as string | undefined) ?? "",
         phone: (u.phone as string | undefined) ?? "",
+        avatarUrl,
         bannedUntil: u.bannedUntil as string,
         bannedAt: (u.bannedAt as string | undefined) ?? null,
         banReason: (u.banReason as string | undefined) ?? null,
-        payment: p ? toItem(p, p.slipId ? slipById.get(String(p.slipId)) : undefined) : null,
+        payment: p ? toItem(p, p.slipId ? slipById.get(String(p.slipId)) : undefined, avatarUrl) : null,
       };
     }),
   });
