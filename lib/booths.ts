@@ -8,11 +8,11 @@ export type Booth = { id: string; key: string; name: string; kind: BoothKind };
 
 export const BOOTHS: readonly Booth[] = [
   { id: "b1", key: "1", name: "ซุ้มปาลูกโป่ง", kind: "play" },
-  { id: "b2", key: "2", name: "ซุ้ม 2", kind: "play" }, // TODO: แก้ชื่อซุ้ม
-  { id: "b3", key: "3", name: "ซุ้ม 3", kind: "play" }, // TODO: แก้ชื่อซุ้ม
-  { id: "b4", key: "4", name: "ซุ้ม 4", kind: "play" }, // TODO: แก้ชื่อซุ้ม
-  { id: "b5", key: "5", name: "ซุ้ม 5", kind: "play" }, // TODO: แก้ชื่อซุ้ม
-  { id: "b6", key: "6", name: "ซุ้ม 6", kind: "play" }, // TODO: แก้ชื่อซุ้ม
+  { id: "b2", key: "2", name: "ซุ้มโยนห่วง", kind: "play" },
+  { id: "b3", key: "3", name: "ซุ้มยิงปืน", kind: "play" },
+  { id: "b4", key: "4", name: "ซุ้มตกปลา", kind: "play" },
+  { id: "b5", key: "5", name: "ซุ้มโยนบอล", kind: "play" },
+  { id: "b6", key: "6", name: "ซุ้มเก็บเหรียญ", kind: "play" },
   { id: "paper", key: "PAPER", name: "จุดรับตั๋วกระดาษ", kind: "paper" },
 ];
 
