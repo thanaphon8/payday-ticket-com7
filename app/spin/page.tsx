@@ -10,7 +10,7 @@ const EMP_LEN = 7;
 const SHOW_MAX = 60; // จำนวนตั๋วสูงสุดที่วาดหล่นในโหล (ตัวเลข "เหลือ ... ใบ" นับจริงทั้งหมด)
 const FIRST_STOP_MS = 3000; // ตัวเลขสปินกี่ ms (นับจากกดเริ่ม) ก่อนหยุดหลักแรก
 const ZOOM_CENTER_Y = 0.6; // ตอนซูม ตัวเลขอยู่สูงจากบนจอกี่ส่วน (0.5 = กลางจอ / มากกว่า = ตัวตู้ต่ำลง)
-const STEP_MS = 2000; // ระยะห่างระหว่างการหยุดแต่ละหลัก (รอ 2 วิก่อนแสดงเลขถัดไป)
+const STEP_MS = 1000; // ระยะห่างระหว่างการหยุดแต่ละหลัก (รอ 1 วิก่อนแสดงเลขถัดไป)
 const POLL_MS = 3000; // รีเฟรชโหลสด: ตั๋วที่ admin เพิ่งอนุมัติจะหล่นเข้าโหลเอง
 const BULBS = 22; // จำนวนหลอดไฟประดับตู้
 const WIN_BULBS_X = 16; // จำนวนหลอดไฟขอบบน/ล่างของการ์ดผู้ถูกรางวัล
@@ -18,6 +18,29 @@ const WIN_BULBS_Y = 6; // จำนวนหลอดไฟขอบซ้าย
 const CURSOR_HIDE_MS = 5000; // ไม่ขยับเมาส์กี่ ms แล้วซ่อนเมาส์
 const LOGO_SRC = "/img/logo.png"; // โลโก้ที่แปะเป็นเทปบนหัวตู้และโหลตั๋ว
 const STRIP = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; // แถบตัวเลขที่เลื่อนวนในแต่ละหลัก
+
+const MAX_BATCH = 20; // สุ่มทีเดียวได้สูงสุดกี่คน (ต้องตรงกับ MAX_BATCH ใน app/api/spin/route.ts)
+const BATCH_SPIN_MS = 4500; // โหมดสุ่มหลายคน: เครื่องทำงานกี่ ms (นับจากกดเริ่ม) แล้ว "ตู้ม" ออกพร้อมกัน
+
+// ไฟรั่วออกจากตัวตู้ตอนสุ่ม (l/t = ตำแหน่ง %, r = หมุนองศา, d = หน่วงวินาที, u = ความเร็วกะพริบวินาที)
+const BOLTS = [
+  { l: -6, t: 6, r: -35, d: 0, u: 0.31 },
+  { l: 98, t: 14, r: 30, d: 0.1, u: 0.27 },
+  { l: -7, t: 48, r: -70, d: 0.17, u: 0.36 },
+  { l: 99, t: 52, r: 75, d: 0.05, u: 0.29 },
+  { l: 20, t: -6, r: 10, d: 0.22, u: 0.33 },
+  { l: 72, t: -7, r: -15, d: 0.12, u: 0.25 },
+  { l: -5, t: 80, r: -110, d: 0.28, u: 0.34 },
+  { l: 97, t: 82, r: 105, d: 0.08, u: 0.3 },
+  { l: 45, t: 96, r: 170, d: 0.19, u: 0.28 },
+  { l: 8, t: 30, r: -50, d: 0.25, u: 0.26 },
+  { l: 92, t: 34, r: 55, d: 0.14, u: 0.35 },
+  { l: 58, t: -5, r: 5, d: 0.3, u: 0.32 },
+  { l: 28, t: 95, r: 160, d: 0.04, u: 0.37 },
+  { l: 82, t: 94, r: -165, d: 0.2, u: 0.24 },
+  { l: -4, t: 64, r: -90, d: 0.11, u: 0.38 },
+  { l: 96, t: 66, r: 95, d: 0.26, u: 0.23 },
+];
 
 const HIT_MS = 380; // เวลาที่ค้อนกระทบปุ่ม (ต้องตรงกับ keyframes pdHammer ที่ 38%)
 // เศษปุ่มที่แตกกระจาย (ทิศทาง x/y หน่วย px, หมุน r องศา, ขนาด s px)
@@ -281,6 +304,11 @@ const sfx = {
   whoosh() {
     noise(0.6, { vol: 0.14, freq: 2500, sweepTo: 300 });
   },
+  // ไฟรั่ว: level ยิ่งสูงยิ่งดัง (หลักท้าย ๆ แรงกว่าหลักแรก)
+  zap(level: number) {
+    noise(0.22, { vol: 0.08 + level * 0.025, freq: 6500, sweepTo: 900 });
+    tone(140 + level * 30, 0.18, { type: "sawtooth", vol: 0.05 + level * 0.015, to: 60 });
+  },
   // แถวเด้งเข้ารายชื่อ
   pop() {
     tone(300, 0.18, { type: "sine", vol: 0.3, to: 700 });
@@ -302,14 +330,21 @@ export default function SpinPage() {
   const [spinning, setSpinning] = useState(false);
   const [winner, setWinner] = useState<Winner | null>(null);
   const [goldFlash, setGoldFlash] = useState(false);
-  const [hiddenCode, setHiddenCode] = useState<string | null>(null); // แถวผู้ถูกรางวัลที่ซ่อนไว้ รอการ์ดลอยมาถึง
-  const [popCode, setPopCode] = useState<string | null>(null); // แถวที่เพิ่งโผล่ (เด้งเข้ารายชื่อ)
+  const [hiddenCodes, setHiddenCodes] = useState<string[]>([]); // แถวผู้ถูกรางวัลที่ซ่อนไว้ รอการ์ดลอยมาถึง
+  const [popCodes, setPopCodes] = useState<string[]>([]); // แถวที่เพิ่งโผล่ (เด้งเข้ารายชื่อ)
   const [shake, setShake] = useState(false); // จอสั่นตอนผลออก
   const [winnerClosing, setWinnerClosing] = useState(false); // กำลังเล่นแอนิเมชันเลื่อนการ์ดผู้ถูกรางวัลลง
   const [hammer, setHammer] = useState(false);
   const [quake, setQuake] = useState(false);
   const [zoom, setZoom] = useState(false); // ซูมเข้าหาตัวเลขตอนสุ่ม
   const [zoomT, setZoomT] = useState({ x: 0, y: 0, ox: 50, oy: 36 }); // ตำแหน่งเลื่อนตัวเลขเข้ากลางจอ + จุดซูม
+  const [batch, setBatch] = useState(1); // สุ่มทีเดียวกี่คน (ตั้งค่าที่ปุ่มเฟืองข้างปุ่มเริ่มสุ่ม)
+  const [showSettings, setShowSettings] = useState(false);
+  const [batchWin, setBatchWin] = useState<Winner[]>([]); // ผู้ถูกรางวัลรอบล่าสุด (หลายคนถ้าตั้งค่าไว้)
+  const [heat, setHeat] = useState(0); // ระดับความแรงของเครื่องตอนสุ่ม 0–7 (ยิ่งหลักหลัง ยิ่งสั่นแรง + ไฟรั่วเยอะ)
+  const [kick, setKick] = useState(0); // นับครั้งที่เครื่องสะดุ้ง (สลับ class เพื่อเริ่มแอนิเมชันใหม่ทุกครั้ง)
+  const [zapOn, setZapOn] = useState(false); // ไฟรั่วโชว์แวบเดียวตามจังหวะสั่น
+  const zapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fxRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -605,7 +640,17 @@ export default function SpinPage() {
   }, []);
 
   /* ---------- สุ่ม ---------- */
-  function finish(w: Winner, remaining: number) {
+  // เครื่องสะดุ้งแวบเดียว + ไฟรั่ว (level ยิ่งสูงยิ่งแรง)
+  function kickMachine(level: number) {
+    setHeat(level);
+    setKick((n) => n + 1);
+    setZapOn(true);
+    if (zapTimer.current) clearTimeout(zapTimer.current);
+    zapTimer.current = setTimeout(() => setZapOn(false), 750);
+  }
+
+  function finish(ws: Winner[], remaining: number) {
+    const w = ws[0];
     spinningRef.current = false;
     seqRef.current += 1;
     stopSpin(); // เลขหลักสุดท้ายหยุดแล้ว หยุดเสียงสุ่ม
@@ -613,11 +658,12 @@ export default function SpinPage() {
     // ผลออกแล้ว: ค่อย ๆ ซูมกลับเป็นปกติอย่างนุ่มนวล
     timersRef.current.push(setTimeout(() => setZoom(false), 900));
     setWinner(w);
-    setHiddenCode(w.code); // ซ่อนแถวไว้ก่อน จนกว่าการ์ดจะลอยมาถึงรายชื่อ
-    setPopCode(null);
-    setPool((p) => p.filter((t) => t.code !== w.code)); // ตัดตั๋วที่ถูกออกจากโหล
+    setBatchWin(ws);
+    setHiddenCodes(ws.map((x) => x.code)); // ซ่อนแถวไว้ก่อน จนกว่าการ์ดจะลอยมาถึงรายชื่อ
+    setPopCodes([]);
+    setPool((p) => p.filter((t) => !ws.some((x) => x.code === t.code))); // ตัดตั๋วที่ถูกออกจากโหล
     setTotal(remaining);
-    setWinners((ws) => [w, ...ws]);
+    setWinners((prev) => [...[...ws].reverse(), ...prev]); // รายชื่อเรียงใหม่สุดก่อน (คนที่สุ่มได้ทีหลังอยู่บน)
     setWinnerClosing(false);
     fireworks(); // พลุ + หน้าจอทองค้างอยู่จนกว่าจะกดปิดการ์ด (closeWinner)
     confetti(); // กระดาษสีทอง
@@ -632,7 +678,7 @@ export default function SpinPage() {
     if (winnerClosing || !winner) return;
     fwActive.current = false;
     sfx.whoosh();
-    const code = winner.code;
+    const codes = batchWin.length > 0 ? batchWin.map((x) => x.code) : [winner.code];
     const card = winnerCardRef.current;
     const list = winnerListRef.current;
     if (card && list) {
@@ -650,8 +696,8 @@ export default function SpinPage() {
     timersRef.current.push(
       // การ์ดลอยมาถึง: แถวของผู้ถูกรางวัลเด้งขึ้นในรายชื่อ
       setTimeout(() => {
-        setHiddenCode(null);
-        setPopCode(code);
+        setHiddenCodes([]);
+        setPopCodes(codes);
         sfx.pop();
       }, 640),
       setTimeout(() => {
@@ -669,9 +715,10 @@ export default function SpinPage() {
     fwActive.current = false;
     stopVictory(); // กันเสียงชนะรอบก่อนค้างอยู่
     setWinnerClosing(false);
-    setHiddenCode(null);
-    setPopCode(null);
+    setHiddenCodes([]);
+    setPopCodes([]);
     setShake(false);
+    setShowSettings(false);
     cancelAnimationFrame(fwRaf.current);
     cancelAnimationFrame(cfRaf.current);
     confettiRef.current?.getContext("2d")?.clearRect(0, 0, confettiRef.current.width, confettiRef.current.height);
@@ -679,6 +726,7 @@ export default function SpinPage() {
 
     setNote("");
     setWinner(null);
+    setBatchWin([]);
     setGoldFlash(false);
     spinningRef.current = true;
     seqRef.current += 1;
@@ -700,11 +748,19 @@ export default function SpinPage() {
       });
     }
     setZoom(true);
+    setHeat(0);
+    setKick(0);
+    setZapOn(false);
     setStopped(Array(EMP_LEN).fill(false));
 
     // เซิร์ฟเวอร์เลือกผู้ถูกรางวัลและตัดตั๋วออกจากโหลก่อน ฝั่งหน้าเว็บแค่เล่นแอนิเมชันให้ตรงผล
     const t0 = Date.now();
-    const res = await fetch("/api/spin", { method: "POST" }).catch(() => null);
+    const want = Math.max(1, Math.min(batch, MAX_BATCH, total)); // จำนวนที่ตั้งค่าไว้ (ไม่เกินตั๋วที่เหลือในโหล)
+    const res = await fetch("/api/spin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ count: want }),
+    }).catch(() => null);
     const data = res ? await res.json().catch(() => ({})) : {};
 
     if (!res || !res.ok) {
@@ -713,6 +769,7 @@ export default function SpinPage() {
       stopSpin();
       setSpinning(false);
       setZoom(false);
+      setHeat(0);
       setDigits(Array(EMP_LEN).fill("-"));
       setNote(data.error ?? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
       if (res?.status === 401 || res?.status === 403) setGate("locked");
@@ -720,10 +777,38 @@ export default function SpinPage() {
       return;
     }
 
-    const w = data.winner as Winner;
+    // เซิร์ฟเวอร์ส่ง winners (หลายคน) มา / เผื่อเวอร์ชันเก่าส่ง winner คนเดียว
+    const list: Winner[] = Array.isArray(data.winners) && data.winners.length > 0 ? data.winners : [data.winner as Winner];
+    const w = list[0];
     const remaining = Number(data.remaining ?? 0);
     // ให้ตัวเลขสปินครบ FIRST_STOP_MS (นับจากกดเริ่ม) ก่อนเริ่มหยุดหลักแรก
     const wait = Math.max(0, FIRST_STOP_MS - (Date.now() - t0));
+
+    // สุ่มหลายคน: เครื่องทำงานรวดเดียวแรงขึ้นเรื่อย ๆ แล้ว "ตู้ม" ทุกหลักหยุดพร้อมกัน โชว์ทุกรายชื่อทีเดียว
+    if (list.length > 1) {
+      const left = Math.max(0, BATCH_SPIN_MS - (Date.now() - t0));
+      // ใกล้ออกผล: เครื่องโยกแรงขึ้นเป็นช่วง ๆ + ไฟรั่ว
+      [0.55, 0.7, 0.82, 0.92].forEach((f, k) => {
+        timersRef.current.push(
+          setTimeout(() => {
+            sfx.zap(k + 2);
+            kickMachine(k + 2);
+          }, left * f),
+        );
+      });
+      timersRef.current.push(
+        setTimeout(() => {
+          sfx.hit();
+          sfx.zap(EMP_LEN);
+          playNumber();
+          kickMachine(EMP_LEN); // สั่นแวบเดียวตอนตู้ม
+          setDigits(Array(EMP_LEN).fill("x")); // หลายคน: ไม่โชว์รหัสคนใดคนหนึ่ง
+          setStopped(Array(EMP_LEN).fill(true));
+          finish(list, remaining);
+        }, left),
+      );
+      return;
+    }
 
     // หยุดทีละหลักจากซ้ายไปขวา
     for (let i = 0; i < EMP_LEN; i++) {
@@ -731,6 +816,8 @@ export default function SpinPage() {
         setTimeout(
           () => {
             playNumber(); // เสียงเลขหยุด (number.mp3) ทุกหลัก
+            kickMachine(i + 1); // หลักที่หยุดยิ่งหลังยิ่งสั่นแรงขึ้น (สั่นแวบเดียว) + ไฟรั่ว
+            sfx.zap(i + 1);
             setDigits((prev) => {
               const n = [...prev];
               n[i] = w.empCode[i] ?? "0";
@@ -741,7 +828,7 @@ export default function SpinPage() {
               n[i] = true;
               return n;
             });
-            if (i === EMP_LEN - 1) finish(w, remaining);
+            if (i === EMP_LEN - 1) finish([w], remaining);
           },
           wait + i * STEP_MS,
         ),
@@ -774,11 +861,19 @@ export default function SpinPage() {
     const isTyping = (el: HTMLElement | null) =>
       !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Escape" && showSettings) {
+        setShowSettings(false);
+        return;
+      }
       if (e.code !== "Space") return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (isTyping(e.target as HTMLElement | null)) return;
       e.preventDefault(); // กันหน้าเลื่อน / กันปุ่มที่โฟกัสอยู่ถูกกดซ้ำ
       if (e.repeat || gate !== "ok") return;
+      if (showSettings) {
+        setShowSettings(false); // กด Space ตอนเปิดหน้าตั้งค่า = ปิดหน้าตั้งค่า (ไม่เริ่มสุ่ม)
+        return;
+      }
       (document.activeElement as HTMLElement | null)?.blur?.();
       if (winner && !spinning) {
         if (!winnerClosing) closeWinner();
@@ -850,7 +945,14 @@ export default function SpinPage() {
   }
 
   const idle = !spinning && !winner;
-  const spinLabel = spinning ? "กำลังสุ่ม..." : winner ? "สุ่มรอบถัดไป" : "เริ่มสุ่ม";
+  const maxBatch = Math.max(1, Math.min(MAX_BATCH, total));
+  const spinLabel = spinning
+    ? "กำลังสุ่ม..."
+    : winner
+      ? "สุ่มรอบถัดไป"
+      : batch > 1
+        ? `สุ่ม ${Math.min(batch, maxBatch)} คน`
+        : "เริ่มสุ่ม";
   const btnLabel = total === 0 ? "โหลว่างเปล่า" : spinLabel;
   const latest = winners[0] ?? null; // ผู้ถูกรางวัลล่าสุด (แสดงบนตู้หลังปิดการ์ด)
 
@@ -1340,6 +1442,62 @@ export default function SpinPage() {
         .pd-strip { animation: pdStrip 0.3s linear infinite; filter: blur(1.4px); will-change: transform; }
         .pd-reel-stop { animation: pdLand 0.65s cubic-bezier(0.3, 0.7, 0.4, 1) both; }
         .pd-shake { animation: pdShake 0.3s linear infinite; }
+        /* เครื่องสั่นแรงขึ้นตามระดับ --amp (px) / ความถี่ --spd */
+        @keyframes pdRumble {
+          0%, 100% { transform: translate(0, 0) rotate(0deg); }
+          20% { transform: translate(calc(var(--amp) * -1px), calc(var(--amp) * 0.4px)) rotate(calc(var(--amp) * -0.1deg)); }
+          40% { transform: translate(calc(var(--amp) * 1px), calc(var(--amp) * -0.4px)) rotate(calc(var(--amp) * 0.1deg)); }
+          60% { transform: translate(calc(var(--amp) * -0.7px), calc(var(--amp) * -0.5px)) rotate(calc(var(--amp) * -0.07deg)); }
+          80% { transform: translate(calc(var(--amp) * 0.7px), calc(var(--amp) * 0.5px)) rotate(calc(var(--amp) * 0.07deg)); }
+        }
+        @keyframes pdRumbleL {
+          0%, 100% { transform: translate(0, 0) rotate(0deg); }
+          20% { transform: translate(calc(var(--ramp) * -1px), calc(var(--ramp) * 0.4px)) rotate(calc(var(--ramp) * -0.1deg)); }
+          40% { transform: translate(calc(var(--ramp) * 1px), calc(var(--ramp) * -0.4px)) rotate(calc(var(--ramp) * 0.1deg)); }
+          60% { transform: translate(calc(var(--ramp) * -0.7px), calc(var(--ramp) * -0.5px)) rotate(calc(var(--ramp) * -0.07deg)); }
+          80% { transform: translate(calc(var(--ramp) * 0.7px), calc(var(--ramp) * 0.5px)) rotate(calc(var(--ramp) * 0.07deg)); }
+        }
+        .pd-rumble { animation: pdRumbleL var(--spd, 0.3s) linear infinite; }
+        /* สะดุ้งครั้งเดียวแล้วนิ่ง (A/B สลับกันเพื่อเริ่มใหม่ทุกครั้ง) */
+        @keyframes pdKickA {
+          0% { transform: translate(0, 0) rotate(0deg); }
+          12% { transform: translate(calc(var(--amp) * -1px), calc(var(--amp) * 0.5px)) rotate(calc(var(--amp) * -0.12deg)); }
+          28% { transform: translate(calc(var(--amp) * 0.9px), calc(var(--amp) * -0.5px)) rotate(calc(var(--amp) * 0.1deg)); }
+          44% { transform: translate(calc(var(--amp) * -0.6px), calc(var(--amp) * 0.3px)) rotate(calc(var(--amp) * -0.06deg)); }
+          60% { transform: translate(calc(var(--amp) * 0.35px), calc(var(--amp) * -0.2px)) rotate(calc(var(--amp) * 0.03deg)); }
+          80% { transform: translate(calc(var(--amp) * -0.15px), 0) rotate(0deg); }
+          100% { transform: translate(0, 0) rotate(0deg); }
+        }
+        @keyframes pdKickB {
+          0% { transform: translate(0, 0) rotate(0deg); }
+          12% { transform: translate(calc(var(--amp) * -1px), calc(var(--amp) * 0.5px)) rotate(calc(var(--amp) * -0.12deg)); }
+          28% { transform: translate(calc(var(--amp) * 0.9px), calc(var(--amp) * -0.5px)) rotate(calc(var(--amp) * 0.1deg)); }
+          44% { transform: translate(calc(var(--amp) * -0.6px), calc(var(--amp) * 0.3px)) rotate(calc(var(--amp) * -0.06deg)); }
+          60% { transform: translate(calc(var(--amp) * 0.35px), calc(var(--amp) * -0.2px)) rotate(calc(var(--amp) * 0.03deg)); }
+          80% { transform: translate(calc(var(--amp) * -0.15px), 0) rotate(0deg); }
+          100% { transform: translate(0, 0) rotate(0deg); }
+        }
+        /* สั่นเบา ๆ ต่อเนื่องไว้ข้างล่าง แล้วสะดุ้งทับครั้งเดียว จบแล้วกลับไปสั่นเบาต่อทันที ไม่นิ่ง */
+        .pd-kick-a { animation: pdRumbleL var(--spd, 0.3s) linear infinite, pdKickA 0.6s ease-out 1; }
+        .pd-kick-b { animation: pdRumbleL var(--spd, 0.3s) linear infinite, pdKickB 0.6s ease-out 1; }
+        /* แท่นรองตู้ */
+        .pd-podium {
+          background: linear-gradient(180deg, #a3121f 0%, #7a0c16 55%, #4f060d 100%);
+          box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.22), 0 8px 18px rgba(0, 0, 0, 0.45);
+        }
+        .pd-batch-wrap { animation: pdSlideUp 0.8s cubic-bezier(0.22, 0.9, 0.3, 1) both; }
+        .pd-batch-wrap.pd-card-out { animation: pdCardFly 0.95s ease-in-out forwards; }
+        /* ไฟรั่วออกจากตัวตู้ (กะพริบแบบสุ่มจังหวะ) */
+        @keyframes pdZap {
+          0%, 100% { opacity: 0; }
+          8% { opacity: 1; }
+          22% { opacity: 0.1; }
+          38% { opacity: 1; }
+          52% { opacity: 0; }
+          70% { opacity: 0.9; }
+          82% { opacity: 0; }
+        }
+        .pd-zap { animation: pdZap 0.3s steps(1) infinite; filter: drop-shadow(0 0 6px #7fd8ff) drop-shadow(0 0 14px #5ab8ff); }
         .pd-live { animation: pdLive 1.4s ease-in-out infinite; }
         .pd-bulb { animation: pdBulb 1s steps(1) infinite; }
         .pd-bulb-fast { animation-duration: 0.28s; }
@@ -1372,7 +1530,7 @@ export default function SpinPage() {
         }
         @media (prefers-reduced-motion: reduce) {
           .pd-gold-card, .pd-gold-list, .pd-row-pop { animation: none; }
-          .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-wash::after, .pd-quake, .pd-quake-win, .pd-bokeh-dot { animation: none; }
+          .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-rumble, .pd-kick-a, .pd-kick-b, .pd-batch-wrap, .pd-zap, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-wash::after, .pd-quake, .pd-quake-win, .pd-bokeh-dot { animation: none; }
           .pd-half-l { animation: none; transform: translate(-6px, 12px) rotate(13deg); }
           .pd-half-r { animation: none; transform: translate(6px, 12px) rotate(-13deg); }
           .pd-hammer, .pd-shard { display: none; }
@@ -1433,10 +1591,60 @@ export default function SpinPage() {
             >
               <section
                 aria-label="ตู้สุ่มรหัสพนักงาน"
-                className={`relative min-w-0 flex-1 ${spinning ? "pd-shake" : ""} ${
+                className={`relative min-w-0 flex-1 ${kick > 0 && (spinning || zapOn) ? (kick % 2 ? "pd-kick-a" : "pd-kick-b") : spinning ? "pd-rumble" : ""} ${
                   winner && !spinning ? "pd-jackpot" : ""
                 }`}
+                style={
+                  spinning || zapOn
+                    ? ({
+                        // ตอนเครื่องทำงาน: สั่นเบา ๆ ต่อเนื่อง / ตอนเลขหยุด: สะดุ้งแรงขึ้นตามหลัก (zapOn)
+                        "--amp": 2 + heat * 2.2,
+                        "--ramp": 1.5 + heat * 0.3,
+                        "--spd": `${Math.max(0.2, 0.3 - heat * 0.01)}s`,
+                        filter: zapOn
+                          ? `drop-shadow(0 0 ${4 + heat * 4}px rgba(120, 205, 255, ${Math.min(0.9, 0.3 + heat * 0.09)}))`
+                          : undefined,
+                      } as CSSProperties)
+                    : undefined
+                }
               >
+                {/* ไฟรั่วออกจากตัวตู้ตอนสุ่ม: ยิ่งหลักหลัง/ยิ่งใกล้ตู้ม ยิ่งเยอะและใหญ่ */}
+                {zapOn && (
+                  <div aria-hidden className="pointer-events-none absolute -inset-4 z-30">
+                    {BOLTS.slice(0, Math.min(BOLTS.length, 2 + heat * 2)).map((b, i) => (
+                      <svg
+                        key={i}
+                        viewBox="0 0 40 80"
+                        className="pd-zap absolute"
+                        style={{
+                          left: `${b.l}%`,
+                          top: `${b.t}%`,
+                          width: 26 + heat * 4,
+                          height: (26 + heat * 4) * 2,
+                          transform: `rotate(${b.r}deg)`,
+                          animationDelay: `${b.d}s`,
+                          animationDuration: `${b.u}s`,
+                        }}
+                      >
+                        <polyline
+                          points="20,0 9,24 23,34 6,60 21,70 14,80"
+                          fill="none"
+                          stroke="#7fd8ff"
+                          strokeWidth="7"
+                          strokeLinejoin="round"
+                          opacity="0.45"
+                        />
+                        <polyline
+                          points="20,0 9,24 23,34 6,60 21,70 14,80"
+                          fill="none"
+                          stroke="#ffffff"
+                          strokeWidth="2.5"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    ))}
+                  </div>
+                )}
                 {/* ===== หัวตู้: ป้ายโค้ง + หลอดไฟ ===== */}
                 <div className="pd-gold pd-crown rounded-b-xl rounded-t-[2.8rem] p-1.5">
                   <div className="pd-marquee relative rounded-b-lg rounded-t-[2.4rem] px-3 pb-3 pt-3 text-center">
@@ -1609,6 +1817,99 @@ export default function SpinPage() {
                             </div>
                           )}
                         </div>
+
+                        {/* ปุ่มตั้งค่า: เลือกสุ่มทีเดียวกี่คน */}
+                        <div className="relative flex-none">
+                          <button
+                            type="button"
+                            onClick={() => setShowSettings((v) => !v)}
+                            disabled={spinning || hammer}
+                            aria-label="ตั้งค่าจำนวนผู้ถูกรางวัลต่อการสุ่ม"
+                            aria-expanded={showSettings}
+                            className="pd-gold relative flex h-12 w-12 items-center justify-center rounded-full text-[#8f0f1a] transition active:scale-90 disabled:cursor-not-allowed disabled:opacity-50 sm:h-14 sm:w-14"
+                          >
+                            <svg
+                              viewBox="0 0 24 24"
+                              className="h-6 w-6 sm:h-7 sm:w-7"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              aria-hidden
+                            >
+                              <circle cx="12" cy="12" r="3.2" />
+                              <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1" />
+                            </svg>
+                            {batch > 1 && (
+                              <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-[#e0243c] px-1 text-center text-[11px] font-extrabold leading-5 text-white ring-2 ring-[#ffe27a]">
+                                {Math.min(batch, maxBatch)}
+                              </span>
+                            )}
+                          </button>
+
+                          {showSettings && (
+                            <div
+                              role="dialog"
+                              aria-label="ตั้งค่าการสุ่ม"
+                              className="absolute bottom-full right-0 z-40 mb-3 w-64 rounded-2xl border-2 border-[#ffc83d] bg-[#2a0a12] p-4 text-white shadow-[0_8px_0_rgba(0,0,0,0.4)]"
+                            >
+                              <p className="text-sm font-extrabold text-[#ffe27a]">สุ่มทีเดียวกี่คน</p>
+                              <div className="mt-3 flex items-center justify-center gap-4">
+                                <button
+                                  type="button"
+                                  onClick={() => setBatch((n) => Math.max(1, Math.min(n, maxBatch) - 1))}
+                                  disabled={batch <= 1}
+                                  aria-label="ลดจำนวน"
+                                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-xl font-extrabold text-black transition active:scale-90 disabled:opacity-40"
+                                >
+                                  −
+                                </button>
+                                <span className="min-w-12 text-center font-mono text-4xl font-extrabold">
+                                  {Math.min(batch, maxBatch)}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setBatch((n) => Math.min(maxBatch, Math.min(n, maxBatch) + 1))}
+                                  disabled={Math.min(batch, maxBatch) >= maxBatch}
+                                  aria-label="เพิ่มจำนวน"
+                                  className="flex h-10 w-10 items-center justify-center rounded-full bg-[#ffc83d] text-xl font-extrabold text-black transition active:scale-90 disabled:opacity-40"
+                                >
+                                  +
+                                </button>
+                              </div>
+                              <div className="mt-3 flex flex-wrap justify-center gap-2">
+                                {[1, 3, 5, 10].map((n) => (
+                                  <button
+                                    key={n}
+                                    type="button"
+                                    onClick={() => setBatch(Math.min(n, maxBatch))}
+                                    className={`min-w-10 rounded-full border px-3 py-1 text-sm font-bold transition active:scale-95 ${
+                                      Math.min(batch, maxBatch) === n
+                                        ? "border-[#ffc83d] bg-[#ffc83d] text-[#2a0a12]"
+                                        : "border-white/30 text-white/80"
+                                    }`}
+                                  >
+                                    {n}
+                                  </button>
+                                ))}
+                              </div>
+                              <p className="mt-3 text-center text-[11px] text-white/60">
+                                {Math.min(batch, maxBatch) > 1
+                                  ? `กดสุ่มครั้งเดียว ได้ ${Math.min(batch, maxBatch)} รายชื่อพร้อมกัน`
+                                  : "สุ่มทีละคน (เลขหยุดทีละหลัก)"}
+                                {" · "}สูงสุด {maxBatch}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => setShowSettings(false)}
+                                className="mt-3 w-full rounded-xl bg-[#ffc83d] py-2 text-sm font-extrabold text-[#2a0a12] transition active:scale-95"
+                              >
+                                ตกลง
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <div aria-hidden className="mt-4 flex gap-2">
@@ -1669,6 +1970,10 @@ export default function SpinPage() {
                 {/* ฐานตู้ */}
                 <div aria-hidden className="pd-gold mx-3 mt-2 h-5 rounded-b-[1.5rem] sm:mx-6" />
                 <div aria-hidden className="pd-foot mt-2 h-4 rounded-b-2xl" />
+                <div aria-hidden className="pd-podium -mx-3 mt-6 h-9 rounded-t-xl border-t-4 border-[#ffd54a] sm:-mx-6 sm:h-12" />
+                <div aria-hidden className="pd-podium -mx-6 h-9 border-t-2 border-[#ffd54a]/60 sm:-mx-12 sm:h-14" />
+                <div aria-hidden className="pd-gold -mx-8 h-3 rounded-b-md sm:-mx-16" />
+                <div aria-hidden className="mx-auto -mt-1 h-6 w-[115%] -translate-x-[6.5%] rounded-[50%] bg-black/45 blur-xl" />
               </section>
 
               {/* ===== คันโยกข้างตู้ (แสดงตั้งแต่จอ md ขึ้นไป) ===== */}
@@ -1762,7 +2067,7 @@ export default function SpinPage() {
                     <li
                       key={w.code}
                       className={`flex items-center gap-3 px-4 py-3 ${
-                        w.code === hiddenCode ? "invisible" : w.code === popCode ? "pd-row-pop" : ""
+                        hiddenCodes.includes(w.code) ? "invisible" : popCodes.includes(w.code) ? "pd-row-pop" : ""
                       }`}
                     >
                       <WinnerAvatar w={w} className="h-12 w-12 text-xl ring-2 ring-[#ffd54a]/70" />
@@ -1788,7 +2093,63 @@ export default function SpinPage() {
       </main>
 
       {/* ===== ผู้ถูกรางวัล (การ์ดลอยเหนือหน้า เลื่อนขึ้นจากด้านล่าง กด Space หรือปุ่มปิดแล้วเลื่อนลง) ===== */}
-      {winner && !spinning && (
+      {winner && !spinning && batchWin.length > 1 && (
+        <section
+          ref={winnerCardRef}
+          aria-label="ผู้ถูกรางวัลทั้งหมด"
+          className={`pd-batch-wrap fixed inset-x-3 bottom-4 z-[46] mx-auto max-w-6xl sm:bottom-6 ${
+            winnerClosing ? "pd-card-out" : ""
+          }`}
+        >
+          <div className="mb-2 flex items-center justify-between gap-3 px-2">
+            <p className="text-lg font-extrabold tracking-widest text-[#ffe27a] [text-shadow:0_2px_6px_rgba(0,0,0,0.7)] sm:text-2xl">
+              ยินดีด้วย! ผู้ถูกรางวัล {batchWin.length} คน
+            </p>
+            <button
+              type="button"
+              onClick={closeWinner}
+              disabled={winnerClosing}
+              className="min-h-9 rounded-full border-2 border-[#6b4200]/60 bg-[#ffe27a] px-4 text-xs font-bold text-[#5a3500] sm:text-sm"
+            >
+              ปิด (Space)
+            </button>
+          </div>
+          <div
+            className={`pd-noscroll grid max-h-[78vh] gap-3 overflow-y-auto p-1 ${
+              batchWin.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+            }`}
+          >
+            {batchWin.map((b, i) => (
+              <div
+                key={b.code}
+                className="pd-gold-card relative min-w-0 rounded-[1.3rem] px-4 pb-4 pt-3 shadow-[0_6px_0_rgba(0,0,0,0.35)] [text-shadow:0_1px_0_rgba(255,255,255,0.45)]"
+              >
+                <span className="absolute left-3 top-3 flex h-7 w-7 items-center justify-center rounded-full bg-[#5a3500] text-sm font-extrabold text-[#ffe27a]">
+                  {i + 1}
+                </span>
+                <p className="text-center text-xs font-extrabold tracking-widest text-[#7a4b00]">ผู้ถูกรางวัล</p>
+                <div className="mt-2 flex items-center gap-4">
+                  <WinnerAvatar w={b} className="h-20 w-20 flex-none text-4xl ring-4 ring-white/80 sm:h-24 sm:w-24 sm:text-5xl" />
+                  <div className="min-w-0 flex-1 text-left">
+                    <p className="break-words text-xl font-extrabold leading-tight text-[#5a3500] sm:text-2xl">{b.name}</p>
+                    {(b.company || b.department) && (
+                      <p className="mt-1 break-words text-sm font-bold text-[#7a4b00]">
+                        {[b.company, b.department].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
+                    <p className="mt-1 text-sm font-semibold text-[#7a4b00]">
+                      รหัสพนักงาน <span className="font-mono font-extrabold text-[#5a3500]">{b.empCode}</span>
+                    </p>
+                    <p className="mt-0.5 break-all font-mono text-[10px] text-[#7a4b00]/70">{b.code}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {winner && !spinning && batchWin.length <= 1 && (
         <section
           ref={winnerCardRef}
           aria-label="ผู้ถูกรางวัล"
