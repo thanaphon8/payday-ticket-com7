@@ -1,108 +1,348 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Prompt } from "next/font/google";
+import { code128Bars } from "@/lib/code128";
+import LoginForm from "./components/LoginForm";
+import RegisterForm from "./components/RegisterForm";
+import { EMP_CODE_LENGTH, validEmp, validPhone } from "./components/auth-shared";
+import type { AuthMode, User } from "./components/auth-shared";
+import { departmentsOf, getCompany } from "./components/departments";
+import { branchesOf, branchFullLabel } from "./components/branches";
 
-const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
+// ฟอนต์หลักของเว็บ: Prompt (โค้งมน เป็นกันเอง) เปลี่ยนเป็น Kanit / Mali ได้
+const appFont = Prompt({
+  subsets: ["thai", "latin"],
+  weight: ["400", "500", "600", "700", "800"],
+});
 
-// ต้องตรงกับ EMP_CODE_LENGTH ใน lib/tickets.ts
-const EMP_LEN = 7;
-const SHOW_MAX = 60; // จำนวนตั๋วสูงสุดที่วาดหล่นในโหล (ตัวเลข "เหลือ ... ใบ" นับจริงทั้งหมด)
-const FIRST_STOP_MS = 3000; // ตัวเลขสปินกี่ ms (นับจากกดเริ่ม) ก่อนหยุดหลักแรก
-const ZOOM_CENTER_Y = 0.6; // ตอนซูม ตัวเลขอยู่สูงจากบนจอกี่ส่วน (0.5 = กลางจอ / มากกว่า = ตัวตู้ต่ำลง)
-const FAST_STEP_MS = 250; // 3 หลักสุดท้าย: ออกรัว ตู้ม ตู้ม ตู้ม ห่างกันกี่ ms
-const FAST_LAST = 3;
-const STEP_MS = 500; // ระยะห่างระหว่างการหยุดแต่ละหลัก (รอ 0.5 วิก่อนแสดงเลขถัดไป)
-const POLL_MS = 3000; // รีเฟรชโหลสด: ตั๋วที่ admin เพิ่งอนุมัติจะหล่นเข้าโหลเอง
-const BULBS = 22; // จำนวนหลอดไฟประดับตู้
-const WIN_BULBS_X = 16; // จำนวนหลอดไฟขอบบน/ล่างของการ์ดผู้ถูกรางวัล
-const WIN_BULBS_Y = 6; // จำนวนหลอดไฟขอบซ้าย/ขวาของการ์ดผู้ถูกรางวัล
-const CURSOR_HIDE_MS = 5000; // ไม่ขยับเมาส์กี่ ms แล้วซ่อนเมาส์
-const LOGO_SRC = "/img/logo.png"; // โลโก้ที่แปะเป็นเทปบนหัวตู้และโหลตั๋ว
-const STRIP = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; // แถบตัวเลขที่เลื่อนวนในแต่ละหลัก
-
-const MAX_BATCH = 20; // สุ่มทีเดียวได้สูงสุดกี่คน (ต้องตรงกับ MAX_BATCH ใน app/api/spin/route.ts)
-const BATCH_SPIN_MS = 4500; // โหมดสุ่มหลายคน: เครื่องทำงานกี่ ms (นับจากกดเริ่ม) แล้ว "ตู้ม" ออกพร้อมกัน
-
-// ไฟรั่วออกจากตัวตู้ตอนสุ่ม (l/t = ตำแหน่ง %, r = หมุนองศา, d = หน่วงวินาที, u = ความเร็วกะพริบวินาที)
-const BOLTS = [
-  { l: -6, t: 6, r: -35, d: 0, u: 0.31 },
-  { l: 98, t: 14, r: 30, d: 0.1, u: 0.27 },
-  { l: -7, t: 48, r: -70, d: 0.17, u: 0.36 },
-  { l: 99, t: 52, r: 75, d: 0.05, u: 0.29 },
-  { l: 20, t: -6, r: 10, d: 0.22, u: 0.33 },
-  { l: 72, t: -7, r: -15, d: 0.12, u: 0.25 },
-  { l: -5, t: 80, r: -110, d: 0.28, u: 0.34 },
-  { l: 97, t: 82, r: 105, d: 0.08, u: 0.3 },
-  { l: 45, t: 96, r: 170, d: 0.19, u: 0.28 },
-  { l: 8, t: 30, r: -50, d: 0.25, u: 0.26 },
-  { l: 92, t: 34, r: 55, d: 0.14, u: 0.35 },
-  { l: 58, t: -5, r: 5, d: 0.3, u: 0.32 },
-  { l: 28, t: 95, r: 160, d: 0.04, u: 0.37 },
-  { l: 82, t: 94, r: -165, d: 0.2, u: 0.24 },
-  { l: -4, t: 64, r: -90, d: 0.11, u: 0.38 },
-  { l: 96, t: 66, r: 95, d: 0.26, u: 0.23 },
-];
-
-const HIT_MS = 380; // เวลาที่ค้อนกระทบปุ่ม (ต้องตรงกับ keyframes pdHammer ที่ 38%)
-// เศษปุ่มที่แตกกระจาย (ทิศทาง x/y หน่วย px, หมุน r องศา, ขนาด s px)
-const SHARDS = [
-  { x: -150, y: -80, r: -220, s: 26 },
-  { x: -90, y: -120, r: 160, s: 20 },
-  { x: -30, y: -140, r: 300, s: 24 },
-  { x: 40, y: -130, r: -180, s: 18 },
-  { x: 100, y: -110, r: 240, s: 26 },
-  { x: 160, y: -70, r: -300, s: 22 },
-  { x: -160, y: 50, r: 200, s: 20 },
-  { x: -100, y: 90, r: -140, s: 24 },
-  { x: -20, y: 110, r: 260, s: 18 },
-  { x: 60, y: 100, r: -240, s: 22 },
-  { x: 120, y: 80, r: 180, s: 26 },
-  { x: 170, y: 40, r: -160, s: 18 },
-];
-
-// แสงโบเก้ไฟร้านอาหารด้านหลัง (ตำแหน่ง l/t เป็น %, ขนาด s px, สี c, ความสว่าง o, หน่วงแอนิเมชัน d วินาที)
-const BOKEH = [
-  { l: 2, t: 8, s: 190, c: "#ffb347", o: 0.55, d: 0 },
-  { l: 14, t: 38, s: 120, c: "#ff7a45", o: 0.45, d: -1.2 },
-  { l: 6, t: 68, s: 210, c: "#ffd27a", o: 0.4, d: -2.1 },
-  { l: 22, t: 6, s: 100, c: "#ffe0a0", o: 0.5, d: -0.6 },
-  { l: 30, t: 82, s: 160, c: "#ff5a5a", o: 0.35, d: -3 },
-  { l: 40, t: 2, s: 140, c: "#ffb347", o: 0.45, d: -1.8 },
-  { l: 48, t: 60, s: 90, c: "#ffd27a", o: 0.35, d: -2.6 },
-  { l: 56, t: 90, s: 200, c: "#ff7a45", o: 0.4, d: -0.3 },
-  { l: 62, t: 14, s: 170, c: "#ffe0a0", o: 0.4, d: -3.4 },
-  { l: 70, t: 46, s: 110, c: "#ff5a5a", o: 0.35, d: -1.5 },
-  { l: 78, t: 4, s: 130, c: "#ffd27a", o: 0.5, d: -2.4 },
-  { l: 84, t: 72, s: 220, c: "#ffb347", o: 0.45, d: -0.9 },
-  { l: 92, t: 28, s: 180, c: "#ff7a45", o: 0.45, d: -3.1 },
-  { l: 94, t: 88, s: 120, c: "#ffe0a0", o: 0.4, d: -1.9 },
-  { l: 36, t: 44, s: 80, c: "#ffd27a", o: 0.25, d: -2.8 },
-  { l: 66, t: 78, s: 90, c: "#ff5a5a", o: 0.3, d: -0.7 },
-];
-
-type PoolTicket = { code: string; empCode: string };
-type Winner = {
-  code: string;
-  empCode: string;
-  name: string;
-  wonAt: string | null;
-  company: string | null; // บริษัทที่เลือกตอนสมัคร (บัญชีเก่า = null)
-  department: string | null; // แผนก (สำนักงานใหญ่) หรือสาขา (หน้าร้าน)
-  userId: string | null; // ไอดีผู้ใช้ ใช้ดึงรูปโปรไฟล์จาก /api/avatar/[id]
-  avatarAt: string | null; // เวลาที่อัปโหลดรูปโปรไฟล์ (null = ไม่มีรูป)
+/* ---------- ตั้งค่า (แก้ตรงนี้) ---------- */
+const EVENT = {
+  name: "Payday Park",
+  tagline: "ความสนุกรอบใหม่ ทุกวันเงินออก",
+  pill: "ทุกวันเงินออก · 16:00–22:00",
+  date: "25 ธันวาคม 2569", // TODO: แก้วันงาน
+  place: "ลานกิจกรรม Payday Park", // TODO: แก้สถานที่
 };
-// เข้าด้วยรหัสผ่าน admin อย่างเดียว (ไม่ต้อง login บัญชีผู้ใช้) ใช้ cookie ปลดล็อกเดียวกับหน้า /admin
-type Gate = "loading" | "ok" | "locked";
 
-const fmt = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString("th-TH", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "-";
+// รูปการ์ดหน้าหลัก + พื้นหลังหน้าซื้อตั๋ว (ไฟล์ใน public/img/)
+const PAYCARD_IMG = "/img/paycard.jpg";
+const PAYCARD2_IMG = "/img/paycard2.jpg"; // พื้นหลังหน้าซื้อตั๋ว
 
-// รูปโปรไฟล์ผู้ถูกรางวัล: มีรูปแสดงรูป / ไม่มีหรือโหลดไม่ได้ แสดงตัวอักษรแรกของชื่อ
-// className = ขนาด + ขนาดตัวอักษร + ring
-function WinnerAvatar({ w, className }: { w: Winner; className: string }) {
+// สัดส่วนกรอบรูปตั๋ว = สัดส่วนรูปจริง (p1/p2 ประมาณ 715×349) ทุกใบใช้ค่าเดียวกัน จึงเท่ากัน
+// ถ้าเปลี่ยนรูปใหม่ ให้แก้เป็น aspect-[กว้าง/สูง] ของรูปนั้น
+const TICKET_IMG_ASPECT = "aspect-[715/349]";
+
+/* สีหลัก (ตามดีไซน์)
+   เขียว #14402c · ไลม์ #d9f27a · เหลือง #ffcf5c · พื้นหลัง #f1f7e9 · กล่องเขียวอ่อน #e3ecd6 · midnight blue #0f1b4d · แดงเลือดหมู #6b1d24 */
+
+type TicketId = "booth" | "lucky";
+
+type TicketDef = {
+  id: TicketId;
+  title: string;
+  sub: string; // ชื่ออังกฤษตัวเล็ก
+  homeNote: string; // ข้อความในการ์ดหน้าหลัก
+  homeImage?: string; // ถ้าใส่: หน้าหลัก/หน้าซื้อตั๋ว/หน้าตั๋วของฉัน แสดงรูปนี้เป็นส่วนบนของตั๋ว (ไฟล์ใน public/) ชื่อตั๋วจะอยู่เหนือกรอบ
+  blurb: string; // คำอธิบายในหน้าเลือกตั๋ว
+  price: number;
+  layout: "banner" | "compact"; // รูปแบบการ์ดในหน้า "ตั๋วของฉัน"
+  groupNote: string; // ข้อความในการ์ดหน้า "ตั๋วของฉัน"
+  meta?: string; // บรรทัดรายละเอียด (แบบ banner)
+  chips?: [string, string]; // ป้ายสถานะ (แบบ compact)
+  showLabel: string; // ข้อความปุ่ม "แสดงตั๋ว"
+  card: string; // สีการ์ด/ไอคอน (ใช้ในตั๋วที่แสดงให้เจ้าหน้าที่สแกน/สรุปรายการ)
+  fg: string; // สีตัวหนังสือบนการ์ด
+  dash: string; // สีเส้นประ
+  button: string; // สีปุ่ม
+  soft: string; // สีอ่อนของป้ายสถานะ
+  shimmer: string; // class พื้นตั๋ววิบวับตามสีตั๋ว (หน้าหลัก/หน้าซื้อตั๋ว/หน้าตั๋วของฉัน) ไม่มีกรอบ ไม่มีออร่า
+};
+
+const TICKETS: TicketDef[] = [
+  {
+    id: "booth",
+    title: "ตั๋วเข้าซุ้ม",
+    sub: "BOOTH PASS",
+    homeNote: "เล่นเกมให้เต็มที่",
+    homeImage: "/img/p1.png",
+    blurb: "1 ชุด = ตั๋วเล่นซุ้ม 2 ใบ (ใบละ ฿50) + ตั๋วรับตั๋วกระดาษ 1 ใบ", // TODO: แก้ให้ตรงสิทธิ์จริง
+    // ราคา 100 บาท / ชุด (ออกเป็น 3 ใบ: 50 + 50 + 0) ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES และ BOOTH_SET ใน lib/tickets.ts (ฝั่งเซิร์ฟเวอร์คิดเงินจากตัวนั้น)
+    price: 100,
+    layout: "banner",
+    groupNote: "เลือกซุ้มที่ชอบ แล้วไปเล่นกัน!",
+    meta: "1 ชุด = 3 ใบ • ใช้ได้เฉพาะวันงาน",
+    showLabel: "แสดงตั๋วเข้าซุ้ม",
+    card: "bg-[#0f1b4d]",
+    fg: "text-white",
+    dash: "border-white/30",
+    button: "bg-[#e50914] text-white",
+    soft: "bg-[#eef9c8]",
+    shimmer: "pd-shimmer-blue",
+  },
+  {
+    id: "lucky",
+    title: "Lucky Draw",
+    sub: "LUCKY DRAW TICKET",
+    homeNote: "ลุ้นรางวัลสุดเซอร์ไพรส์",
+    homeImage: "/img/p2.png",
+    blurb: "1 ใบ = 1 สิทธิ์สุ่มของรางวัล ภายในงาน", // TODO: แก้ให้ตรงสิทธิ์จริง
+    // ราคา 50 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
+    price: 50,
+    layout: "compact",
+    groupNote: "ลุ้นของรางวัล • 1 สิทธิ์",
+    chips: ["รอสุ่มภายในงาน", "ยังไม่ได้ใช้สิทธิ์"],
+    showLabel: "แสดงตั๋ว Lucky Draw",
+    card: "bg-[#6b1d24]",
+    fg: "text-white",
+    dash: "border-white/30",
+    button: "bg-[#6b1d24] text-white",
+    soft: "bg-[#f3d9dc]",
+    shimmer: "pd-shimmer-red",
+  },
+];
+
+type Order = {
+  code: string;
+  ticket: TicketId;
+  name: string;
+  phone: string;
+  price: number;
+  at: string;
+  used?: boolean;
+  usedAt?: string;
+  usedBoothName?: string; // ซุ้มที่ยิงตั๋วใบนี้ (จากเซิร์ฟเวอร์)
+  empCode?: string; // รหัสพนักงาน (ตั๋ว Lucky Draw)
+  won?: boolean; // ตั๋วใบนี้ถูกรางวัลแล้ว
+  wonAt?: string;
+  part?: "booth" | "paper"; // ตั๋วเข้าซุ้ม: booth = ตั๋วเล่นซุ้ม (฿50) / paper = ตั๋วรับตั๋วกระดาษ (ไม่มีมูลค่า)
+};
+
+type View = "home" | "buy" | "pay" | "qr" | "done" | "tickets" | "profile" | "auth";
+
+type Cart = Partial<Record<TicketId, number>>;
+
+// สถานะรายการโอนเงิน (ตรงกับ PaymentStatus ใน lib/tickets.ts)
+type PayStatus = "awaiting_slip" | "reviewing" | "approved" | "rejected" | "expired";
+
+// รายการโอนเงิน (มาจาก POST /api/orders, GET /api/orders และ GET /api/payments/[id])
+type Payment = {
+  id: string;
+  amount: number;
+  expiresAt: string;
+  ref: string;
+  status: PayStatus;
+  qrUrl?: string;
+  rejectReason?: string;
+  items?: { ticket: TicketId; qty: number }[]; // ตั๋วที่ซื้อในรายการนี้ (ประเภท + จำนวน)
+};
+
+// ผลจาก GET /api/payments/[id]
+type PayPoll = Payment & { orders?: Order[] };
+
+const MAX_QTY = 20; // จำนวนสูงสุดต่อตั๋ว 1 ประเภท ต่อการซื้อ 1 ครั้ง (กันกดพลาด)
+const CART_KEY = "payday-cart-v1";
+const SLIP_POLL_MS = 5000; // เช็กสถานะรายการโอนทุกกี่มิลลิวินาที
+const seenKey = (userId: string) => `payday-won-seen-v1-${userId}`; // รหัสตั๋วที่ถูกรางวัลและผู้ใช้เห็นแล้ว
+
+// ป้ายสถานะรายการโอนเงิน (ข้อความ + สี) ที่แสดงบนการ์ดในแท็บ "สถานะ"
+const PAY_BADGE: Record<PayStatus, { label: string; cls: string }> = {
+  awaiting_slip: { label: "รอส่งสลีป", cls: "bg-amber-100 text-amber-800" },
+  reviewing: { label: "รออนุมัติ", cls: "bg-sky-100 text-sky-800" },
+  rejected: { label: "ถูกปฏิเสธ", cls: "bg-red-100 text-red-700" },
+  approved: { label: "อนุมัติแล้ว", cls: "bg-green-100 text-green-800" },
+  expired: { label: "หมดเวลา", cls: "bg-gray-200 text-gray-600" },
+};
+
+/* ---------- helper ---------- */
+function load<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function save(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* ignore */
+  }
+}
+
+// เรียก API ของเว็บ: สำเร็จคืน {ok:true,data} / ล้มเหลวคืน {ok:false,error,status}
+async function api<T = Record<string, unknown>>(
+  url: string,
+  method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
+  body?: unknown,
+): Promise<{ ok: true; data: T } | { ok: false; error: string; status: number }> {
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error ?? "เกิดข้อผิดพลาด ลองใหม่อีกครั้ง", status: res.status };
+    return { ok: true, data: data as T };
+  } catch {
+    return { ok: false, error: "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง", status: 0 };
+  }
+}
+
+const baht = (n: number) => `฿${n.toLocaleString("th-TH")}`;
+
+const fmtTime = (iso?: string) =>
+  iso
+    ? new Date(iso).toLocaleString("th-TH", {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+
+const fmtCountdown = (secs: number) =>
+  `${String(Math.floor(secs / 60)).padStart(2, "0")}:${String(secs % 60).padStart(2, "0")}`;
+
+// ลำดับหน่วงของเอฟเฟคค่อย ๆ ขึ้น (ใช้คู่กับ class pd-rise)
+const stagger = (i: number) => ({ "--i": i }) as CSSProperties;
+
+/* ---------- ไอคอน ---------- */
+function Icon({ children, className = "h-6 w-6" }: { children: ReactNode; className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {children}
+    </svg>
+  );
+}
+
+type IconProps = { className?: string };
+
+const IconHome = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M3 11l9-8 9 8" />
+    <path d="M5 10v10h14V10" />
+  </Icon>
+);
+const IconTicket = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M3 9a2 2 0 0 0 0 6v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3a2 2 0 0 1 0-6V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1z" />
+    <path d="M13 5v2M13 11v2M13 17v2" />
+  </Icon>
+);
+const IconGift = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <rect x="3" y="8" width="18" height="4" rx="1" />
+    <path d="M5 12v8h14v-8M12 8v12" />
+    <path d="M12 8c-2.5 0-4-1-4-2.5S9.5 3 12 8zM12 8c2.5 0 4-1 4-2.5S14.5 3 12 8z" />
+  </Icon>
+);
+const IconUser = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21c0-4 4-6 8-6s8 2 8 6" />
+  </Icon>
+);
+const IconReceipt = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M6 3h12v18l-3-2-3 2-3-2-3 2z" />
+    <path d="M9 8h6M9 12h6" />
+  </Icon>
+);
+const IconBack = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M15 5l-7 7 7 7" />
+  </Icon>
+);
+const IconArrow = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M5 12h14M13 6l6 6-6 6" />
+  </Icon>
+);
+const IconPin = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M12 21s7-6.2 7-11a7 7 0 0 0-14 0c0 4.8 7 11 7 11z" />
+    <circle cx="12" cy="10" r="2.5" />
+  </Icon>
+);
+const IconShield = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z" />
+    <path d="M8.5 12l2.5 2.5L16 9.5" />
+  </Icon>
+);
+const IconInfo = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5M12 8h.01" />
+  </Icon>
+);
+const IconSpark = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M12 3c.6 4.8 2.2 6.4 7 7-4.8.6-6.4 2.2-7 7-.6-4.8-2.2-6.4-7-7 4.8-.6 6.4-2.2 7-7z" />
+    <path d="M19 16c.2 1.6.8 2.2 2 2.4-1.2.2-1.8.8-2 2.4-.2-1.6-.8-2.2-2-2.4 1.2-.2 1.8-.8 2-2.4z" />
+  </Icon>
+);
+const IconCheck = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M5 12.5l4.5 4.5L19 7.5" />
+  </Icon>
+);
+const IconPlus = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M12 5v14M5 12h14" />
+  </Icon>
+);
+const IconMinus = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M5 12h14" />
+  </Icon>
+);
+const IconTrash = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M4 7h16" />
+    <path d="M10 11v6M14 11v6" />
+    <path d="M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12" />
+    <path d="M9 7V4h6v3" />
+  </Icon>
+);
+const IconCamera = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+    <circle cx="12" cy="13" r="3.5" />
+  </Icon>
+);
+
+const iconOf = (id: TicketId, className?: string) =>
+  id === "booth" ? <IconTicket className={className} /> : <IconGift className={className} />;
+
+// รูปโปรไฟล์วงกลม: มีรูป (user.avatarAt) แสดงรูปจาก /api/avatar/[id] / ไม่มีหรือโหลดไม่ได้ แสดงตัวอักษรย่อ
+// className = ขนาด + ขนาดตัวอักษร (เช่น "h-8 w-8 text-sm") / fallbackCls = สีพื้นและตัวอักษรของวงกลมตัวอักษรย่อ
+function Avatar({
+  user,
+  className = "h-10 w-10 text-base",
+  fallbackCls = "bg-[#e50914] text-white",
+}: {
+  user: User;
+  className?: string;
+  fallbackCls?: string;
+}) {
   const [failed, setFailed] = useState(false);
-  const src = w.userId && w.avatarAt ? `/api/avatar/${w.userId}?v=${encodeURIComponent(w.avatarAt)}` : "";
+  const src = user.avatarAt ? `/api/avatar/${user.id}?v=${encodeURIComponent(user.avatarAt)}` : "";
 
   useEffect(() => {
     setFailed(false);
@@ -116,2130 +356,2941 @@ function WinnerAvatar({ w, className }: { w: Winner; className: string }) {
         alt=""
         aria-hidden
         onError={() => setFailed(true)}
-        className={`block flex-none rounded-full bg-[#2a2a2a] object-cover ${className}`}
+        className={`block shrink-0 rounded-full bg-[#2a2a2a] object-cover ${className}`}
       />
     );
   }
+  const letter = Array.from((user.name || user.username).trim())[0] ?? "?";
   return (
     <span
       aria-hidden
-      className={`flex flex-none items-center justify-center rounded-full bg-[#e50914] font-bold uppercase text-white [text-shadow:none] ${className}`}
+      className={`flex shrink-0 items-center justify-center rounded-full font-bold uppercase ${className} ${fallbackCls}`}
     >
-      {Array.from(w.name.trim())[0] ?? "?"}
+      {letter}
     </span>
   );
 }
 
-// โลโก้แปะเป็นเทปที่มุม (className = ตำแหน่ง/การหมุน)
-function LogoTape({ className, imgClassName }: { className: string; imgClassName: string }) {
+/* ---------- ปรับรูปโปรไฟล์ก่อนบันทึก ----------
+   เลือกรูปแล้วเปิดหน้าต่างนี้: ลากรูปเพื่อขยับ / เลื่อนแถบหรือหมุนล้อเมาส์เพื่อซูม / กด "บันทึก"
+   จึงตัดตามกรอบวงกลมเป็นรูปจัตุรัส 512×512 แล้วส่งไปอัปโหลด */
+const AVATAR_FRAME = 280; // ขนาดกรอบวงกลมบนจอ (px)
+const AVATAR_OUT = 512; // ขนาดรูปที่บันทึกจริง (px)
+const AVATAR_MAX_ZOOM = 4;
+
+function AvatarCropper({
+  file,
+  busy,
+  error,
+  onCancel,
+  onSave,
+}: {
+  file: File;
+  busy: boolean;
+  error: string;
+  onCancel: () => void;
+  onSave: (f: File) => void;
+}) {
+  const [src, setSrc] = useState("");
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [loadErr, setLoadErr] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [off, setOff] = useState({ x: 0, y: 0 }); // ระยะที่รูปเลื่อนจากกึ่งกลางกรอบ
+  const drag = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    setSrc(url);
+    setImg(null);
+    setLoadErr(false);
+    setZoom(1);
+    setOff({ x: 0, y: 0 });
+    const im = new Image();
+    im.onload = () => setImg(im);
+    im.onerror = () => setLoadErr(true);
+    im.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  // กด Esc ปิด (ระหว่างบันทึกไม่ปิด)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
+
+  const F = AVATAR_FRAME;
+  const base = img ? F / Math.min(img.naturalWidth, img.naturalHeight) : 1; // ขนาดพอดีเต็มกรอบ (cover)
+  const dw = img ? img.naturalWidth * base * zoom : 0;
+  const dh = img ? img.naturalHeight * base * zoom : 0;
+
+  // รูปต้องคลุมกรอบเต็มเสมอ ไม่ให้เห็นขอบว่าง
+  const clamp = (x: number, y: number, w: number, h: number) => ({
+    x: Math.max(-(w - F) / 2, Math.min((w - F) / 2, x)),
+    y: Math.max(-(h - F) / 2, Math.min((h - F) / 2, y)),
+  });
+
+  const changeZoom = (z: number) => {
+    if (!img) return;
+    const nz = Math.max(1, Math.min(AVATAR_MAX_ZOOM, z));
+    setZoom(nz);
+    setOff((o) => clamp(o.x, o.y, img.naturalWidth * base * nz, img.naturalHeight * base * nz));
+  };
+
+  const move = (dx: number, dy: number) => setOff((o) => clamp(o.x + dx, o.y + dy, dw, dh));
+
+  const save = () => {
+    if (!img || busy) return;
+    const k = AVATAR_OUT / F;
+    const canvas = document.createElement("canvas");
+    canvas.width = AVATAR_OUT;
+    canvas.height = AVATAR_OUT;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, AVATAR_OUT, AVATAR_OUT);
+    ctx.drawImage(img, (F / 2 + off.x - dw / 2) * k, (F / 2 + off.y - dh / 2) * k, dw * k, dh * k);
+    canvas.toBlob(
+      (b) => {
+        if (b) onSave(new File([b], `avatar-${Date.now()}.jpg`, { type: "image/jpeg" }));
+      },
+      "image/jpeg",
+      0.9,
+    );
+  };
+
   return (
-    <div aria-hidden className={`pd-tape pointer-events-none absolute z-20 ${className}`}>
-      <div className="pd-tape-in">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={LOGO_SRC} alt="" draggable={false} className={`block w-auto object-contain ${imgClassName}`} />
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="avatar-crop-title"
+      className="pd-fade fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+    >
+      <div className="pd-dialog w-full max-w-sm rounded-3xl bg-[#1f1f1f] p-6 text-center text-white">
+        <h2 id="avatar-crop-title" className="text-lg font-bold">
+          ปรับรูปโปรไฟล์
+        </h2>
+        <p className="mt-1 text-xs text-white/60">ลากรูปเพื่อขยับ เลื่อนแถบเพื่อซูม แล้วกดบันทึก</p>
+
+        <div
+          tabIndex={0}
+          role="img"
+          aria-label="กรอบปรับรูปโปรไฟล์ ใช้ปุ่มลูกศรเพื่อขยับรูป"
+          style={{ width: F, height: F, touchAction: "none" }}
+          className="relative mx-auto mt-5 cursor-grab select-none overflow-hidden rounded-full bg-[#2a2a2a] ring-4 ring-white/20 active:cursor-grabbing"
+          onPointerDown={(e) => {
+            if (!img || busy) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            drag.current = { px: e.clientX, py: e.clientY, ox: off.x, oy: off.y };
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current;
+            if (!d) return;
+            setOff(clamp(d.ox + (e.clientX - d.px), d.oy + (e.clientY - d.py), dw, dh));
+          }}
+          onPointerUp={() => {
+            drag.current = null;
+          }}
+          onPointerCancel={() => {
+            drag.current = null;
+          }}
+          onWheel={(e) => changeZoom(zoom - e.deltaY * 0.002)}
+          onKeyDown={(e) => {
+            const step = 10;
+            if (e.key === "ArrowLeft") move(step, 0);
+            else if (e.key === "ArrowRight") move(-step, 0);
+            else if (e.key === "ArrowUp") move(0, step);
+            else if (e.key === "ArrowDown") move(0, -step);
+            else return;
+            e.preventDefault();
+          }}
+        >
+          {img && src && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={src}
+              alt=""
+              draggable={false}
+              style={{
+                width: dw,
+                height: dh,
+                left: F / 2 + off.x - dw / 2,
+                top: F / 2 + off.y - dh / 2,
+              }}
+              className="pointer-events-none absolute max-w-none select-none"
+            />
+          )}
+          {!img && !loadErr && (
+            <span className="absolute inset-0 flex items-center justify-center text-sm text-white/60">
+              กำลังโหลดรูป...
+            </span>
+          )}
+          {loadErr && (
+            <span className="absolute inset-0 flex items-center justify-center px-6 text-sm text-red-400">
+              เปิดรูปนี้ไม่ได้ เลือกรูปอื่น
+            </span>
+          )}
+        </div>
+
+        <div className="mx-auto mt-5 flex items-center gap-3" style={{ maxWidth: F }}>
+          <IconMinus className="h-4 w-4 shrink-0 text-white/60" />
+          <input
+            type="range"
+            min={1}
+            max={AVATAR_MAX_ZOOM}
+            step={0.01}
+            value={zoom}
+            onChange={(e) => changeZoom(Number(e.target.value))}
+            disabled={!img || busy}
+            aria-label="ซูมรูป"
+            className="h-2 w-full cursor-pointer accent-[#e50914] disabled:opacity-50"
+          />
+          <IconPlus className="h-4 w-4 shrink-0 text-white/60" />
+        </div>
+
+        {error && (
+          <p role="alert" className="mt-3 text-sm font-medium text-red-500">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-5 flex gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="flex-1 rounded-2xl border border-white/40 py-3 text-sm font-semibold transition active:scale-[0.98] disabled:opacity-60"
+          >
+            ยกเลิก
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={!img || busy}
+            className="flex-1 rounded-2xl bg-[#e50914] py-3 text-sm font-bold text-white transition active:scale-[0.98] disabled:opacity-60"
+          >
+            {busy ? "กำลังบันทึก..." : "บันทึก"}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-// ค่าสุ่มคงที่ต่อรหัสตั๋ว (ตั๋วแต่ละใบอยู่ตำแหน่งเดิมทุกครั้งที่วาดใหม่)
-function hash(s: string) {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-const r01 = (s: string, k: number) => (hash(`${s}:${k}`) % 1000) / 1000;
-
-function ticketStyle(code: string) {
-  return {
-    left: 3 + r01(code, 1) * 80,
-    bottom: r01(code, 2) * 48,
-    rot: -45 + r01(code, 3) * 90,
-    delay: r01(code, 4) * 1.6,
-    dur: 0.9 + r01(code, 5) * 0.7,
-  };
-}
-
-/* ---------- เสียงจากไฟล์ของผู้ใช้ (public/sound) ---------- */
-const SPIN_SRC = "/sound/spin.mp3"; // เสียงตอนสุ่ม (วนลูปจนเลขหลักสุดท้ายหยุด)
-const NUMBER_SRC = "/sound/number.mp3"; // เสียงตอนเลขหยุดทีละหลัก
-const VICTORY_SRC = "/sound/victory.mp3"; // เสียงตอนสุ่มครบทุกหลักแล้ว (ประกาศผู้ถูกรางวัล)
-
-let spinAudio: HTMLAudioElement | null = null;
-function prepareSpin() {
-  if (typeof window === "undefined") return;
-  if (!spinAudio) {
-    spinAudio = new Audio(SPIN_SRC);
-    spinAudio.loop = true;
-    spinAudio.preload = "auto";
-  }
-}
-function playSpin() {
-  prepareSpin();
-  if (!spinAudio) return;
+// บาร์โค้ด Code128 จริง (เจ้าหน้าที่ยิงด้วยกล้องที่หน้า /ticket ได้) วาดเป็น SVG สีตามตัวหนังสือของตั๋ว
+// มีพื้นที่ว่างซ้ายขวาในตัว ต้องวางบนพื้นสีอ่อน (ตั๋วใช้พื้นขาว)
+function Barcode({ code, className = "block h-16 w-full" }: { code: string; className?: string }) {
+  let data: ReturnType<typeof code128Bars>;
   try {
-    spinAudio.currentTime = 0;
+    data = code128Bars(code);
   } catch {
-    /* ยังโหลดไม่เสร็จ เล่นจากต้นอยู่แล้ว */
+    return null;
   }
-  void spinAudio.play().catch(() => {});
-}
-function stopSpin() {
-  if (!spinAudio) return;
-  spinAudio.pause();
-  try {
-    spinAudio.currentTime = 0;
-  } catch {
-    /* ไม่เป็นไร */
-  }
-}
-function playNumber() {
-  if (typeof window === "undefined") return;
-  const a = new Audio(NUMBER_SRC); // สร้างใหม่ทุกครั้ง เสียงซ้อนกันได้ถ้าเลขหยุดถี่
-  void a.play().catch(() => {});
+  return (
+    <svg
+      viewBox={`0 0 ${data.total} 1`}
+      preserveAspectRatio="none"
+      shapeRendering="crispEdges"
+      role="img"
+      aria-label={`บาร์โค้ด ${code}`}
+      className={className}
+    >
+      {data.bars.map((b, i) => (
+        <rect key={i} x={b.x} y={0} width={b.w} height={1} fill="currentColor" />
+      ))}
+    </svg>
+  );
 }
 
-let victoryAudio: HTMLAudioElement | null = null;
-function prepareVictory() {
-  if (typeof window === "undefined") return;
-  if (!victoryAudio) {
-    victoryAudio = new Audio(VICTORY_SRC);
-    victoryAudio.preload = "auto";
-  }
-}
-function playVictory() {
-  prepareVictory();
-  if (!victoryAudio) return;
-  try {
-    victoryAudio.currentTime = 0;
-  } catch {
-    /* ยังโหลดไม่เสร็จ เล่นจากต้นอยู่แล้ว */
-  }
-  void victoryAudio.play().catch(() => {});
-}
-function stopVictory() {
-  if (!victoryAudio) return;
-  victoryAudio.pause();
-  try {
-    victoryAudio.currentTime = 0;
-  } catch {
-    /* ไม่เป็นไร */
-  }
-}
-
-/* ---------- เอฟเฟคเสียงสังเคราะห์ (WebAudio ไม่ต้องใช้ไฟล์เสียง) ---------- */
-let audioCtx: AudioContext | null = null;
-function ac(): AudioContext | null {
-  if (typeof window === "undefined") return null;
-  if (!audioCtx) {
-    const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AC) return null;
-    try {
-      audioCtx = new AC();
-    } catch {
-      return null;
-    }
-  }
-  if (audioCtx.state === "suspended") void audioCtx.resume().catch(() => {});
-  return audioCtx;
-}
-
-function tone(freq: number, dur: number, o: { type?: OscillatorType; vol?: number; at?: number; to?: number } = {}) {
-  const c = ac();
-  if (!c) return;
-  const t = c.currentTime + (o.at ?? 0);
-  const osc = c.createOscillator();
-  const g = c.createGain();
-  osc.type = o.type ?? "sine";
-  osc.frequency.setValueAtTime(freq, t);
-  if (o.to) osc.frequency.exponentialRampToValueAtTime(o.to, t + dur);
-  g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(o.vol ?? 0.2, t + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  osc.connect(g);
-  g.connect(c.destination);
-  osc.start(t);
-  osc.stop(t + dur + 0.02);
-}
-
-function noise(dur: number, o: { vol?: number; at?: number; freq?: number; sweepTo?: number } = {}) {
-  const c = ac();
-  if (!c) return;
-  const t = c.currentTime + (o.at ?? 0);
-  const len = Math.max(1, Math.floor(c.sampleRate * dur));
-  const buf = c.createBuffer(1, len, c.sampleRate);
-  const d = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-  const src = c.createBufferSource();
-  src.buffer = buf;
-  const f = c.createBiquadFilter();
-  f.type = "bandpass";
-  f.Q.value = 0.8;
-  f.frequency.setValueAtTime(o.freq ?? 2000, t);
-  if (o.sweepTo) f.frequency.exponentialRampToValueAtTime(o.sweepTo, t + dur);
-  const g = c.createGain();
-  g.gain.setValueAtTime(o.vol ?? 0.2, t);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  src.connect(f);
-  f.connect(g);
-  g.connect(c.destination);
-  src.start(t);
-  src.stop(t + dur + 0.02);
-}
-
-const sfx = {
-  // ค้อนเหวี่ยง
-  swing() {
-    noise(0.38, { vol: 0.16, freq: 400, sweepTo: 3200 });
-  },
-  // ค้อนกระทบปุ่ม ปุ่มแตก
-  hit() {
-    tone(180, 0.38, { type: "sine", vol: 0.55, to: 35 });
-    noise(0.28, { vol: 0.5, freq: 1800, sweepTo: 600 });
-    tone(950, 0.14, { type: "square", vol: 0.12, to: 200 });
-    noise(0.5, { vol: 0.14, at: 0.08, freq: 5200 }); // เสียงเศษกระจาย
-  },
-  // การ์ดเลื่อนลอยไปรายชื่อ
-  whoosh() {
-    noise(0.6, { vol: 0.14, freq: 2500, sweepTo: 300 });
-  },
-  // ไฟรั่ว: level ยิ่งสูงยิ่งดัง (หลักท้าย ๆ แรงกว่าหลักแรก)
-  zap(level: number) {
-    noise(0.22, { vol: 0.08 + level * 0.025, freq: 6500, sweepTo: 900 });
-    tone(140 + level * 30, 0.18, { type: "sawtooth", vol: 0.05 + level * 0.015, to: 60 });
-  },
-  // แถวเด้งเข้ารายชื่อ
-  pop() {
-    tone(300, 0.18, { type: "sine", vol: 0.3, to: 700 });
-    tone(880, 0.14, { type: "triangle", vol: 0.16, at: 0.12 });
-  },
+/* ---------- กรอบตั๋วแบบมีรอยประ ----------
+   แบ่งเป็น 2 ท่อน (ส่วนบน / ส่วนล่าง) คั่นด้วยเส้นประ
+   รอยบากครึ่งวงกลมสองข้างเจาะด้วย mask จึงโปร่งใสจริง เห็นสีพื้นหลังทะลุ */
+const NOTCH = 11;
+const notchMask = (y: "0" | "100%") => {
+  const m =
+    `radial-gradient(circle ${NOTCH}px at 0 ${y},#0000 98%,#000) left/51% 100% no-repeat,` +
+    `radial-gradient(circle ${NOTCH}px at 100% ${y},#0000 98%,#000) right/51% 100% no-repeat`;
+  return { WebkitMask: m, mask: m };
 };
 
-export default function SpinPage() {
-  const [gate, setGate] = useState<Gate>("loading");
-  const [note, setNote] = useState("");
-  const [pw, setPw] = useState("");
-  const [pwErr, setPwErr] = useState("");
-  const [pwBusy, setPwBusy] = useState(false);
-  const [pool, setPool] = useState<PoolTicket[]>([]);
-  const [total, setTotal] = useState(0);
-  const [winners, setWinners] = useState<Winner[]>([]);
-  const [digits, setDigits] = useState<string[]>(Array(EMP_LEN).fill("-"));
-  const [stopped, setStopped] = useState<boolean[]>(Array(EMP_LEN).fill(false));
-  const [spinning, setSpinning] = useState(false);
-  const [winner, setWinner] = useState<Winner | null>(null);
-  const [goldFlash, setGoldFlash] = useState(false);
-  const [hiddenCodes, setHiddenCodes] = useState<string[]>([]); // แถวผู้ถูกรางวัลที่ซ่อนไว้ รอการ์ดลอยมาถึง
-  const [popCodes, setPopCodes] = useState<string[]>([]); // แถวที่เพิ่งโผล่ (เด้งเข้ารายชื่อ)
-  const [shake, setShake] = useState(false); // จอสั่นตอนผลออก
-  const [winnerClosing, setWinnerClosing] = useState(false); // กำลังเล่นแอนิเมชันเลื่อนการ์ดผู้ถูกรางวัลลง
-  const [hammer, setHammer] = useState(false);
-  const [quake, setQuake] = useState(false);
-  const [zoom, setZoom] = useState(false); // ซูมเข้าหาตัวเลขตอนสุ่ม
-  const [zoomT, setZoomT] = useState({ x: 0, y: 0, ox: 50, oy: 36 }); // ตำแหน่งเลื่อนตัวเลขเข้ากลางจอ + จุดซูม
-  const [batch, setBatch] = useState(1); // สุ่มทีเดียวกี่คน (ตั้งค่าที่ปุ่มเฟืองข้างปุ่มเริ่มสุ่ม)
-  const [showSettings, setShowSettings] = useState(false);
-  const [batchWin, setBatchWin] = useState<Winner[]>([]); // ผู้ถูกรางวัลรอบล่าสุด (หลายคนถ้าตั้งค่าไว้)
-  const [heat, setHeat] = useState(0); // ระดับความแรงของเครื่องตอนสุ่ม 0–7 (ยิ่งหลักหลัง ยิ่งสั่นแรง + ไฟรั่วเยอะ)
-  const [kick, setKick] = useState(0); // นับครั้งที่เครื่องสะดุ้ง (สลับ class เพื่อเริ่มแอนิเมชันใหม่ทุกครั้ง)
-  const [zapOn, setZapOn] = useState(false); // ไฟรั่วโชว์แวบเดียวตามจังหวะสั่น
-  const zapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const fxRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+function Perforated({
+  top,
+  bottom,
+  className = "",
+  bg = "bg-white",
+  dash = "border-[#bfd0ab]",
+  text = "text-neutral-900",
+}: {
+  top: ReactNode;
+  bottom: ReactNode;
+  className?: string;
+  bg?: string; // สีพื้นตั๋ว
+  dash?: string; // สีเส้นประ
+  text?: string; // สีตัวหนังสือ
+}) {
+  return (
+    <div className={`${text} drop-shadow-[0_2px_6px_rgba(20,64,44,0.14)] ${className}`}>
+      <div style={notchMask("100%")} className={`overflow-hidden rounded-t-3xl ${bg}`}>
+        {top}
+      </div>
+      <div
+        style={notchMask("0")}
+        className={`overflow-hidden rounded-b-3xl border-t-2 border-dashed ${dash} ${bg}`}
+      >
+        {bottom}
+      </div>
+    </div>
+  );
+}
 
-  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const winRef = useRef<HTMLDivElement>(null); // หน้าต่างตัวเลข
-  const rowRef = useRef<HTMLDivElement>(null); // กล่องตู้ทั้งตัว (ใช้คำนวณซูม)
-  const fwRaf = useRef(0);
-  const winnerCardRef = useRef<HTMLElement>(null); // การ์ดทองลอยประกาศผู้ถูกรางวัล
-  const winnerListRef = useRef<HTMLElement>(null); // กล่องรายชื่อผู้ถูกรางวัล (จุดที่การ์ดลอยเข้าไป)
-  const confettiRef = useRef<HTMLCanvasElement>(null); // แคนวาสกระดาษทอง (แยกจากพลุ จะได้ไม่มีรอยหาง)
-  const cfRaf = useRef(0);
-  const fwActive = useRef(false); // true = พลุยิงต่อเรื่อย ๆ จนกว่าจะปิดการ์ดผู้ถูกรางวัล
+/* ---------- รูปตั๋ว: กรอบสัดส่วนเดียวกับรูปจริง ทุกใบเท่ากัน ไม่ครอป ---------- */
+function TicketImage({ src, alt }: { src: string; alt: string }) {
+  return (
+    <div className={`flex w-full items-center justify-center ${TICKET_IMG_ASPECT}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={alt} className="block h-full w-full object-contain" />
+    </div>
+  );
+}
 
-  // รีเฟรชสด: ไม่เขียนทับตอนกำลังสุ่ม และทิ้งผลที่ขอไว้ก่อนเริ่ม/จบการสุ่ม (กันตั๋วที่ถูกตัดแล้วกลับมาในโหล)
-  const spinningRef = useRef(false);
-  const seqRef = useRef(0);
-  // ตั๋วที่อยู่ในโหลตอนเปิดหน้า: หล่นตามจังหวะสุ่ม / ตั๋วที่เพิ่งเข้ามาทีหลังหล่นทันที
-  const initialRef = useRef<Set<string> | null>(null);
+// ตำแหน่งประกายบนกรอบทอง (ตั๋วที่ถูกรางวัล)
+const SPARKLES: { top: string; left: string; size: string; delay: string }[] = [
+  { top: "2%", left: "6%", size: "h-4 w-4", delay: "0s" },
+  { top: "6%", left: "48%", size: "h-3 w-3", delay: "0.5s" },
+  { top: "3%", left: "90%", size: "h-5 w-5", delay: "1.1s" },
+  { top: "48%", left: "1%", size: "h-3 w-3", delay: "0.8s" },
+  { top: "52%", left: "95%", size: "h-4 w-4", delay: "0.3s" },
+  { top: "92%", left: "10%", size: "h-5 w-5", delay: "1.4s" },
+  { top: "94%", left: "52%", size: "h-3 w-3", delay: "0.2s" },
+  { top: "90%", left: "88%", size: "h-4 w-4", delay: "0.9s" },
+];
 
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch("/api/spin", { cache: "no-store" });
-      // ยังไม่กรอกรหัส admin (หรือหมดอายุ 12 ชั่วโมง) → หน้ากรอกรหัส
-      if (res.status === 401 || res.status === 403) return setGate("locked");
-      if (!res.ok) return setNote("โหลดข้อมูลไม่ได้ ลองใหม่อีกครั้ง");
-      const data = (await res.json()) as { total: number; pool: PoolTicket[]; winners: Winner[] };
-      setGate("ok");
-      setNote("");
-      if (initialRef.current === null) initialRef.current = new Set(data.pool.map((p) => p.code));
-      setPool(data.pool);
-      setTotal(data.total);
-      setWinners(data.winners);
-    } catch {
-      setNote("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
-    }
-  }, []);
+/* ---------- กรอบทอง + ออร่า + ประกาย (ตั๋วที่ถูกรางวัล ในหน้า "ตั๋วของฉัน") ---------- */
+function GoldFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="pd-gold-frame relative rounded-[2rem] p-1.5">
+      <div aria-hidden className="pointer-events-none absolute inset-0 z-10 overflow-hidden rounded-[2rem]">
+        {SPARKLES.map((s, i) => (
+          <IconSpark key={i} className={`pd-twinkle absolute text-white ${s.size}`} />
+        ))}
+      </div>
+      {children}
+    </div>
+  );
+}
 
-  const refresh = useCallback(async () => {
-    if (spinningRef.current) return;
-    const seq = seqRef.current;
-    try {
-      const res = await fetch("/api/spin", { cache: "no-store" });
-      if (res.status === 401 || res.status === 403) {
-        if (!spinningRef.current) setGate("locked"); // cookie หมดอายุระหว่างเปิดหน้า
+/* ---------- ตั๋ว 1 ใบ (ใช้ในหน้าซื้อสำเร็จ และตอนแสดงตั๋ว) ----------
+   scanned = ตั๋วใบนี้ถูกเจ้าหน้าที่สแกนแล้ว: ตั๋วเป็นสีเทา + ตราประทับเฉียงทับตั๋วค้างไว้ถาวร (ไม่เฟดหาย) ผู้ใช้จะรู้ว่าใบไหนใช้แล้ว ใบไหนยังไม่ใช้
+     ตั๋วเล่นซุ้มที่มีมูลค่า ขึ้นว่า "ใช้แล้ว" / ตั๋วที่ไม่มีมูลค่า (รับตั๋วกระดาษ) และ Lucky Draw ขึ้นว่า "รับแล้ว"
+   calm = โหมดเบา (หน้าต่างแสดงตั๋ว): ตั๋วถูกรางวัลเป็นกรอบทองนิ่ง ไม่มีประกาย/ออร่า/แอนิเมชัน กันเครื่องค้างเมื่อถูกรางวัลหลายใบ
+   onBarcode = (ตั๋วเข้าซุ้มในหน้าต่างแสดงตั๋ว) ยังไม่แสดงบาร์โค้ด ต้องแตะที่ตั๋วอีกครั้งเพื่อเปิดบาร์โค้ดเต็มจอ
+   ตั๋วเล่นซุ้ม (มีมูลค่า ฿50) = พื้นขาว หัวสีกรมท่า ป้ายราคาสีไลม์ / ตั๋วรับตั๋วกระดาษ (ไม่มีมูลค่า) = พื้นครีม หัวสีส้มน้ำตาล เส้นประสีส้ม ไอคอนใบเสร็จ */
+const TicketPass = memo(function TicketPass({
+  def,
+  order,
+  scanned = false,
+  calm = false,
+  fresh = false,
+  onBarcode,
+}: {
+  def: TicketDef;
+  order: Order;
+  scanned?: boolean;
+  calm?: boolean;
+  fresh?: boolean; // เพิ่งถูกยิงเมื่อกี้: ตราประทับรอให้หน้าบาร์โค้ดปิดก่อนค่อยเด้งขึ้น
+  onBarcode?: (code: string) => void;
+}) {
+  const isPaper = def.id === "booth" && order.part === "paper";
+  const isValue = def.id === "booth" && !isPaper;
+  const heading = isPaper ? "ตั๋วรับตั๋วกระดาษ" : isValue ? "ตั๋วเล่นซุ้ม" : def.title;
+  const subHeading = isPaper ? "PAPER TICKET · ไม่มีมูลค่า" : isValue ? "BOOTH PLAY TICKET" : def.sub;
+  const tapBarcode = !!onBarcode && def.id === "booth" && !scanned && !order.used;
+  const usedWord = isValue ? "ใช้แล้ว" : "รับแล้ว"; // ตั๋วมีมูลค่า = ใช้แล้ว / ตั๋วไม่มีมูลค่า = รับแล้ว
+  const usedAtLabel = isValue ? "ใช้ที่" : "รับที่";
+
+  const pass = (
+    <Perforated
+      bg={isPaper ? "bg-[#fff1c2]" : "bg-white"}
+      dash={isPaper ? "border-[#b45309]" : undefined}
+      top={
+        <div className="p-2">
+          <div
+            className={`flex items-center justify-between rounded-2xl px-4 py-3 ${
+              isPaper ? "bg-[#b45309] text-white" : `${def.card} ${def.fg}`
+            }`}
+          >
+            <div>
+              <p className="text-[10px] font-bold tracking-widest">{subHeading}</p>
+              <p className="text-lg font-extrabold leading-tight">{heading}</p>
+            </div>
+            {isValue ? (
+              <span className="rounded-full bg-[#d9f27a] px-3 py-1 text-xl font-extrabold text-[#14402c]">
+                {baht(order.price)}
+              </span>
+            ) : isPaper ? (
+              <IconReceipt className="h-8 w-8" />
+            ) : (
+              iconOf(def.id, "h-8 w-8")
+            )}
+          </div>
+          <div className="px-3 pb-3 pt-3">
+            <p className="text-[10px] font-bold tracking-widest text-[#2f8f5b]">
+              {EVENT.name.toUpperCase()} · {EVENT.date}
+            </p>
+            <p className="mt-1 text-sm font-semibold">
+              {order.name} · {order.phone}
+            </p>
+            {def.id === "booth" && (
+              <p className="mt-1 text-xs font-semibold text-neutral-600">
+                {isPaper ? "ไม่มีมูลค่า · ให้เจ้าหน้าที่สแกนเพื่อรับตั๋วกระดาษ" : `มูลค่า ${baht(order.price)} · ใช้เล่นซุ้ม`}
+              </p>
+            )}
+            {order.empCode && (
+              <p className="mt-1 text-xs font-semibold text-neutral-600">
+                รหัสพนักงาน <span className="font-mono font-bold text-neutral-900">{order.empCode}</span>
+              </p>
+            )}
+          </div>
+        </div>
+      }
+      bottom={
+        def.id === "lucky" ? (
+          // ตั๋ว Lucky Draw ไม่ใช้บาร์โค้ด: แสดงข้อความ + รหัสตั๋วเท่านั้น
+          <div className="px-5 pb-5 pt-4 text-center">
+            <p className="text-base font-extrabold tracking-wide">ตั๋วสุ่มรางวัล</p>
+            <p className="mt-2 break-all font-mono text-xs font-bold tracking-wider">{order.code}</p>
+          </div>
+        ) : scanned || order.used ? (
+          // ตั๋วที่สแกนแล้ว ไม่แสดงบาร์โค้ดอีก (กันยิงซ้ำ) แสดงแค่สถานะ + รหัส
+          <div className="px-5 pb-5 pt-4 text-center">
+            <p className="text-base font-extrabold tracking-wide">{usedWord}</p>
+            {order.usedBoothName && (
+              <p className="mt-1 text-sm font-bold">
+                {usedAtLabel} {order.usedBoothName}
+              </p>
+            )}
+            <p className="mt-2 break-all font-mono text-xs font-bold tracking-wider">{order.code}</p>
+          </div>
+        ) : tapBarcode ? (
+          // ยังไม่โชว์บาร์โค้ด: แตะอีกครั้งเพื่อเปิดบาร์โค้ดเต็มจอแนวนอน (กันผู้ยิงตั๋วยิงผิดใบ)
+          <button
+            type="button"
+            onClick={() => onBarcode?.(order.code)}
+            aria-label={`แตะเพื่อแสดงบาร์โค้ด ${heading}`}
+            className="block w-full px-5 pb-5 pt-4 text-center transition active:scale-[0.98]"
+          >
+            <p className="text-base font-extrabold tracking-wide">
+              {isPaper ? "แตะเพื่อแสดงบาร์โค้ด (รับตั๋วกระดาษ)" : `แตะเพื่อแสดงบาร์โค้ด (${baht(order.price)})`}
+            </p>
+            <p className="mt-2 break-all font-mono text-xs font-bold tracking-wider">{order.code}</p>
+          </button>
+        ) : (
+          <div className="px-2 pb-5 pt-4">
+            <Barcode code={order.code} />
+            <p className="mt-2 break-all text-center font-mono text-xs font-bold tracking-wider">{order.code}</p>
+          </div>
+        )
+      }
+    />
+  );
+
+  // ตั๋วถูกรางวัล: กรอบสีทอง (โหมดเบา = ทองนิ่ง ไม่มีประกาย/ออร่า)
+  const shown = order.won ? (
+    calm ? (
+      <div className="pd-gold-static relative rounded-[2rem] p-2">
+        <p className="pb-2 text-center text-sm font-extrabold tracking-wide text-[#5a3b00]">
+          ตั๋วใบนี้ถูกรางวัล! ยินดีด้วย
+        </p>
+        {pass}
+      </div>
+    ) : (
+      <div className="pd-gold-frame relative rounded-[2rem] p-2">
+        <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden rounded-[2rem]">
+          {SPARKLES.map((s, i) => (
+            <IconSpark key={i} className={`pd-twinkle absolute text-white ${s.size}`} />
+          ))}
+        </div>
+        <p className="pb-2 text-center text-sm font-extrabold tracking-wide text-[#5a3b00]">
+          ตั๋วใบนี้ถูกรางวัล! ยินดีด้วย
+        </p>
+        {pass}
+      </div>
+    )
+  ) : (
+    pass
+  );
+
+  if (!scanned) return shown;
+
+  // ตั๋วถูกสแกนแล้ว: ตัวตั๋วเป็นสีเทา + ตราประทับเฉียงทับตั๋วค้างไว้ถาวร พร้อมเวลาที่ใช้
+  return (
+    <div className="relative">
+      <div className="pd-scanned">{shown}</div>
+      <div aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-2">
+          <span style={fresh ? { animationDelay: "0.45s" } : undefined} className="pd-stamp rounded-2xl border-4 border-red-500 bg-black/40 px-6 py-2 text-4xl font-extrabold tracking-widest text-red-500 shadow-[0_4px_20px_rgba(0,0,0,0.5)]">
+            {usedWord}
+          </span>
+          {order.usedBoothName && (
+            <span className="rounded-full bg-black/70 px-4 py-1.5 text-sm font-bold text-white">
+              {usedAtLabel} {order.usedBoothName}
+            </span>
+          )}
+          {order.usedAt && (
+            <span className="rounded-full bg-black/60 px-3 py-1 text-xs font-semibold text-white">
+              {fmtTime(order.usedAt)}
+            </span>
+          )}
+        </div>
+      </div>
+      <span role="status" className="sr-only">
+        ตั๋วใบนี้{usedWord}
+      </span>
+    </div>
+  );
+});
+
+/* ---------- บาร์โค้ดเต็มจอแนวนอน ----------
+   จอแนวตั้ง: หมุนเนื้อหา 90° ด้วย CSS (ไม่ต้องหมุนจอ) / จอแนวนอน: ไม่หมุน
+   แตะที่ไหนก็ได้เพื่อปิด แสดงทีละใบ กันผู้ยิงตั๋วยิงผิดใบ
+   ตั๋วเล่นซุ้ม (฿50) = พื้นขาว กรอบกรมท่า / ตั๋วรับตั๋วกระดาษ = พื้นครีม กรอบส้มน้ำตาล เพื่อให้ staff แยกออกทันที */
+function BarcodeFullscreen({
+  order,
+  def,
+  leaving = false,
+  onClose,
+}: {
+  order: Order;
+  def: TicketDef;
+  leaving?: boolean; // ตั๋วถูกยิงแล้ว: เฟดหน้าบาร์โค้ดออกนุ่ม ๆ ก่อนถอดออก
+  onClose: () => void;
+}) {
+  const isPaper = def.id === "booth" && order.part === "paper";
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="บาร์โค้ดตั๋ว"
+      onClick={onClose}
+      className={`${leaving ? "pd-fade-out" : "pd-fade"} fixed inset-0 z-[60] border-[14px] text-black ${
+        isPaper ? "border-[#b45309] bg-[#fff1c2]" : "border-[#0f1b4d] bg-white"
+      }`}
+    >
+      <div className="pd-land absolute left-1/2 top-1/2 flex flex-col items-center justify-center gap-3 p-6">
+        {isPaper ? (
+          <p className="rounded-full bg-[#b45309] px-6 py-2 text-center text-xl font-extrabold text-white">
+            ตั๋วรับตั๋วกระดาษ · ไม่มีมูลค่า
+          </p>
+        ) : (
+          <p className="rounded-full bg-[#0f1b4d] px-6 py-2 text-center text-xl font-extrabold text-white">
+            ตั๋วเล่นซุ้ม · มูลค่า <span className="text-[#d9f27a]">{baht(order.price)}</span>
+          </p>
+        )}
+        <div className="min-h-0 w-full max-w-4xl flex-1">
+          <Barcode code={order.code} className="block h-full w-full" />
+        </div>
+        <p className="break-all text-center font-mono text-base font-bold tracking-wider">{order.code}</p>
+        <p className="text-xs text-neutral-500">แตะที่ไหนก็ได้เพื่อปิด</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- ปุ่มเพิ่ม/ลดจำนวน ---------- */
+function Stepper({
+  value,
+  max,
+  name,
+  onChange,
+  onDark = false,
+}: {
+  value: number;
+  max: number;
+  name: string;
+  onChange: (n: number) => void;
+  onDark?: boolean; // ใช้บนพื้นหลังดำ/รูปภาพ: ตัวเลขสีขาว ปุ่มบวกสีไลม์
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        aria-label={`ลดจำนวน${name}`}
+        onClick={() => onChange(value - 1)}
+        disabled={value <= 0}
+        className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-black shadow-[0_1px_4px_rgba(0,0,0,0.4)] transition active:scale-90 disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <IconMinus className="h-5 w-5" />
+      </button>
+      <span aria-live="polite" className={`min-w-6 text-center text-lg font-semibold ${onDark ? "text-white" : ""}`}>
+        <span key={value} className="pd-pop inline-block">
+          {value}
+        </span>
+      </span>
+      <button
+        type="button"
+        aria-label={`เพิ่มจำนวน${name}`}
+        onClick={() => onChange(value + 1)}
+        disabled={value >= max}
+        className={`flex h-10 w-10 items-center justify-center rounded-full transition active:scale-90 disabled:cursor-not-allowed disabled:opacity-40 ${
+          onDark ? "bg-white text-black" : "bg-[#e50914] text-white"
+        }`}
+      >
+        <IconPlus className="h-5 w-5" />
+      </button>
+    </div>
+  );
+}
+
+/* ---------- ขั้นตอน 1-2-3 ---------- */
+function Steps({ current }: { current: 1 | 2 | 3 }) {
+  const steps = ["เลือกตั๋ว", "ชำระเงิน", "รับตั๋ว"];
+  return (
+    <ol className="flex items-center justify-center gap-4" aria-label="ขั้นตอนการซื้อ">
+      {steps.map((s, i) => {
+        const n = i + 1;
+        const active = n === current;
+        const done = n < current;
+        return (
+          <li key={s} className="flex items-center gap-1.5" aria-current={active ? "step" : undefined}>
+            <span
+              className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${
+                active || done ? "bg-[#e50914] text-white" : "bg-white/15 text-white/60"
+              }`}
+            >
+              {done ? <IconCheck className="h-3.5 w-3.5" /> : n}
+            </span>
+            <span className={`text-xs md:text-sm ${active ? "font-bold text-white" : "text-white/50"}`}>{s}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/* ---------- แถบหัวหน้าย่อย (ปุ่มย้อนกลับ + ชื่อ) ---------- */
+function SubHeader({ title, onBack }: { title: string; onBack?: () => void }) {
+  return (
+    <div className="flex items-center gap-3">
+      {onBack ? (
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="ย้อนกลับ"
+          className="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/10 text-white backdrop-blur-md transition active:scale-90"
+        >
+          <IconBack />
+        </button>
+      ) : (
+        <span className="h-11 w-0" />
+      )}
+      <h1 className="text-xl font-semibold text-white md:text-2xl">{title}</h1>
+    </div>
+  );
+}
+
+function InfoBox({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
+  return (
+    <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-[#1f1f1f] p-4 text-white">
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <div>
+        <p className="text-sm font-bold">{title}</p>
+        <p className="mt-0.5 text-xs text-white/60">{text}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- เมนูหลัก ---------- */
+type Badges = Partial<Record<View, number>>;
+
+const NAV: { id: View; label: string; icon: ReactNode }[] = [
+  { id: "home", label: "หน้าหลัก", icon: <IconHome /> },
+  { id: "buy", label: "ซื้อตั๋ว", icon: <IconTicket /> },
+  { id: "tickets", label: "ตั๋วของฉัน", icon: <IconGift /> },
+  { id: "profile", label: "โปรไฟล์", icon: <IconUser /> },
+];
+
+// มือถือ: แถบล่างลอย ธีมเดียวกับแอป (พื้นดำ #1f1f1f ขอบบาง ปุ่มที่เลือกเป็นแดง #e50914) ซ่อนบนจอ md ขึ้นไป
+// golden = มีตั๋วถูกรางวัลที่ผู้ใช้ยังไม่เคยเปิดดู: ปุ่ม "ตั๋วของฉัน" เป็นสีทองวิบวับ จนกว่าจะกดเข้าไปดู
+function BottomNav({
+  view,
+  badges,
+  golden,
+  onGo,
+}: {
+  view: View;
+  badges: Badges;
+  golden: boolean;
+  onGo: (v: View) => void;
+}) {
+  return (
+    <nav
+      aria-label="เมนูหลัก"
+      className="fixed inset-x-4 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-40 md:hidden"
+    >
+      <div className="relative overflow-hidden rounded-full border border-white/15 bg-white/10 shadow-[0_10px_30px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-2xl backdrop-saturate-150 supports-[not(backdrop-filter:blur(1px))]:bg-[#2a2a2a]">
+        <ul className="relative mx-auto grid max-w-md grid-cols-4 gap-1 p-1.5">
+          {NAV.map((n) => {
+            const active = view === n.id;
+            const badge = badges[n.id] ?? 0;
+            const gold = golden && n.id === "tickets" && !active;
+            return (
+              <li key={n.id}>
+                <button
+                  type="button"
+                  onClick={() => onGo(n.id)}
+                  aria-label={gold ? `${n.label} (มีตั๋วที่ถูกรางวัล)` : n.label}
+                  aria-current={active ? "page" : undefined}
+                  className={`relative flex w-full flex-col items-center gap-0.5 rounded-full px-1 py-2 transition duration-300 active:scale-95 ${
+                    active
+                      ? "bg-[#e50914] text-white shadow-[0_4px_14px_rgba(229,9,20,0.45)]"
+                      : gold
+                        ? "pd-gold-frame text-[#5a3b00]"
+                        : "text-white/60"
+                  }`}
+                >
+                  <span className="relative">
+                    {n.icon}
+                    {badge > 0 && (
+                      <span key={badge} className="pd-pop absolute -right-2.5 -top-1.5 min-w-4 rounded-full bg-white px-1 text-center text-[10px] font-bold leading-4 text-black shadow-[0_1px_4px_rgba(0,0,0,0.4)]">
+                        {badge}
+                      </span>
+                    )}
+                  </span>
+                  <span className={`text-[11px] ${active || gold ? "font-bold" : "font-medium"}`}>{n.label}</span>
+                  {gold && (
+                    <>
+                      <IconSpark className="pd-spark pointer-events-none absolute left-1 top-0.5 h-3 w-3 text-white" />
+                      <IconSpark className="pd-spark pointer-events-none absolute bottom-1 right-1 h-2.5 w-2.5 text-white [animation-delay:0.7s]" />
+                    </>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </nav>
+  );
+}
+
+// คอมพิวเตอร์/แท็บเล็ต: แถบบน (แสดงตั้งแต่จอ md ขึ้นไป) พื้นดำเบลอ ปุ่มที่เลือกเป็นแดง
+function TopNav({
+  view,
+  badges,
+  golden,
+  user,
+  ready,
+  onGo,
+  onLogin,
+}: {
+  view: View;
+  badges: Badges;
+  golden: boolean;
+  user: User | null;
+  ready: boolean;
+  onGo: (v: View) => void;
+  onLogin: () => void;
+}) {
+  return (
+    <header className="sticky top-0 z-40 hidden border-b border-white/15 bg-white/[0.07] backdrop-blur-2xl backdrop-saturate-150 md:block">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-6 px-8 py-3">
+        <button
+          type="button"
+          onClick={() => onGo("home")}
+          aria-label="ไปหน้าหลัก"
+          className="flex items-center gap-3 text-left"
+        >
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#e50914] text-white">
+            <IconTicket />
+          </span>
+          <span>
+            <span className="block text-xl font-bold lowercase leading-none">{EVENT.name}</span>
+            <span className="mt-1 block text-[11px] text-white/60">{EVENT.tagline}</span>
+          </span>
+        </button>
+
+        <nav aria-label="เมนูหลักบนคอมพิวเตอร์">
+          <ul className="flex items-center gap-1 rounded-full border border-white/10 bg-[#1f1f1f] p-1">
+            {NAV.filter((n) => n.id !== "profile").map((n) => {
+              const active = view === n.id;
+              const badge = badges[n.id] ?? 0;
+              const gold = golden && n.id === "tickets" && !active;
+              return (
+                <li key={n.id}>
+                  <button
+                    type="button"
+                    onClick={() => onGo(n.id)}
+                    aria-current={active ? "page" : undefined}
+                    aria-label={gold ? `${n.label} (มีตั๋วที่ถูกรางวัล)` : undefined}
+                    className={`relative flex items-center gap-2 rounded-full px-4 py-2 text-sm transition duration-300 active:scale-95 ${
+                      active
+                        ? "bg-[#e50914] font-bold text-white"
+                        : gold
+                          ? "pd-gold-frame font-bold text-[#5a3b00]"
+                          : "font-medium text-white/70 hover:bg-white/10 hover:text-white"
+                    }`}
+                  >
+                    {n.label}
+                    {badge > 0 && (
+                      <span key={badge} className="pd-pop min-w-5 rounded-full bg-white px-1.5 text-center text-[11px] font-bold leading-5 text-black">
+                        {badge}
+                      </span>
+                    )}
+                    {gold && (
+                      <>
+                        <IconSpark className="pd-spark pointer-events-none absolute -left-1 -top-1 h-3.5 w-3.5 text-white" />
+                        <IconSpark className="pd-spark pointer-events-none absolute -bottom-1 -right-1 h-3 w-3 text-white [animation-delay:0.7s]" />
+                      </>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+
+        <div className="flex min-w-[8rem] justify-end">
+          {ready && user && (
+            <button
+              type="button"
+              onClick={() => onGo("profile")}
+              aria-label="โปรไฟล์"
+              aria-current={view === "profile" ? "page" : undefined}
+              className={`flex items-center gap-2 rounded-full border py-1.5 pl-1.5 pr-4 text-sm font-semibold transition ${
+                view === "profile"
+                  ? "border-[#e50914] bg-[#e50914] text-white"
+                  : "border-white/10 bg-[#1f1f1f] text-white hover:bg-white/10"
+              }`}
+            >
+              <Avatar
+                user={user}
+                className="h-8 w-8 text-sm"
+                fallbackCls={view === "profile" ? "bg-white text-[#e50914]" : "bg-[#e50914] text-white"}
+              />
+              <span className="max-w-[10rem] truncate">{user.name}</span>
+            </button>
+          )}
+          {ready && !user && (
+            <button
+              type="button"
+              onClick={onLogin}
+              className="rounded-full bg-[#e50914] px-5 py-2.5 text-sm font-bold text-white transition hover:opacity-90"
+            >
+              เข้าสู่ระบบ
+            </button>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/* ---------- แถบสรุปยอด ----------
+   ติดขอบล่างจอ พื้นกระจกเบลอ
+   มือถือ: aboveNav = ลอยเหนือแถบเมนูล่าง / คอมพิวเตอร์: ชิดขอบล่างเลย */
+function CheckoutBar({
+  children,
+  aboveNav = false,
+  compact = false,
+}: {
+  children: ReactNode;
+  aboveNav?: boolean;
+  compact?: boolean; // มือถือ: แถบเตี้ยลง (ยอด + ปุ่มอยู่แถวเดียว) จะได้ไม่บังตั๋ว
+}) {
+  return (
+    <div
+      className={`pd-bar fixed z-40 border border-white/15 bg-white/10 shadow-[0_-8px_32px_rgba(0,0,0,0.5),inset_0_1px_0_rgba(255,255,255,0.15)] backdrop-blur-2xl backdrop-saturate-150 ${
+        aboveNav
+          ? "inset-x-3 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] rounded-[2rem] md:inset-x-0 md:bottom-0 md:rounded-b-none md:rounded-t-3xl md:border-x-0 md:border-b-0"
+          : "inset-x-0 bottom-0 rounded-t-3xl border-x-0 border-b-0 pb-[env(safe-area-inset-bottom)]"
+      }`}
+    >
+      <div className="mx-auto w-full max-w-md px-5 py-4 md:max-w-6xl md:px-8 md:py-5">{children}</div>
+    </div>
+  );
+}
+
+/* ---------- โอนเงิน + ส่งสลีป ---------- */
+
+// ย่อรูปใหญ่ก่อนส่ง (ส่งไวขึ้น + กันไฟล์ใหญ่เกินลิมิตของโฮสต์) รูปเล็กอยู่แล้วส่งตามเดิม
+// 1600px ยังอ่าน QR บนสลีปได้ชัด
+async function shrinkImage(file: File): Promise<File> {
+  if (file.size <= 1024 * 1024) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext("2d")?.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.85));
+    return blob && blob.size < file.size ? new File([blob], "slip.jpg", { type: "image/jpeg" }) : file;
+  } catch {
+    return file;
+  }
+}
+
+// ส่งฟอร์มด้วย XMLHttpRequest เพื่อรู้ความคืบหน้าการอัปโหลด (fetch ดึงความคืบหน้าขาขึ้นไม่ได้)
+// onProgress ได้ค่า 0–1 / ล้มเหลวที่เครือข่าย = reject
+function sendForm(
+  url: string,
+  body: FormData,
+  onProgress: (ratio: number) => void,
+): Promise<{ status: number; data: { error?: string } }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let data: { error?: string } = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        /* ignore */
+      }
+      resolve({ status: xhr.status, data });
+    };
+    xhr.onerror = () => reject(new Error("network"));
+    xhr.onabort = () => reject(new Error("abort"));
+    xhr.send(body);
+  });
+}
+
+function SlipPay({
+  paymentId,
+  onBack,
+  onPaid,
+  onNeedLogin,
+}: {
+  paymentId: string;
+  onBack: () => void;
+  onPaid: (orders: Order[]) => void;
+  onNeedLogin: () => void;
+}) {
+  const [pay, setPay] = useState<Payment | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [now, setNow] = useState(0);
+  const [file, setFile] = useState<File | null>(null);
+  const [shrunk, setShrunk] = useState<File | null>(null); // รูปที่ย่อเตรียมไว้แล้ว (ย่อตั้งแต่เลือกรูป กดส่งแล้วไม่ต้องรอ)
+  const [preview, setPreview] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0); // ความคืบหน้าตอนส่งสลีป 0–100
+  const [stage, setStage] = useState<"upload" | "verify">("upload"); // upload = กำลังอัปโหลดรูป / verify = รอเซิร์ฟเวอร์ตรวจสลีป
+  const [err, setErr] = useState("");
+  const [qrFailed, setQrFailed] = useState(false);
+
+  // เช็กสถานะทุก SLIP_POLL_MS: อนุมัติแล้ว → ไปหน้ารับตั๋วเอง
+  useEffect(() => {
+    let stopped = false;
+    let running = false;
+
+    const tick = async () => {
+      if (running || stopped) return;
+      running = true;
+      const r = await api<PayPoll>(`/api/payments/${paymentId}`);
+      running = false;
+      if (stopped) return;
+
+      if (!r.ok) {
+        if (r.status === 401) {
+          stopped = true;
+          onNeedLogin();
+        } else if (r.status === 404) {
+          stopped = true;
+          setLoadError("ไม่พบรายการชำระเงิน");
+        } else {
+          setLoadError(r.error); // เน็ตหลุดชั่วคราว ลองใหม่รอบถัดไปเอง
+        }
         return;
       }
-      if (!res.ok) return;
-      const data = (await res.json()) as { total: number; pool: PoolTicket[]; winners: Winner[] };
-      if (spinningRef.current || seq !== seqRef.current) return;
-      setPool(data.pool);
-      setTotal(data.total);
-      setWinners(data.winners);
-    } catch {
-      /* เน็ตหลุดชั่วคราว รอบถัดไปลองใหม่เอง */
-    }
-  }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  // โหลสด: ดึงทุก POLL_MS วินาที
-  useEffect(() => {
-    if (gate !== "ok") return;
-    const t = setInterval(refresh, POLL_MS);
-    return () => clearInterval(t);
-  }, [gate, refresh]);
-
-  // โหลดไฟล์เสียงไว้ล่วงหน้า จะได้เล่นทันทีตอนกดสุ่ม
-  useEffect(() => {
-    prepareSpin();
-    prepareVictory();
-    const n = new Audio(NUMBER_SRC);
-    n.preload = "auto";
-  }, []);
-
-  // ล้าง timer / animation ตอนออกจากหน้า
-  useEffect(() => {
-    const timers = timersRef;
-    const fx = fxRef;
-    return () => {
-      timers.current.forEach(clearTimeout);
-      fx.current.forEach(clearTimeout);
-      stopSpin();
-      stopVictory();
-      fwActive.current = false;
-      cancelAnimationFrame(fwRaf.current);
-      cancelAnimationFrame(cfRaf.current);
+      setLoadError("");
+      const { orders, ...p } = r.data;
+      setPay(p);
+      if (p.status === "approved" && orders) {
+        stopped = true;
+        onPaid(orders);
+      } else if (p.status === "expired") {
+        stopped = true;
+      }
     };
+
+    setNow(Date.now());
+    tick();
+    const poll = setInterval(tick, SLIP_POLL_MS);
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => {
+      stopped = true;
+      clearInterval(poll);
+      clearInterval(clock);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paymentId]);
+
+  // พรีวิวรูปที่เลือก + ย่อรูปเตรียมไว้เบื้องหลังทันที
+  useEffect(() => {
+    setShrunk(null);
+    if (!file) {
+      setPreview("");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    let cancelled = false;
+    shrinkImage(file).then((f) => {
+      if (!cancelled) setShrunk(f);
+    });
+    return () => {
+      cancelled = true;
+      URL.revokeObjectURL(url);
+    };
+  }, [file]);
+
+  // อัปโหลดเสร็จแล้วแต่เซิร์ฟเวอร์ยังตรวจสลีปอยู่: ค่อย ๆ ขยับหลอดไปจนเกือบเต็ม (ไม่ถึง 100 จนกว่าจะตอบกลับ)
+  useEffect(() => {
+    if (!busy || stage !== "verify") return;
+    const t = setInterval(() => {
+      setProgress((p) => (p >= 95 ? p : Math.min(95, p + Math.max(0.4, (95 - p) * 0.06))));
+    }, 400);
+    return () => clearInterval(t);
+  }, [busy, stage]);
+
+  async function upload() {
+    if (!file || busy) return;
+    if (file.size > 25 * 1024 * 1024) return setErr("รูปใหญ่เกินไป เลือกรูปอื่น");
+    setBusy(true);
+    setErr("");
+    setProgress(0);
+    setStage("upload");
+    try {
+      const fd = new FormData();
+      fd.append("slip", shrunk ?? (await shrinkImage(file)));
+      // ช่วงอัปโหลดรูปใช้ 0–70% ที่เหลือเป็นช่วงรอเซิร์ฟเวอร์ตรวจสลีป
+      const { status, data } = await sendForm(`/api/payments/${paymentId}/slip`, fd, (ratio) => {
+        setProgress(Math.round(ratio * 70));
+        if (ratio >= 1) setStage("verify");
+      });
+      if (status === 401) return onNeedLogin();
+      if (status < 200 || status >= 300) return setErr(data.error ?? "ส่งสลีปไม่สำเร็จ ลองใหม่อีกครั้ง");
+      setProgress(100);
+      setFile(null);
+      setPay((p) => (p ? { ...p, status: "reviewing", rejectReason: undefined } : p));
+    } catch {
+      setErr("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const secsLeft = pay ? Math.max(0, Math.ceil((new Date(pay.expiresAt).getTime() - now) / 1000)) : 0;
+  const open = pay && (pay.status === "awaiting_slip" || pay.status === "rejected");
+  const pct = Math.min(100, Math.floor(progress));
+
+  return (
+    <section aria-label="โอนเงินและส่งสลีป" className="md:mx-auto md:max-w-4xl">
+      <SubHeader title="โอนเงินและส่งสลีป" onBack={onBack} />
+      <div className="mt-6">
+        <Steps current={2} />
+      </div>
+
+      {!pay && <p className="mt-6 animate-pulse text-sm text-white/60">{loadError || "กำลังโหลด..."}</p>}
+
+      {open && (
+        <div className="md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-6">
+          {pay.status === "rejected" && (
+            <div role="alert" className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 md:col-span-2 md:mt-0">
+              <p className="text-sm font-bold text-red-700">สลีปไม่ผ่าน</p>
+              <p className="mt-1 text-sm text-red-700">{pay.rejectReason ?? "กรุณาตรวจสอบแล้วส่งสลีปใหม่"}</p>
+            </div>
+          )}
+
+          {busy ? (
+            // ระหว่างส่งสลีป: ซ่อน QR แล้วแสดงหลอดความคืบหน้าแทน
+            <div
+              role="status"
+              aria-live="polite"
+              className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center md:mt-0 md:p-6"
+            >
+              <p className="text-xs text-white/50">กำลังส่งสลีป กรุณาอย่าปิดหน้านี้</p>
+              <p className="mt-1 text-5xl font-extrabold tabular-nums">{pct}%</p>
+              <div
+                role="progressbar"
+                aria-label="ความคืบหน้าการส่งสลีป"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={pct}
+                className="mt-5 h-3 w-full overflow-hidden rounded-full bg-white/15"
+              >
+                <div
+                  className="h-full rounded-full bg-[#e50914] transition-[width] duration-300 ease-out"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <p className="mt-4 text-sm font-semibold">
+                {stage === "upload" ? "กำลังอัปโหลดรูปสลีป" : "กำลังตรวจสอบสลีป อาจใช้เวลาสักครู่"}
+              </p>
+              <p className="mt-1 text-xs text-white/50">
+                ยอด {baht(pay.amount)} · รหัสอ้างอิง <span className="font-mono font-bold text-white">{pay.ref}</span>
+              </p>
+            </div>
+          ) : (
+            <div className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center md:mt-0 md:p-6">
+              <p className="text-xs text-white/50">โอนตามยอดนี้เป๊ะ ๆ</p>
+              <p className="mt-1 text-4xl font-extrabold">{baht(pay.amount)}</p>
+
+              <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-white p-2 md:max-w-[19rem]">
+                {qrFailed || !pay.qrUrl ? (
+                  <p className="px-4 text-sm text-red-600">แสดง QR ไม่ได้ ปิดหน้านี้แล้วเปิดใหม่</p>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={pay.qrUrl}
+                    alt={`QR พร้อมเพย์ ยอด ${baht(pay.amount)}`}
+                    className="h-full w-full object-contain"
+                    onError={() => setQrFailed(true)}
+                  />
+                )}
+              </div>
+
+              <p className="mt-3 text-sm text-white/60">สแกนด้วยแอปธนาคาร (ยอดและรหัสอ้างอิงอยู่ใน QR แล้ว)</p>
+              <p className="mt-1 text-xs text-white/50">
+                รหัสอ้างอิง <span className="font-mono font-bold text-white">{pay.ref}</span>
+              </p>
+              {pay.qrUrl && (
+                <a
+                  href={pay.qrUrl}
+                  download={`payday-${pay.ref}.png`}
+                  className="mt-3 inline-block rounded-full border border-white/40 px-4 py-2 text-xs font-semibold"
+                >
+                  บันทึก QR Code
+                </a>
+              )}
+              <p className="mt-3 text-sm font-bold">
+                {secsLeft > 0 ? `ส่งสลีปภายใน ${fmtCountdown(secsLeft)}` : "หมดเวลาแล้ว กำลังตรวจสอบ..."}
+              </p>
+            </div>
+          )}
+
+          <div className="pd-rise mt-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:mt-0 md:p-6" style={stagger(1)}>
+            <h2 className="text-base font-bold">ส่งสลีปโอนเงิน</h2>
+            <p className="mt-1 text-xs text-white/50">
+              ใช้สลีปจากแอปธนาคาร ต้องเห็น QR บนสลีปชัด ไม่ครอป ไม่ตัดขอบ สลีป 1 ใบใช้ได้ครั้งเดียว
+            </p>
+
+            <label className="mt-3 flex min-h-40 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-white/20 bg-[#2a2a2a] p-3 text-center text-sm font-semibold text-white/60 focus-within:ring-2 focus-within:ring-white md:min-h-56">
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="sr-only"
+                disabled={busy}
+                onChange={(e) => {
+                  setFile(e.target.files?.[0] ?? null);
+                  setErr("");
+                }}
+              />
+              {preview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={preview} alt="สลีปที่เลือก" className="max-h-72 rounded-xl object-contain md:max-h-96" />
+              ) : (
+                "แตะเพื่อเลือกรูปสลีป"
+              )}
+            </label>
+
+            {err && (
+              <p role="alert" className="mt-3 text-sm font-medium text-red-600">
+                {err}
+              </p>
+            )}
+            {loadError && <p className="mt-2 text-xs text-red-600">{loadError}</p>}
+
+            <button
+              type="button"
+              onClick={upload}
+              disabled={!file || busy || secsLeft === 0}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e50914] py-4 text-base font-bold text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {busy ? "กำลังส่งสลีป..." : "ส่งสลีป"}
+              {!busy && <IconArrow className="h-5 w-5 text-white" />}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {pay?.status === "reviewing" && (
+        <div className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-6 text-center md:mx-auto md:max-w-xl md:p-8">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-white text-black">
+            <IconReceipt className="h-7 w-7" />
+          </span>
+          <h2 className="mt-4 text-xl font-bold">ส่งสลีปแล้ว รอตรวจสอบ</h2>
+          <p className="mt-2 text-sm text-white/60">
+            {baht(pay.amount)} · รหัส <span className="font-mono font-bold">{pay.ref}</span>
+          </p>
+          <p className="mt-2 text-sm text-white/60">
+            เจ้าหน้าที่อนุมัติแล้วตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” ปิดหน้านี้ได้เลย ไม่ต้องรอ
+          </p>
+          <button
+            type="button"
+            onClick={onBack}
+            className="mt-5 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+          >
+            ไปหน้าตั๋วของฉัน
+          </button>
+        </div>
+      )}
+
+      {pay?.status === "expired" && (
+        <div className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-6 text-center md:mx-auto md:max-w-xl md:p-8">
+          <h2 className="text-xl font-bold">หมดเวลาแล้ว</h2>
+          <p className="mt-2 text-sm text-white/60">
+            ถ้าโอนเงินไปแล้ว ติดต่อเจ้าหน้าที่พร้อมรหัสอ้างอิง <span className="font-mono font-bold">{pay.ref}</span>
+          </p>
+          <button
+            type="button"
+            onClick={onBack}
+            className="mt-5 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+          >
+            กลับ
+          </button>
+        </div>
+      )}
+
+      <div className="mt-4 md:mx-auto md:mt-6 md:max-w-xl">
+        <InfoBox
+          icon={<IconInfo className="h-5 w-5" />}
+          title="ส่งสลีปแล้วรอสักครู่"
+          text="ปิดหน้านี้ได้ ตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” เมื่อเจ้าหน้าที่อนุมัติ"
+        />
+      </div>
+    </section>
+  );
+}
+
+/* ---------- หน้าหลัก ---------- */
+export default function Home() {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [user, setUser] = useState<User | null>(null);
+  const [ready, setReady] = useState(false);
+
+  const [view, setView] = useState<View>("home");
+  const [cart, setCart] = useState<Cart>({});
+  const [justBought, setJustBought] = useState<Order[] | null>(null);
+
+  // ชำระเงิน
+  const [payName, setPayName] = useState("");
+  const [payPhone, setPayPhone] = useState("");
+  const [payError, setPayError] = useState("");
+  const [payBusy, setPayBusy] = useState(false);
+
+  // รายการโอนเงิน: id ของรายการที่เปิดอยู่ + รายการค้างทั้งหมด
+  const [paymentId, setPaymentId] = useState<string | null>(null);
+  const [pending, setPending] = useState<Payment[]>([]);
+  const [cancelingId, setCancelingId] = useState<string | null>(null); // รายการที่กำลังลบ
+  const [cancelTarget, setCancelTarget] = useState<Payment | null>(null); // รายการที่รอยืนยันการยกเลิก (popup)
+
+  // เข้าสู่ระบบ / สมัครสมาชิก (ฟอร์มอยู่ใน components/LoginForm.tsx และ components/RegisterForm.tsx)
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [afterAuth, setAfterAuth] = useState<View>("home");
+
+  // บัญชี/โปรไฟล์
+  const [accName, setAccName] = useState("");
+  const [accPhone, setAccPhone] = useState("");
+  const [accEmp, setAccEmp] = useState("");
+  const [accError, setAccError] = useState("");
+  const [accSaved, setAccSaved] = useState(false);
+  const [accBusy, setAccBusy] = useState(false);
+  const [returnToPay, setReturnToPay] = useState(false); // ถูกส่งมากรอกรหัสพนักงานจากการกดชำระเงิน: บันทึกแล้วกลับไปหน้าชำระเงิน
+
+  // รูปโปรไฟล์ (เก็บใน Google Drive โฟลเดอร์ profile ผ่าน /api/profile/avatar)
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [avatarError, setAvatarError] = useState("");
+  const [avatarDraft, setAvatarDraft] = useState<File | null>(null); // รูปที่เลือกแล้ว รอผู้ใช้ปรับตำแหน่งและกดบันทึก
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
+  // ตั๋วของฉัน (แท็บ "ready" = ตั๋วทั้งหมดที่ได้รับ ทั้งที่ยังไม่ใช้และใช้แล้ว / "status" = รายการโอนเงินที่ค้างอยู่)
+  const [tab, setTab] = useState<"ready" | "status">("ready");
+  const [sheet, setSheet] = useState<TicketId | null>(null);
+  const [sheetClosing, setSheetClosing] = useState(false); // กำลังเล่นแอนิเมชันปิดหน้าต่างแสดงตั๋ว
+  const closingRef = useRef(false);
+  const [barcodeCode, setBarcodeCode] = useState<string | null>(null); // รหัสตั๋วที่เปิดบาร์โค้ดเต็มจอแนวนอนอยู่
+  const [barcodeLeaving, setBarcodeLeaving] = useState(false); // ตั๋วถูกยิงแล้ว กำลังเฟดหน้าบาร์โค้ดออก
+  const [settling, setSettling] = useState<string[]>([]); // ตั๋วที่เพิ่งถูกยิง: ค้างตำแหน่งเดิมให้เห็นตราประทับก่อน แล้วค่อยเลื่อนลงล่าง
+  const prevUsedRef = useRef<Map<string, boolean>>(new Map());
+  const flipRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const flipPos = useRef<Map<string, number>>(new Map());
+  const [seenWon, setSeenWon] = useState<string[]>([]); // ตั๋วถูกรางวัลที่ผู้ใช้เห็นแล้ว
+
+  const userId = user?.id ?? null;
+
+  useEffect(() => {
+    // ตะกร้า: กรองให้เหลือเฉพาะค่าที่ถูกต้อง
+    const c = load<Cart>(CART_KEY, {});
+    const clean: Cart = {};
+    for (const t of TICKETS) {
+      const n = Math.floor(Number(c[t.id]));
+      if (n > 0) clean[t.id] = Math.min(MAX_QTY, n);
+    }
+    setCart(clean);
+
+    // เช็คว่า login ค้างอยู่ไหม (cookie) แล้วดึงตั๋วจาก MongoDB
+    (async () => {
+      const me = await api<{ user: User | null }>("/api/auth/me");
+      if (me.ok && me.data.user) {
+        applyUser(me.data.user);
+        const r = await api<{ orders: Order[] }>("/api/orders");
+        if (r.ok) setOrders(r.data.orders);
+      }
+      setReady(true);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // กด F สลับโหมดเต็มหน้าจอ (เหมือน F11)
   useEffect(() => {
+    window.scrollTo({ top: 0 });
+  }, [view]);
+
+  // โหลดรายการตั๋วถูกรางวัลที่เคยเห็นแล้ว (แยกตามผู้ใช้)
+  useEffect(() => {
+    setSeenWon(userId ? load<string[]>(seenKey(userId), []) : []);
+  }, [userId]);
+
+  // กด Esc: ถ้าบาร์โค้ดเต็มจอเปิดอยู่ ปิดบาร์โค้ดก่อน ไม่งั้นปิดหน้าต่างแสดงตั๋ว (คอมพิวเตอร์)
+  useEffect(() => {
+    if (!sheet) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "KeyF") return;
-      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
-      const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      e.preventDefault();
-      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
-      else void document.documentElement.requestFullscreen().catch(() => {});
+      if (e.key !== "Escape") return;
+      if (barcodeCode) setBarcodeCode(null);
+      else closeSheet();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheet, barcodeCode]);
 
-  // ไม่ขยับเมาส์ CURSOR_HIDE_MS แล้วซ่อนเมาส์ (ขยับเมื่อไหร่โผล่กลับมา)
+  // กด Esc ปิด popup ยืนยันการยกเลิกรายการ
   useEffect(() => {
-    const cls = "pd-nocursor";
-    let t: ReturnType<typeof setTimeout> | undefined;
-    const arm = () => {
-      document.body.classList.remove(cls);
-      if (t) clearTimeout(t);
-      t = setTimeout(() => document.body.classList.add(cls), CURSOR_HIDE_MS);
+    if (!cancelTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCancelTarget(null);
     };
-    arm();
-    window.addEventListener("mousemove", arm);
-    window.addEventListener("mousedown", arm);
-    return () => {
-      window.removeEventListener("mousemove", arm);
-      window.removeEventListener("mousedown", arm);
-      if (t) clearTimeout(t);
-      document.body.classList.remove(cls);
-    };
-  }, []);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cancelTarget]);
 
-  async function unlock(e: FormEvent) {
-    e.preventDefault();
-    if (!pw || pwBusy) return;
-    setPwBusy(true);
-    setPwErr("");
+  // โหลดตั๋วใหม่ทุก 10 วิ ตลอดที่ login อยู่ (เข้าหน้า "ตั๋วของฉัน" โหลดทันที)
+  // (ตั๋วถูกออกตอน admin อนุมัติสลีป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง
+  //  และสถานะถูกรางวัลก็มาทางนี้ด้วย ปุ่มเมนูสีทองจะขึ้นแม้อยู่หน้าอื่น)
+  // ตอนเปิดหน้าต่างแสดงตั๋วอยู่ = ใกล้ถูกเจ้าหน้าที่ยิงที่หน้างาน: โหลดทุก 3 วิ
+  // ตั๋วที่ถูกยิงแล้วจะเป็นสีเทา + ตราประทับ ("ใช้แล้ว" / "รับแล้ว") ค้างอยู่ในหน้าต่างแสดงตั๋วถาวร
+  // ถ้าข้อมูลไม่เปลี่ยน ไม่ setState (กัน render ซ้ำโดยไม่จำเป็น ลดอาการค้างบนมือถือ)
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const loadTickets = async () => {
+      const r = await api<{ orders: Order[]; pending?: Payment[] }>("/api/orders");
+      if (r.ok && !cancelled) {
+        const nextOrders = r.data.orders;
+        const nextPending = r.data.pending ?? [];
+        setOrders((prev) => (JSON.stringify(prev) === JSON.stringify(nextOrders) ? prev : nextOrders));
+        setPending((prev) => (JSON.stringify(prev) === JSON.stringify(nextPending) ? prev : nextPending));
+      }
+    };
+    if (view === "tickets") loadTickets();
+    const t = setInterval(loadTickets, barcodeCode ? 1500 : sheet ? 3000 : 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [view, user, sheet, barcodeCode]);
+
+  const defOf = (id: TicketId) => TICKETS.find((t) => t.id === id)!;
+  const cartLines = TICKETS.flatMap((t) => {
+    const q = cart[t.id] ?? 0;
+    return q > 0 ? [{ def: t, qty: q }] : [];
+  });
+  const cartCount = cartLines.reduce((s, l) => s + l.qty, 0);
+  const cartTotal = cartLines.reduce((s, l) => s + l.qty * l.def.price, 0);
+  const cartHasLucky = cartLines.some((l) => l.def.id === "lucky");
+
+  const readyOrders = orders.filter((o) => !o.used);
+
+  // มีตั๋วถูกรางวัลที่ผู้ใช้ยังไม่เคยเปิดดู
+  const hasNewWin = orders.some((o) => o.won && !seenWon.includes(o.code));
+
+  function go(v: View) {
+    setView(v);
+    setPayError("");
+    if (v !== "profile") setReturnToPay(false);
+  }
+
+  // กด "แสดงตั๋ว" ครั้งแรก = เห็นตั๋วที่ถูกรางวัลของประเภทนั้นแล้ว: กรอบทอง/ปุ่มเมนูกลับเป็นปกติ
+  // ปิดหน้าต่างแสดงตั๋ว: เลื่อนกลับลง/เฟดหาย แล้วค่อยถอดออกจากหน้า
+  function closeSheet() {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setBarcodeCode(null);
+    setSheetClosing(true);
+    setTimeout(() => {
+      setSheet(null);
+      setSheetClosing(false);
+      closingRef.current = false;
+    }, 300);
+  }
+
+  function openSheet(id: TicketId) {
+    setSheet(id);
+    if (!userId) return;
+    const won = orders.filter((o) => o.ticket === id && o.won).map((o) => o.code);
+    if (won.length === 0) return;
+    setSeenWon((prev) => {
+      if (won.every((c) => prev.includes(c))) return prev;
+      const next = Array.from(new Set([...prev, ...won]));
+      save(seenKey(userId), next);
+      return next;
+    });
+  }
+
+  function applyUser(u: User) {
+    setUser(u);
+    setAccName(u.name);
+    setAccPhone(u.phone);
+    setAccEmp(u.empCode ?? "");
+  }
+
+  // ไปหน้า login แล้วเมื่อสำเร็จให้เด้งกลับมาหน้าที่ต้องการ
+  function needLogin(next: View) {
+    setAfterAuth(next);
+    setAuthMode("login");
+    setView("auth");
+  }
+
+  // บัญชีเก่ายังไม่มีรหัสพนักงาน: พาไปกรอกในโปรไฟล์ก่อนซื้อ Lucky Draw
+  function needEmpCode() {
+    setReturnToPay(true);
+    setAccError("");
+    setAccSaved(false);
+    go("profile");
+  }
+
+  // LoginForm / RegisterForm เรียกตอนสำเร็จ: เก็บ user โหลดตั๋ว แล้วเด้งกลับหน้าที่ต้องการ
+  // ดึง user จาก /api/auth/me อีกครั้ง เพื่อให้ได้ข้อมูลรูปโปรไฟล์ครบ (ผล login/register อาจไม่มี avatarAt)
+  async function handleAuthed(u: User) {
+    applyUser(u);
+    const me = await api<{ user: User | null }>("/api/auth/me");
+    if (me.ok && me.data.user) applyUser(me.data.user);
+    const o = await api<{ orders: Order[] }>("/api/orders");
+    if (o.ok) setOrders(o.data.orders);
+    go(afterAuth);
+  }
+
+  async function logout() {
+    await api("/api/auth/logout", "POST");
+    setUser(null);
+    setOrders([]);
+    setPaymentId(null);
+    setPending([]);
+    setCancelTarget(null);
+    setAccName("");
+    setAccPhone("");
+    setAccEmp("");
+    setAccSaved(false);
+    setAccError("");
+    setAvatarError("");
+    setAvatarDraft(null);
+    setSheet(null);
+    setBarcodeCode(null);
+    go("home");
+  }
+
+  function setQty(id: TicketId, n: number) {
+    const q = Math.max(0, Math.min(MAX_QTY, n));
+    const next = { ...cart };
+    if (q === 0) delete next[id];
+    else next[id] = q;
+    setCart(next);
+    save(CART_KEY, next);
+  }
+
+  // กดตั๋วจากการ์ดหน้าหลัก: ไปหน้าเลือกตั๋วเฉย ๆ (ไม่เพิ่มจำนวนให้ ผู้ใช้กด + เองในหน้าซื้อตั๋ว)
+  function pick() {
+    go("buy");
+  }
+
+  function toPay() {
+    if (cartCount === 0) return;
+    if (!user) return needLogin("pay"); // ซื้อตั๋วต้อง login ก่อน
+    if (cartHasLucky && !user.empCode) return needEmpCode(); // ซื้อ Lucky Draw ต้องมีรหัสพนักงานในบัญชี
+    setPayName(user.name);
+    setPayPhone(user.phone);
+    go("pay");
+  }
+
+  // admin อนุมัติแล้ว (หน้าโอนเงินเห็นสถานะ approved): เก็บตั๋ว ล้างตะกร้า ไปหน้ารับตั๋ว
+  function finishPaid(made: Order[]) {
+    const codes = new Set(made.map((o) => o.code));
+    setOrders((prev) => [...made, ...prev.filter((o) => !codes.has(o.code))]);
+    setCart({});
+    save(CART_KEY, {});
+    setPaymentId(null);
+    setJustBought(made);
+    setView("done");
+  }
+
+  // กดยืนยัน: ขอ QR จากเซิร์ฟเวอร์ ตั๋วยังไม่ถูกออกจนกว่า admin จะอนุมัติสลีป
+  async function confirmPay() {
+    if (cartLines.length === 0 || payBusy) return;
+    if (!user) return needLogin("pay");
+    if (cartHasLucky && !user.empCode) return needEmpCode();
+    const buyerName = payName.trim();
+    const cleanPhone = payPhone.replace(/\D/g, "");
+    if (buyerName.length < 2) {
+      setPayError("กรอกชื่อ-นามสกุลให้ครบ");
+      return;
+    }
+    if (!validPhone(cleanPhone)) {
+      setPayError("เบอร์โทรต้องมี 10 หลัก ขึ้นต้นด้วย 0");
+      return;
+    }
+
+    // เซิร์ฟเวอร์คิดราคาเอง สร้างรายการรอโอน + QR พร้อมเพย์ (ยอด + รหัสอ้างอิงอยู่ใน QR)
+    // รหัสพนักงานเซิร์ฟเวอร์ดึงจากบัญชีเอง ตั๋วถูกสร้างใน MongoDB หลัง admin อนุมัติสลีปเท่านั้น
+    setPayBusy(true);
+    setPayError("");
+    const r = await api<{ payment: Payment }>("/api/orders", "POST", {
+      items: cartLines.map((l) => ({ ticket: l.def.id, qty: l.qty })),
+      name: buyerName,
+      phone: cleanPhone,
+    });
+    setPayBusy(false);
+    if (!r.ok) {
+      if (r.status === 401) return needLogin("pay");
+      setPayError(r.error);
+      return;
+    }
+
+    setPaymentId(r.data.payment.id);
+    setCart({}); // สร้างรายการแล้ว ล้างตะกร้า กันซื้อซ้ำ
+    save(CART_KEY, {});
+    setView("qr");
+  }
+
+  // ออกจากหน้าโอนเงิน: รายการยังค้างอยู่ ไปดู/ส่งสลีปต่อได้ที่แท็บ "สถานะ" ใน "ตั๋วของฉัน"
+  function leaveQr() {
+    setPaymentId(null);
+    setTab("status");
+    go("tickets");
+  }
+
+  // กดไอคอนถังขยะแล้วยืนยันใน popup: ยกเลิกรายการที่ยังไม่ส่งสลีป (เซิร์ฟเวอร์ตรวจสถานะซ้ำอีกที)
+  async function cancelPayment(id: string) {
+    if (cancelingId) return;
+    setCancelingId(id);
+    const r = await api(`/api/payments/${id}`, "DELETE");
+    setCancelingId(null);
+    setCancelTarget(null);
+    if (r.ok || (!r.ok && r.status === 404)) {
+      setPending((prev) => prev.filter((p) => p.id !== id));
+      return;
+    }
+    if (r.status === 401) return needLogin("tickets");
+    alert(r.error);
+    // สถานะอาจเปลี่ยนไปแล้ว (เช่นส่งสลีปจากเครื่องอื่น) โหลดรายการใหม่
+    const o = await api<{ orders: Order[]; pending?: Payment[] }>("/api/orders");
+    if (o.ok) {
+      setOrders(o.data.orders);
+      setPending(o.data.pending ?? []);
+    }
+  }
+
+  // คืนค่าฟอร์มโปรไฟล์กลับเป็นข้อมูลล่าสุดของบัญชี
+  function resetProfile() {
+    setAccName(user?.name ?? "");
+    setAccPhone(user?.phone ?? "");
+    setAccEmp("");
+    setAccError("");
+    setAccSaved(false);
+  }
+
+  async function saveProfile() {
+    if (accBusy) return;
+    const cleanPhone = accPhone.replace(/\D/g, "");
+    const cleanEmp = accEmp.replace(/\D/g, "");
+    setAccSaved(false);
+    if (accName.trim().length < 2) {
+      setAccError("กรอกชื่อ-นามสกุลให้ครบ");
+      return;
+    }
+    if (!validPhone(cleanPhone)) {
+      setAccError("เบอร์โทรต้องมี 10 หลัก ขึ้นต้นด้วย 0");
+      return;
+    }
+    // รหัสพนักงานตั้งได้ครั้งเดียว (เฉพาะบัญชีที่ยังไม่มีรหัส) ตั้งแล้วแก้ไม่ได้
+    const settingEmp = !user?.empCode && cleanEmp.length > 0;
+    if (settingEmp && !validEmp(cleanEmp)) {
+      setAccError(`รหัสพนักงานต้องเป็นตัวเลข ${EMP_CODE_LENGTH} หลัก`);
+      return;
+    }
+    if (returnToPay && !user?.empCode && !settingEmp) {
+      setAccError(`กรอกรหัสพนักงาน ${EMP_CODE_LENGTH} หลักก่อนซื้อ Lucky Draw`);
+      return;
+    }
+    setAccBusy(true);
+    setAccError("");
+    const r = await api<{ user: User }>("/api/auth/me", "PATCH", {
+      name: accName.trim(),
+      phone: cleanPhone,
+      ...(settingEmp ? { empCode: cleanEmp } : {}),
+    });
+    setAccBusy(false);
+    if (!r.ok) {
+      setAccError(r.error);
+      return;
+    }
+    applyUser(r.data.user);
+    setAccError("");
+    setAccSaved(true);
+    // มากรอกรหัสพนักงานจากการกดชำระเงิน: ได้รหัสแล้วกลับไปหน้าชำระเงินต่อ
+    if (returnToPay && r.data.user.empCode && cartCount > 0) {
+      setReturnToPay(false);
+      setPayName(r.data.user.name);
+      setPayPhone(r.data.user.phone);
+      go("pay");
+    }
+  }
+
+  // เลือกรูปโปรไฟล์: ตรวจไฟล์ แล้วเปิดหน้าต่างให้ผู้ใช้ปรับตำแหน่ง (ยังไม่อัปโหลดจนกว่าจะกดบันทึก)
+  function pickAvatarFile(file: File) {
+    if (avatarBusy) return;
+    setAvatarError("");
+    if (!file.type.startsWith("image/")) {
+      setAvatarError("เลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setAvatarError("รูปใหญ่เกินไป เลือกรูปอื่น");
+      return;
+    }
+    setAvatarDraft(file);
+  }
+
+  // อัปโหลดรูปโปรไฟล์ (รูปที่ปรับแล้ว): เซิร์ฟเวอร์ครอปจัตุรัส 512×512 แล้วเก็บลง Drive โฟลเดอร์ profile
+  // คืน true เมื่อบันทึกสำเร็จ
+  async function uploadAvatarFile(file: File): Promise<boolean> {
+    if (avatarBusy) return false;
+    setAvatarError("");
+    setAvatarBusy(true);
     try {
-      const res = await fetch("/api/admin/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: pw }),
-      });
+      const fd = new FormData();
+      fd.append("avatar", await shrinkImage(file));
+      const res = await fetch("/api/profile/avatar", { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        setAvatarDraft(null);
+        needLogin("profile");
+        return false;
+      }
       if (!res.ok) {
-        setPwErr(data.error ?? "เข้าสู่ระบบไม่สำเร็จ");
-      } else {
-        setPw("");
-        await load();
+        setAvatarError(data.error ?? "อัปโหลดรูปไม่สำเร็จ ลองใหม่อีกครั้ง");
+        return false;
       }
+      setUser((prev) => (prev ? { ...prev, avatarAt: data.avatarAt as string } : prev));
+      return true;
     } catch {
-      setPwErr("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้");
+      setAvatarError("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
+      return false;
+    } finally {
+      setAvatarBusy(false);
     }
-    setPwBusy(false);
   }
 
-  /* ---------- พลุ ---------- */
-  const fireworks = useCallback(() => {
-    const cv = canvasRef.current;
-    if (!cv) return;
-    const ctx = cv.getContext("2d");
-    if (!ctx) return;
-    cancelAnimationFrame(fwRaf.current);
-    fwActive.current = true;
-
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const W = window.innerWidth;
-    const H = window.innerHeight;
-    cv.width = W * dpr;
-    cv.height = H * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    type P = { x: number; y: number; vx: number; vy: number; life: number; color: string };
-    const ps: P[] = [];
-    const colors = ["#ffd54a", "#ff4d4d", "#4dd2ff", "#7dff6b", "#ff7ad9", "#ffffff", "#ffb300"];
-    let nextBurst = 0;
-
-    const burst = () => {
-      const cx = W * (0.15 + Math.random() * 0.7);
-      const cy = H * (0.12 + Math.random() * 0.4);
-      const color = colors[Math.floor(Math.random() * colors.length)];
-      const n = 70 + Math.floor(Math.random() * 40);
-      for (let i = 0; i < n; i++) {
-        const a = Math.random() * Math.PI * 2;
-        const sp = 1.5 + Math.random() * 4.5;
-        ps.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, color });
-      }
-    };
-
-    const frame = (t: number) => {
-      // ค่อย ๆ จางของเดิมให้เกิดรอยหาง
-      ctx.globalCompositeOperation = "destination-out";
-      ctx.fillStyle = "rgba(0,0,0,0.22)";
-      ctx.fillRect(0, 0, W, H);
-      ctx.globalCompositeOperation = "lighter";
-
-      if (fwActive.current && t >= nextBurst) {
-        burst();
-        nextBurst = t + 280 + Math.random() * 350;
-      }
-      for (let i = ps.length - 1; i >= 0; i--) {
-        const p = ps[i];
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vy += 0.045;
-        p.vx *= 0.99;
-        p.life -= 0.011;
-        if (p.life <= 0) {
-          ps.splice(i, 1);
-          continue;
-        }
-        ctx.globalAlpha = p.life;
-        ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 2.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-
-      if (fwActive.current || ps.length > 0) fwRaf.current = requestAnimationFrame(frame);
-      else {
-        ctx.globalCompositeOperation = "source-over";
-        ctx.clearRect(0, 0, W, H);
-      }
-    };
-    fwRaf.current = requestAnimationFrame(frame);
-  }, []);
-
-  /* ---------- พลุกระดาษสีทอง ---------- */
-  // ยิงจากมุมล่างซ้าย/ขวา + กลางจอ แล้วโปรยจากด้านบนต่อเรื่อย ๆ จนกว่าจะปิดการ์ดผู้ถูกรางวัล (fwActive = false)
-  const confetti = useCallback(() => {
-    const cv = confettiRef.current;
-    if (!cv) return;
-    const ctx = cv.getContext("2d");
-    if (!ctx) return;
-    cancelAnimationFrame(cfRaf.current);
-
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const W = window.innerWidth;
-    const H = window.innerHeight;
-    cv.width = W * dpr;
-    cv.height = H * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    type C = { x: number; y: number; vx: number; vy: number; w: number; h: number; rot: number; vr: number; ph: number; color: string };
-    const ps: C[] = [];
-    const colors = ["#ffd54a", "#ffc83d", "#ffe27a", "#fff3b0", "#e0a010", "#b8860b", "#fff6c9"];
-    const spawn = (x: number, y: number, vx: number, vy: number) =>
-      ps.push({
-        x,
-        y,
-        vx,
-        vy,
-        w: 6 + Math.random() * 8,
-        h: 10 + Math.random() * 10,
-        rot: Math.random() * Math.PI * 2,
-        vr: (Math.random() - 0.5) * 0.35,
-        ph: Math.random() * Math.PI * 2,
-        color: colors[Math.floor(Math.random() * colors.length)],
-      });
-
-    for (let i = 0; i < 90; i++) {
-      spawn(W * 0.02, H * 0.95, 6 + Math.random() * 9, -(12 + Math.random() * 12));
-      spawn(W * 0.98, H * 0.95, -(6 + Math.random() * 9), -(12 + Math.random() * 12));
-    }
-    for (let i = 0; i < 60; i++) spawn(W * 0.5, H * 0.3, (Math.random() - 0.5) * 16, -(4 + Math.random() * 10));
-
-    let nextRain = 0;
-    const frame = (t: number) => {
-      ctx.clearRect(0, 0, W, H);
-      if (fwActive.current && t >= nextRain) {
-        for (let k = 0; k < 4; k++) spawn(Math.random() * W, -20, (Math.random() - 0.5) * 2, 1 + Math.random() * 2);
-        nextRain = t + 60;
-      }
-      for (let i = ps.length - 1; i >= 0; i--) {
-        const c = ps[i];
-        c.vx *= 0.992;
-        c.vy = Math.min(c.vy + 0.22, 5);
-        c.x += c.vx + Math.sin(c.ph) * 0.6;
-        c.y += c.vy;
-        c.rot += c.vr;
-        c.ph += 0.08;
-        if (c.y > H + 30) {
-          ps.splice(i, 1);
-          continue;
-        }
-        ctx.save();
-        ctx.translate(c.x, c.y);
-        ctx.rotate(c.rot);
-        ctx.scale(1, Math.cos(c.ph * 1.3)); // พลิกวูบวาบเหมือนกระดาษ
-        ctx.fillStyle = c.color;
-        ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
-        ctx.restore();
-      }
-      if (fwActive.current || ps.length > 0) cfRaf.current = requestAnimationFrame(frame);
-      else ctx.clearRect(0, 0, W, H);
-    };
-    cfRaf.current = requestAnimationFrame(frame);
-  }, []);
-
-  /* ---------- สุ่ม ---------- */
-  // เครื่องสะดุ้งแวบเดียว + ไฟรั่ว (level ยิ่งสูงยิ่งแรง)
-  function kickMachine(level: number) {
-    setHeat(level);
-    setKick((n) => n + 1);
-    setZapOn(true);
-    if (zapTimer.current) clearTimeout(zapTimer.current);
-    zapTimer.current = setTimeout(() => setZapOn(false), 750);
+  // กดบันทึกในหน้าต่างปรับรูป: อัปโหลดสำเร็จแล้วค่อยปิดหน้าต่าง
+  async function saveAvatarDraft(file: File) {
+    const ok = await uploadAvatarFile(file);
+    if (ok) setAvatarDraft(null);
   }
 
-  function finish(ws: Winner[], remaining: number) {
-    const w = ws[0];
-    spinningRef.current = false;
-    seqRef.current += 1;
-    stopSpin(); // เลขหลักสุดท้ายหยุดแล้ว หยุดเสียงสุ่ม
-    setSpinning(false);
-    // ผลออกแล้ว: ค่อย ๆ ซูมกลับเป็นปกติอย่างนุ่มนวล
-    timersRef.current.push(setTimeout(() => setZoom(false), 900));
-    setWinner(w);
-    setBatchWin(ws);
-    setHiddenCodes(ws.map((x) => x.code)); // ซ่อนแถวไว้ก่อน จนกว่าการ์ดจะลอยมาถึงรายชื่อ
-    setPopCodes([]);
-    setPool((p) => p.filter((t) => !ws.some((x) => x.code === t.code))); // ตัดตั๋วที่ถูกออกจากโหล
-    setTotal(remaining);
-    setWinners((prev) => [...[...ws].reverse(), ...prev]); // รายชื่อเรียงใหม่สุดก่อน (คนที่สุ่มได้ทีหลังอยู่บน)
-    setWinnerClosing(false);
-    fireworks(); // พลุ + หน้าจอทองค้างอยู่จนกว่าจะกดปิดการ์ด (closeWinner)
-    confetti(); // กระดาษสีทอง
-    playVictory(); // เสียงประกาศผู้ถูกรางวัล (victory.mp3)
-    setShake(true); // ผลออกปุ๊บ จอสั่น
-    timersRef.current.push(setTimeout(() => setShake(false), 1300));
-    setGoldFlash(true);
-  }
-
-  // ปิดการ์ดผู้ถูกรางวัล: หยุดยิงพลุ แล้วการ์ดลอยเข้าไปที่รายชื่อผู้ถูกรางวัล (เด้งเล็กน้อย) พร้อมจางหน้าจอทอง
-  function closeWinner() {
-    if (winnerClosing || !winner) return;
-    fwActive.current = false;
-    sfx.whoosh();
-    const codes = batchWin.length > 0 ? batchWin.map((x) => x.code) : [winner.code];
-    const card = winnerCardRef.current;
-    const list = winnerListRef.current;
-    if (card && list) {
-      // วัดตำแหน่งการ์ดกับกล่องรายชื่อ แล้วส่งระยะ/ขนาดปลายทางให้แอนิเมชัน pdCardFly ผ่านตัวแปร CSS
-      const c = card.getBoundingClientRect();
-      const l = list.getBoundingClientRect();
-      const tx = l.left + l.width / 2;
-      const ty = l.top + Math.min(70, l.height / 2);
-      const fs = Math.min(0.5, Math.max(0.15, (l.width * 0.7) / c.width));
-      card.style.setProperty("--fx", `${tx - (c.left + c.width / 2)}px`);
-      card.style.setProperty("--fy", `${ty - (c.top + c.height / 2)}px`);
-      card.style.setProperty("--fs", String(fs));
-    }
-    setWinnerClosing(true);
-    timersRef.current.push(
-      // การ์ดลอยมาถึง: แถวของผู้ถูกรางวัลเด้งขึ้นในรายชื่อ
-      setTimeout(() => {
-        setHiddenCodes([]);
-        setPopCodes(codes);
-        sfx.pop();
-      }, 640),
-      setTimeout(() => {
-        setWinner(null);
-        setGoldFlash(false);
-        setWinnerClosing(false);
-      }, 950),
-    );
-  }
-
-  async function spin() {
-    if (spinning || total === 0) return;
-    timersRef.current.forEach(clearTimeout);
-    timersRef.current = [];
-    fwActive.current = false;
-    stopVictory(); // กันเสียงชนะรอบก่อนค้างอยู่
-    setWinnerClosing(false);
-    setHiddenCodes([]);
-    setPopCodes([]);
-    setShake(false);
-    setShowSettings(false);
-    cancelAnimationFrame(fwRaf.current);
-    cancelAnimationFrame(cfRaf.current);
-    confettiRef.current?.getContext("2d")?.clearRect(0, 0, confettiRef.current.width, confettiRef.current.height);
-    canvasRef.current?.getContext("2d")?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-
-    setNote("");
-    setWinner(null);
-    setBatchWin([]);
-    setGoldFlash(false);
-    spinningRef.current = true;
-    seqRef.current += 1;
-    setSpinning(true);
-    playSpin(); // เสียงสุ่ม (spin.mp3) วนลูป
-    // วัดตำแหน่งตัวเลขก่อนซูม แล้วเลื่อนให้ตัวเลขมาอยู่กลางจอ
-    const wEl = winRef.current;
-    const rEl = rowRef.current;
-    if (wEl && rEl) {
-      const a = wEl.getBoundingClientRect();
-      const b = rEl.getBoundingClientRect();
-      const cx = a.left + a.width / 2;
-      const cy = a.top + a.height / 2;
-      setZoomT({
-        x: window.innerWidth / 2 - cx,
-        y: window.innerHeight * ZOOM_CENTER_Y - cy,
-        ox: ((cx - b.left) / b.width) * 100,
-        oy: ((cy - b.top) / b.height) * 100,
-      });
-    }
-    setZoom(true);
-    setHeat(0);
-    setKick(0);
-    setZapOn(false);
-    setStopped(Array(EMP_LEN).fill(false));
-
-    // เซิร์ฟเวอร์เลือกผู้ถูกรางวัลและตัดตั๋วออกจากโหลก่อน ฝั่งหน้าเว็บแค่เล่นแอนิเมชันให้ตรงผล
-    const t0 = Date.now();
-    const want = Math.max(1, Math.min(batch, MAX_BATCH, total)); // จำนวนที่ตั้งค่าไว้ (ไม่เกินตั๋วที่เหลือในโหล)
-    const res = await fetch("/api/spin", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ count: want }),
-    }).catch(() => null);
-    const data = res ? await res.json().catch(() => ({})) : {};
-
-    if (!res || !res.ok) {
-      spinningRef.current = false;
-      seqRef.current += 1;
-      stopSpin();
-      setSpinning(false);
-      setZoom(false);
-      setHeat(0);
-      setDigits(Array(EMP_LEN).fill("-"));
-      setNote(data.error ?? "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่อีกครั้ง");
-      if (res?.status === 401 || res?.status === 403) setGate("locked");
-      if (res?.status === 404) load();
+  // ลบรูปโปรไฟล์ กลับไปใช้ตัวอักษรย่อ
+  async function removeAvatar() {
+    if (avatarBusy) return;
+    setAvatarBusy(true);
+    setAvatarError("");
+    const r = await api("/api/profile/avatar", "DELETE");
+    setAvatarBusy(false);
+    if (!r.ok) {
+      if (r.status === 401) return needLogin("profile");
+      setAvatarError(r.error);
       return;
     }
-
-    // เซิร์ฟเวอร์ส่ง winners (หลายคน) มา / เผื่อเวอร์ชันเก่าส่ง winner คนเดียว
-    const list: Winner[] = Array.isArray(data.winners) && data.winners.length > 0 ? data.winners : [data.winner as Winner];
-    const w = list[0];
-    const remaining = Number(data.remaining ?? 0);
-    // ให้ตัวเลขสปินครบ FIRST_STOP_MS (นับจากกดเริ่ม) ก่อนเริ่มหยุดหลักแรก
-    const wait = Math.max(0, FIRST_STOP_MS - (Date.now() - t0));
-
-    // สุ่มหลายคน: เครื่องทำงานรวดเดียวแรงขึ้นเรื่อย ๆ แล้ว "ตู้ม" ทุกหลักหยุดพร้อมกัน โชว์ทุกรายชื่อทีเดียว
-    if (list.length > 1) {
-      const left = Math.max(0, BATCH_SPIN_MS - (Date.now() - t0));
-      // ใกล้ออกผล: เครื่องโยกแรงขึ้นเป็นช่วง ๆ + ไฟรั่ว
-      [0.55, 0.7, 0.82, 0.92].forEach((f, k) => {
-        timersRef.current.push(
-          setTimeout(() => {
-            sfx.zap(k + 2);
-            kickMachine(k + 2);
-          }, left * f),
-        );
-      });
-      timersRef.current.push(
-        setTimeout(() => {
-          sfx.hit();
-          sfx.zap(EMP_LEN);
-          playNumber();
-          kickMachine(EMP_LEN); // สั่นแวบเดียวตอนตู้ม
-          setDigits(Array(EMP_LEN).fill("x")); // หลายคน: ไม่โชว์รหัสคนใดคนหนึ่ง
-          setStopped(Array(EMP_LEN).fill(true));
-          finish(list, remaining);
-        }, left),
-      );
-      return;
-    }
-
-    // หยุดทีละหลักจากซ้ายไปขวา (3 หลักสุดท้ายรัวเร็วขึ้น)
-    const fastFrom = Math.max(1, EMP_LEN - FAST_LAST);
-    for (let i = 0; i < EMP_LEN; i++) {
-      timersRef.current.push(
-        setTimeout(
-          () => {
-            playNumber(); // เสียงเลขหยุด (number.mp3) ทุกหลัก
-            if (i >= fastFrom) sfx.hit(); // ตู้ม ตู้ม ตู้ม
-            kickMachine(i + 1); // หลักที่หยุดยิ่งหลังยิ่งสั่นแรงขึ้น (สั่นแวบเดียว) + ไฟรั่ว
-            sfx.zap(i + 1);
-            setDigits((prev) => {
-              const n = [...prev];
-              n[i] = w.empCode[i] ?? "0";
-              return n;
-            });
-            setStopped((prev) => {
-              const n = [...prev];
-              n[i] = true;
-              return n;
-            });
-            if (i === EMP_LEN - 1) finish([w], remaining);
-          },
-          wait + Math.min(i, fastFrom) * STEP_MS + Math.max(0, i - fastFrom) * FAST_STEP_MS,
-        ),
-      );
-    }
+    setUser((prev) => (prev ? { ...prev, avatarAt: null } : prev));
   }
 
-  // กดเริ่มสุ่ม: ค้อนทุบปุ่ม → จอสั่น + ปุ่มหักเป็น 2 ท่อน → เริ่มสุ่ม (ปุ่มกลับเป็นปกติเมื่อสุ่มเสร็จ)
-  function pressSpin() {
-    if (spinning || hammer || total === 0) return;
-    fxRef.current.forEach(clearTimeout);
-    prepareSpin(); // เตรียมไฟล์เสียงตอนผู้ใช้กด (ผ่านนโยบาย autoplay ของเบราว์เซอร์)
-    prepareVictory();
-    sfx.swing(); // สร้าง/ปลุก AudioContext ตอนผู้ใช้กด + เสียงค้อนเหวี่ยง
-    setHammer(true);
-    fxRef.current = [
-      setTimeout(() => {
-        sfx.hit();
-        setQuake(true);
-        spin();
-      }, HIT_MS),
-      setTimeout(() => setQuake(false), HIT_MS + 860),
-      setTimeout(() => setHammer(false), 1100),
-    ];
+  // โปรไฟล์: มีอะไรเปลี่ยนจากข้อมูลบัญชีไหม (ใช้เปิดปุ่มบันทึก / ยกเลิก)
+  const profileDirty =
+    !!user &&
+    (accName.trim() !== user.name ||
+      accPhone.replace(/\D/g, "") !== user.phone ||
+      (!user.empCode && accEmp.length > 0));
+  const profileRows: [string, string][] = [];
+  if (user) {
+    profileRows.push(["รหัสพนักงาน", user.empCode ?? "ยังไม่ได้ระบุ"]);
+    // บริษัท / แผนก (สำนักงานใหญ่) / สาขา (หน้าร้าน) ที่เลือกตอนสมัคร
+    const cid = user.companyId ?? null;
+    const company = cid ? getCompany(cid) : undefined;
+    const dept =
+      cid && user.departmentId
+        ? departmentsOf(cid).find((d) => d.id === user.departmentId)
+        : undefined;
+    const branch =
+      cid && user.branchId ? branchesOf(cid).find((b) => b.id === user.branchId) : undefined;
+    if (company) profileRows.push(["บริษัท", company.name]);
+    if (dept) profileRows.push(["แผนก", dept.name]);
+    if (branch) profileRows.push(["สาขา", branchFullLabel(branch)]);
   }
 
-  // กด Space: ยังไม่มีผู้ถูกรางวัล = เริ่มสุ่ม / ผลออกแล้ว = ปิดการ์ดผู้ถูกรางวัล (พิธีกรไม่ต้องแตะเมาส์)
-  // (ไม่ใส่ deps เพื่อให้ได้ state ล่าสุดทุกครั้งที่เรนเดอร์)
+  const badges: Badges = { tickets: readyOrders.length };
+  // หน้า auth เป็นกรอบเต็มจอของตัวเอง (AuthShell) ไม่แสดงแถบเมนูล่าง
+  const showNav = view === "home" || view === "buy" || view === "tickets" || view === "profile";
+  const navView: View = view === "pay" || view === "qr" || view === "done" ? "buy" : view;
+
+  const inputCls =
+    "mt-1 w-full rounded-xl border border-white/15 bg-[#2a2a2a] px-4 py-3 text-base text-white outline-none focus:border-white/60 focus:ring-2 focus:ring-white/20";
+
+  const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(EVENT.place)}`;
+
+  const sheetDef = sheet ? defOf(sheet) : null;
+  // ตั๋วทั้งหมดของประเภทนี้ (ทั้งที่ยังไม่ใช้และใช้แล้ว): ยังไม่ใช้ขึ้นก่อน (ถูกรางวัลก่อน) ตั๋วที่ใช้แล้วอยู่ท้าย ค้างอยู่ในหน้าต่างนี้ถาวร
+  const sheetOrders = sheet
+    ? orders
+        .filter((o) => o.ticket === sheet)
+        .sort(
+          (a, b) =>
+            Number(a.used === true && !settling.includes(a.code)) -
+              Number(b.used === true && !settling.includes(b.code)) ||
+            Number(b.won === true) - Number(a.won === true),
+        )
+    : [];
+  const sheetReadyCount = sheetOrders.filter((o) => !o.used).length;
+  // ตั๋วเข้าซุ้ม: แยกกลุ่ม "ตั๋วเล่นซุ้ม (มีมูลค่า)" กับ "ตั๋วรับตั๋วกระดาษ (ไม่มีมูลค่า)" ให้ชัด กดผิดใบยาก
+  const sheetGroups: { key: "value" | "paper" | "all"; list: Order[] }[] =
+    sheetDef?.id === "booth"
+      ? [
+          { key: "value", list: sheetOrders.filter((o) => o.part !== "paper") },
+          { key: "paper", list: sheetOrders.filter((o) => o.part === "paper") },
+        ]
+      : [{ key: "all", list: sheetOrders }];
+
+  // ตั๋วที่เปิดบาร์โค้ดเต็มจออยู่
+  const barcodeOrder = barcodeCode ? (orders.find((o) => o.code === barcodeCode) ?? null) : null;
+
+  // ปิดบาร์โค้ดเต็มจออัตโนมัติ: หน้าต่างแสดงตั๋วปิดแล้ว หรือตั๋วใบนั้นถูกสแกนแล้ว (จะขึ้นตราประทับในหน้าต่างแสดงตั๋วแทน)
+  // ตั๋วถูกยิง: เฟดหน้าบาร์โค้ดออก 0.3 วิ แล้วถอดออก (หน้าต่างปิดไปแล้วถอดทันที)
   useEffect(() => {
-    const isTyping = (el: HTMLElement | null) =>
-      !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === "Escape" && showSettings) {
-        setShowSettings(false);
-        return;
-      }
-      if (e.code !== "Space") return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (isTyping(e.target as HTMLElement | null)) return;
-      e.preventDefault(); // กันหน้าเลื่อน / กันปุ่มที่โฟกัสอยู่ถูกกดซ้ำ
-      if (e.repeat || gate !== "ok") return;
-      if (showSettings) {
-        setShowSettings(false); // กด Space ตอนเปิดหน้าตั้งค่า = ปิดหน้าตั้งค่า (ไม่เริ่มสุ่ม)
-        return;
-      }
-      (document.activeElement as HTMLElement | null)?.blur?.();
-      if (winner && !spinning) {
-        if (!winnerClosing) closeWinner();
-      } else if (!winner && !spinning) {
-        pressSpin();
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || isTyping(e.target as HTMLElement | null)) return;
-      e.preventDefault(); // Firefox กดปุ่มด้วย Space ตอนปล่อยปุ่ม
-    };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-    };
+    if (!barcodeCode) {
+      setBarcodeLeaving(false);
+      return;
+    }
+    if (!sheet) {
+      setBarcodeCode(null);
+      return;
+    }
+    if (!orders.some((o) => o.code === barcodeCode && o.used)) {
+      setBarcodeLeaving(false);
+      return;
+    }
+    setBarcodeLeaving(true);
+    const t = setTimeout(() => {
+      setBarcodeCode(null);
+      setBarcodeLeaving(false);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [barcodeCode, sheet, orders]);
+
+  // จับจังหวะที่ตั๋วเปลี่ยนจากยังไม่ใช้ → ใช้แล้ว: ให้ค้างตำแหน่งเดิม 1.8 วิ (เห็นตราประทับ + ซุ้ม) แล้วค่อยเลื่อนลงไปอยู่ท้ายรายการ
+  useEffect(() => {
+    const fresh: string[] = [];
+    for (const o of orders) {
+      if (prevUsedRef.current.get(o.code) === false && o.used) fresh.push(o.code);
+      prevUsedRef.current.set(o.code, o.used === true);
+    }
+    if (fresh.length === 0) return;
+    setSettling((p) => Array.from(new Set([...p, ...fresh])));
+    setTimeout(() => setSettling((p) => p.filter((c) => !fresh.includes(c))), 1800);
+  }, [orders]);
+
+  // แอนิเมชันตั๋วเลื่อนไปตำแหน่งใหม่ (FLIP): จำตำแหน่งเดิมของแต่ละใบ แล้วไหลจากที่เก่าไปที่ใหม่
+  useLayoutEffect(() => {
+    if (!sheet) {
+      flipPos.current = new Map();
+      return;
+    }
+    const next = new Map<string, number>();
+    flipRefs.current.forEach((el, code) => next.set(code, el.offsetTop));
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!reduce) {
+      flipRefs.current.forEach((el, code) => {
+        const prev = flipPos.current.get(code);
+        const cur = next.get(code);
+        if (prev === undefined || cur === undefined) return;
+        const dy = prev - cur;
+        if (Math.abs(dy) < 2) return;
+        el.style.transition = "none";
+        el.style.transform = `translateY(${dy}px)`;
+        void el.offsetHeight;
+        el.style.transition = "transform 0.7s cubic-bezier(0.22, 1, 0.36, 1)";
+        el.style.transform = "";
+      });
+    }
+    flipPos.current = next;
   });
 
-  // แสดงตั๋วล่าสุด SHOW_MAX ใบ (ตั๋วที่เพิ่งเข้าโหลอยู่ท้ายรายการ จึงเห็นตอนหล่นลงมา)
-  const shown = useMemo(() => pool.slice(-SHOW_MAX), [pool]);
-
-  const shell = `min-h-screen overflow-x-clip bg-[#141414] text-white [color-scheme:dark] ${appFont.className}`;
-
-  if (gate === "locked") {
-    return (
-      <div className={shell}>
-        <main className="mx-auto max-w-md px-5 py-16 text-center">
-          <h1 className="text-2xl font-bold">Lucky Draw</h1>
-          <p className="mt-3 text-sm text-white/60">กรอกรหัสผ่าน admin เพื่อเข้าใช้งาน</p>
-          <form onSubmit={unlock} className="mt-5">
-            <input
-              type="password"
-              value={pw}
-              onChange={(e) => setPw(e.target.value)}
-              placeholder="รหัสผ่าน admin"
-              autoComplete="current-password"
-              autoFocus
-              maxLength={200}
-              className="min-h-12 w-full rounded-xl border border-white/15 bg-[#2a2a2a] px-4 py-3 text-base text-white outline-none focus:border-white/60 focus:ring-2 focus:ring-white/20"
-            />
-            {pwErr && (
-              <p role="alert" className="mt-3 text-sm font-medium text-red-500">
-                {pwErr}
-              </p>
-            )}
-            <button
-              type="submit"
-              disabled={pwBusy || pw.length === 0}
-              className="mt-4 min-h-12 w-full rounded-2xl bg-[#e50914] py-3 text-sm font-bold text-white disabled:opacity-60"
-            >
-              {pwBusy ? "กำลังตรวจสอบ..." : "เข้าสู่หน้าสุ่มรางวัล"}
-            </button>
-          </form>
-        </main>
-      </div>
-    );
-  }
-
-  if (gate !== "ok") {
-    return (
-      <div className={shell}>
-        <main className="mx-auto max-w-md px-5 py-16 text-center">
-          <h1 className="text-2xl font-bold">Lucky Draw</h1>
-          <p className="mt-3 text-sm text-white/60">{note || "กำลังโหลด..."}</p>
-        </main>
-      </div>
-    );
-  }
-
-  const idle = !spinning && !winner;
-  const maxBatch = Math.max(1, Math.min(MAX_BATCH, total));
-  const spinLabel = spinning
-    ? "กำลังสุ่ม..."
-    : winner
-      ? "สุ่มรอบถัดไป"
-      : batch > 1
-        ? `สุ่ม ${Math.min(batch, maxBatch)} คน`
-        : "เริ่มสุ่ม";
-  const btnLabel = total === 0 ? "โหลว่างเปล่า" : spinLabel;
-  const latest = winners[0] ?? null; // ผู้ถูกรางวัลล่าสุด (แสดงบนตู้หลังปิดการ์ด)
+  // ระยะเว้นด้านล่างของหน้า: หน้าซื้อ/ชำระเงินมีแถบสรุปยอดติดขอบล่าง ต้องเว้นที่ให้ทั้งมือถือและคอมพิวเตอร์
+  // หน้า auth ซ่อน <main> ไว้ (ฟอร์มวาดนอก <main> ทับเต็มจอ)
+  const mainPad =
+    view === "auth"
+      ? "hidden"
+      : view === "buy" || view === "pay"
+        ? "pb-64 md:pb-48"
+        : showNav
+          ? "pb-28 md:pb-16"
+          : view === "done" || view === "qr"
+            ? "pb-10 md:pb-16"
+            : "pb-64 md:pb-16";
 
   return (
-    <div className={`${shell} pd-room flex flex-col lg:h-screen lg:overflow-hidden`}>
+    <div
+      style={{ touchAction: "pan-x pan-y" }}
+      className={`min-h-screen overflow-x-clip bg-[#141414] text-white [color-scheme:dark] [&_button:disabled]:cursor-not-allowed [&_button:not(:disabled)]:cursor-pointer ${appFont.className}`}
+    >
+      {/* แอนิเมชันกรอบทองวิบวับ + ออร่า (ตั๋วที่ถูกรางวัล + ปุ่มเมนู "ตั๋วของฉัน"), พื้นตั๋ววิบวับตามสีตั๋ว (ไม่มีกรอบ ไม่มีออร่า) และเอฟเฟคตั๋วถูกสแกน (สีเทา + ตราประทับค้างถาวร) */}
       <style>{`
-        @keyframes pdDrop {
-          0% { transform: translateY(-460px) rotate(calc(var(--rot) - 140deg)); opacity: 0; }
-          12% { opacity: 1; }
-          100% { transform: translateY(0) rotate(var(--rot)); opacity: 1; }
-        }
-        @keyframes pdShake {
-          0%, 100% { transform: translate(0, 0) rotate(0deg); }
-          20% { transform: translate(-3px, 1px) rotate(-0.6deg); }
-          40% { transform: translate(3px, -1px) rotate(0.6deg); }
-          60% { transform: translate(-2px, -1px) rotate(-0.4deg); }
-          80% { transform: translate(2px, 1px) rotate(0.4deg); }
-        }
-        @keyframes pdStrip {
-          0% { transform: translateY(0); }
-          100% { transform: translateY(-50%); }
-        }
-        @keyframes pdPop {
-          0% { transform: scale(1.5); }
-          60% { transform: scale(0.92); }
-          100% { transform: scale(1); }
-        }
         @keyframes pdGold {
           0% { background-position: 0% 50%; }
           100% { background-position: 200% 50%; }
         }
+        @keyframes pdSheen {
+          0% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
+        }
         @keyframes pdGlow {
-          0%, 100% { box-shadow: 0 0 18px 2px rgba(255, 200, 40, 0.55), 0 0 40px 6px rgba(255, 170, 0, 0.3); }
-          50% { box-shadow: 0 0 30px 6px rgba(255, 225, 90, 0.95), 0 0 70px 14px rgba(255, 190, 0, 0.55); }
-        }
-        @keyframes pdSlideUp {
-          0% { transform: translateY(140%); opacity: 0; }
-          100% { transform: translateY(0); opacity: 1; }
-        }
-        @keyframes pdLive {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.25; }
-        }
-        @keyframes pdBulb {
-          0%, 100% { background: #fff0a0; box-shadow: 0 0 10px 3px rgba(255, 225, 100, 0.95); }
-          50% { background: #5a3a00; box-shadow: none; }
-        }
-        @keyframes pdLamp {
-          0%, 100% { filter: brightness(1.25); }
-          50% { filter: brightness(0.55); }
-        }
-        @keyframes pdJackpot {
-          0%, 100% { filter: brightness(1); }
-          50% { filter: brightness(1.3); }
-        }
-
-        .pd-room { background-color: #10131c; --pd-side: #172848; }
-
-        /* ซ่อนเมาส์เมื่อไม่ขยับเกิน 5 วินาที (ใส่ class ที่ body) */
-        .pd-nocursor,
-        .pd-nocursor * { cursor: none !important; }
-
-        /* ===== พื้นหลังเบลอ: ไฟร้านอาหารด้านหลัง (อยู่หลังทุกส่วน คลิกทะลุได้) ===== */
-        .pd-bokeh {
-          position: fixed;
-          inset: 0;
-          z-index: 0;
-          overflow: hidden;
-          pointer-events: none;
-          background:
-            radial-gradient(ellipse at 50% 0%, #3d1c14 0%, #1d0e13 45%, #0b0a12 100%);
-        }
-        .pd-bokeh::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          background: radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0) 40%, rgba(5, 4, 10, 0.65) 100%);
-        }
-        .pd-bokeh-dot {
-          position: absolute;
-          border-radius: 50%;
-          filter: blur(12px);
-          animation: pdBokeh 4.5s ease-in-out infinite alternate;
-        }
-        @keyframes pdBokeh {
-          from { transform: scale(0.88); }
-          to { transform: scale(1.12); }
-        }
-
-        /* ===== สไตล์ 2 มิติ เงาแข็งด้านล่าง: แดง / ทอง / กรมท่า ===== */
-        .pd-gold {
-          background: #ffc83d;
-          box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.5), inset 0 -3px 0 rgba(178, 125, 0, 0.55), 0 6px 0 #b27d00;
-        }
-        /* หัวตู้: ทองนูน + ความหนาด้านข้างซ้าย (สีเดียวกันทั้งหมด ผ่านตัวแปร --pd-side) */
-        .pd-crown {
-          box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.5), inset 0 -3px 0 rgba(178, 125, 0, 0.55), 0 6px 0 #b27d00,
-            -4px 10px 0 var(--pd-side), -8px 14px 0 var(--pd-side), -12px 18px 0 var(--pd-side), -16px 22px 0 var(--pd-side),
-            -20px 26px 0 var(--pd-side), -24px 30px 0 var(--pd-side), -28px 34px 0 var(--pd-side), -32px 38px 0 var(--pd-side),
-            -36px 42px 0 var(--pd-side), -40px 46px 0 var(--pd-side), -44px 50px 0 var(--pd-side), -48px 54px 0 var(--pd-side),
-            -52px 58px 0 var(--pd-side), -56px 62px 0 var(--pd-side), -60px 66px 0 var(--pd-side), -64px 70px 0 var(--pd-side);
-        }
-        /* ตัวตู้สีแดง นูน + ความหนาด้านข้างซ้าย (สีเดียวกันทั้งหมด) */
-        .pd-body {
-          background: #e0243c;
-          border: 4px solid #8f0f1a;
-          box-shadow: inset 0 6px 0 rgba(255, 255, 255, 0.2), inset 0 -12px 0 rgba(0, 0, 0, 0.22), 0 8px 0 #8f0f1a,
-            -4px 12px 0 var(--pd-side), -8px 16px 0 var(--pd-side), -12px 20px 0 var(--pd-side), -16px 24px 0 var(--pd-side),
-            -20px 28px 0 var(--pd-side), -24px 32px 0 var(--pd-side), -28px 36px 0 var(--pd-side), -32px 40px 0 var(--pd-side),
-            -36px 44px 0 var(--pd-side), -40px 48px 0 var(--pd-side), -44px 52px 0 var(--pd-side), -48px 56px 0 var(--pd-side),
-            -52px 60px 0 var(--pd-side), -56px 64px 0 var(--pd-side), -60px 68px 0 var(--pd-side), -64px 72px 0 var(--pd-side);
-        }
-        /* เลขในวงล้อ: กล่องนูนเหมือนปุ่ม */
-        .pd-reel {
-          background: linear-gradient(180deg, #ffffff, #e8ecf4);
-          border: 2px solid #f4f6fb;
-          box-shadow: inset 0 3px 0 #ffffff, inset 0 -6px 0 #c9d0dc, -9px 0 0 #7b8499;
-        }
-        .pd-ticket {
-          box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), 0 3px 0 #3a0a10;
-        }
-        /* ป้ายหัวตู้ */
-        .pd-marquee {
-          background: #3a0d16;
-          box-shadow: inset 0 -6px 0 rgba(0, 0, 0, 0.35);
-        }
-        .pd-title {
-          color: #ffe27a;
-          text-shadow: -0.05em 0 0 #e0243c;
-        }
-        .pd-plate-green {
-          background: #58cc02;
-          box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.4), inset 0 -3px 0 rgba(0, 0, 0, 0.2), -8px 0 0 #3a8f00;
-        }
-        .pd-bezel {
-          background: #0a1122;
-          box-shadow: inset 0 6px 0 rgba(0, 0, 0, 0.5);
-        }
-        .pd-drum { box-shadow: inset 0 -6px 0 rgba(0, 0, 0, 0.14); }
-        .pd-digit { font-size: clamp(1.4rem, 7vw, 3.4rem); }
-        @media (min-width: 1024px) {
-          .pd-digit { font-size: clamp(2.2rem, 3.8vw, 5rem); }
-        }
-        .pd-tray {
-          background: #2a0a12;
-          box-shadow: inset 0 6px 0 rgba(0, 0, 0, 0.45);
-        }
-        @keyframes pdShine {
-          0% { left: -45%; }
-          55%, 100% { left: 125%; }
-        }
-        @keyframes pdBtnPulse {
-          0%, 100% { filter: brightness(1) saturate(1); }
-          50% { filter: brightness(1.22) saturate(1.25); }
-        }
-        @keyframes pdLand {
-          0% { transform: translateY(-115%); }
-          55% { transform: translateY(9%); }
-          72% { transform: translateY(-4%); }
-          86% { transform: translateY(2%); }
-          100% { transform: translateY(0); }
-        }
-        @keyframes pdFlash {
-          0% { transform: scale(0.2); opacity: 1; }
-          100% { transform: scale(1.7); opacity: 0; }
-        }
-        .pd-btn-red {
-          background: linear-gradient(180deg, #ff7a7a 0%, #ff4b4b 48%, #ea3434 100%);
-          color: #fff;
-          letter-spacing: 0.05em;
-          text-shadow: 0 2px 0 #c0262d;
-          box-shadow: inset 0 4px 0 rgba(255, 255, 255, 0.4), inset 0 -4px 0 rgba(0, 0, 0, 0.18), -12px 0 0 #b01e26;
-          transition: transform 0.15s, box-shadow 0.06s, filter 0.15s;
-        }
-        .pd-btn-red:not(:disabled) { animation: pdBtnPulse 1.3s ease-in-out infinite; }
-        /* แสงวิบวับพาดผ่านปุ่ม */
-        .pd-btn-red:not(:disabled)::before {
-          content: "";
-          position: absolute;
-          top: -20%;
-          bottom: -20%;
-          left: -45%;
-          width: 28%;
-          background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.8), transparent);
-          transform: skewX(-20deg);
-          pointer-events: none;
-          animation: pdShine 2.2s ease-in-out infinite;
-        }
-        /* ประกายดาวกระพริบ */
-        .pd-btn-red:not(:disabled)::after {
-          content: "";
-          position: absolute;
-          inset: 0;
-          pointer-events: none;
-          background-image:
-            radial-gradient(circle at 12% 30%, #fff 0 2px, transparent 3px),
-            radial-gradient(circle at 80% 65%, #fff 0 2px, transparent 3px),
-            radial-gradient(circle at 55% 25%, #ffe9a3 0 1.5px, transparent 2.5px),
-            radial-gradient(circle at 30% 75%, #fff 0 1.5px, transparent 2.5px),
-            radial-gradient(circle at 92% 28%, #fff 0 1.5px, transparent 2.5px);
-          animation: pdTwinkle 0.8s ease-in-out infinite alternate;
-        }
-        .pd-btn-red:hover:not(:disabled) {
-          transform: scale(1.1);
-          filter: brightness(1.08);
-        }
-        .pd-btn-red:active:not(:disabled) {
-          transform: translateX(-10px) scale(1.1);
-          box-shadow: inset 0 4px 0 rgba(255, 255, 255, 0.3), inset 0 -2px 0 rgba(0, 0, 0, 0.18), -2px 0 0 #b01e26;
-        }
-        .pd-btn-red:disabled {
-          background: #3a3a44;
-          color: #8c8c96;
-          text-shadow: none;
-          box-shadow: inset 0 4px 0 rgba(255, 255, 255, 0.12), inset 0 -4px 0 rgba(0, 0, 0, 0.2), -12px 0 0 #26262d;
-        }
-
-        /* ===== ปุ่มหักเป็น 2 ท่อน (แสดงระหว่างสุ่ม พอสุ่มเสร็จกลับเป็นปุ่มปกติ) ===== */
-        @keyframes pdSnapL {
-          0% { transform: translate(0, 0) rotate(0deg); }
-          100% { transform: translate(-6px, 12px) rotate(13deg); }
-        }
-        @keyframes pdSnapR {
-          0% { transform: translate(0, 0) rotate(0deg); }
-          100% { transform: translate(6px, 12px) rotate(-13deg); }
-        }
-        .pd-half-wrap {
-          position: absolute;
-          inset: 0;
-          filter: drop-shadow(-7px 0 0 #b01e26);
-        }
-        .pd-half-l {
-          transform-origin: 0% 50%;
-          animation: pdSnapL 0.45s cubic-bezier(0.3, 1.5, 0.5, 1) forwards;
-        }
-        .pd-half-r {
-          transform-origin: 100% 50%;
-          animation: pdSnapR 0.45s cubic-bezier(0.3, 1.5, 0.5, 1) forwards;
-        }
-        .pd-half-face {
-          position: absolute;
-          inset: 0;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          border-radius: 1rem;
-          color: #fff;
-          letter-spacing: 0.05em;
-          text-shadow: 0 2px 0 #c0262d;
-          background: linear-gradient(180deg, #ff7a7a 0%, #ff4b4b 48%, #ea3434 100%);
-          box-shadow: inset 0 4px 0 rgba(255, 255, 255, 0.3), inset 0 -4px 0 rgba(0, 0, 0, 0.18);
-        }
-        /* รอยหักหยักตรงกลาง (2 ฝั่งต้องตรงกัน) */
-        .pd-half-l .pd-half-face {
-          clip-path: polygon(0 0, 52% 0, 46% 22%, 57% 45%, 44% 70%, 51% 100%, 0 100%);
-        }
-        .pd-half-r .pd-half-face {
-          clip-path: polygon(52% 0, 100% 0, 100% 100%, 51% 100%, 44% 70%, 57% 45%, 46% 22%);
-        }
-
-        /* ===== เลข 3 มิติ (ตัวเลขหนาแบบมีความลึก) ===== */
-        .pd-num3d {
-          color: #e5202e;
-          text-shadow: -0.015em -0.015em 0 #ff9aa2, 0.02em 0.025em 0 #b8141f, 0.04em 0.05em 0 #a0121d,
-            0.06em 0.075em 0 #8a0e18, 0.08em 0.1em 0 #6e0a12, 0.1em 0.125em 0 rgba(0, 0, 0, 0.3);
-        }
-
-        /* ===== ค้อนทุบปุ่ม + เศษปุ่มแตก + จอสั่น ===== */
-        @keyframes pdHammer {
-          0% { opacity: 0; transform: translate(150px, -160px) rotate(75deg); }
-          12% { opacity: 1; transform: translate(130px, -120px) rotate(66deg); animation-timing-function: cubic-bezier(0.7, 0, 1, 0.5); }
-          38% { transform: translate(0, 0) rotate(0deg); }
-          46% { transform: translate(0, 10px) rotate(-2deg); }
-          62% { opacity: 1; transform: translate(0, 0) rotate(0deg); }
-          100% { opacity: 0; transform: translate(50px, -150px) rotate(35deg); }
-        }
-        @keyframes pdShard {
-          0% { opacity: 1; transform: translate(-50%, -50%) rotate(0deg) scale(1); }
-          100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy) + 60px)) rotate(var(--dr)) scale(0.6); }
-        }
-        @keyframes pdQuake {
-          0%, 100% { transform: translate(0, 0) rotate(0deg); }
-          8% { transform: translate(-22px, 14px) rotate(-1.6deg); }
-          18% { transform: translate(20px, -16px) rotate(1.6deg); }
-          28% { transform: translate(-18px, -12px) rotate(-1.2deg); }
-          38% { transform: translate(16px, 14px) rotate(1deg); }
-          50% { transform: translate(-12px, 8px) rotate(-0.7deg); }
-          62% { transform: translate(9px, -7px) rotate(0.4deg); }
-          76% { transform: translate(-5px, 4px); }
-          90% { transform: translate(2px, -2px); }
-        }
-        .pd-hammer {
-          position: absolute;
-          left: 50%;
-          top: 50%;
-          width: 150px;
-          height: 260px;
-          margin-left: -75px;
-          margin-top: -250px;
-          transform-origin: 50% 100%;
-          z-index: 30;
-          pointer-events: none;
-          animation: pdHammer 1s linear forwards;
-          filter: drop-shadow(0 0 14px rgba(255, 205, 60, 0.95)) drop-shadow(0 6px 0 rgba(0, 0, 0, 0.35));
-        }
-        .pd-hammer-handle {
-          position: absolute;
-          left: 50%;
-          bottom: 64px;
-          width: 22px;
-          height: 170px;
-          margin-left: -11px;
-          border-radius: 8px;
-          background:
-            repeating-linear-gradient(180deg, transparent 0 18px, rgba(255, 200, 61, 0.95) 18px 22px),
-            linear-gradient(90deg, #6b3d12, #b9803a 45%, #5a340f);
-          box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.25);
-        }
-        .pd-hammer-loop {
-          position: absolute;
-          left: 50%;
-          top: 0;
-          width: 32px;
-          height: 32px;
-          margin-left: -16px;
-          border-radius: 50%;
-          border: 5px solid #ffc83d;
-          box-shadow: inset 0 0 0 2px #8a5a00;
-        }
-        .pd-hammer-head {
-          position: absolute;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          height: 70px;
-          border-radius: 10px;
-          border: 4px solid #8a5a00;
-          background: linear-gradient(180deg, #fff4b0 0%, #ffd54a 30%, #e0a010 70%, #a86f00 100%);
-          box-shadow: inset 0 4px 0 rgba(255, 255, 255, 0.65), inset 0 -6px 0 rgba(120, 70, 0, 0.5);
-        }
-        .pd-hammer-head::before,
-        .pd-hammer-head::after {
-          content: "";
-          position: absolute;
-          top: 6px;
-          bottom: 6px;
-          width: 26px;
-          border-radius: 6px;
-          border: 3px solid #8a5a00;
-          background: linear-gradient(180deg, #ffe27a, #c98a00);
-        }
-        .pd-hammer-head::before { left: 6px; }
-        .pd-hammer-head::after { right: 6px; }
-        .pd-flash {
-          position: absolute;
-          left: 50%;
-          top: 50%;
-          width: 240px;
-          height: 240px;
-          margin: -120px 0 0 -120px;
-          border-radius: 50%;
-          background: radial-gradient(circle, #fffbe0 0%, #ffd54a 35%, rgba(255, 180, 0, 0) 70%);
-          animation: pdFlash 0.5s ease-out forwards;
-        }
-        .pd-shard {
-          position: absolute;
-          left: 50%;
-          top: 50%;
-          clip-path: polygon(0 0, 100% 30%, 40% 100%);
-          animation: pdShard 0.8s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
-        }
-        .pd-quake { animation: pdQuake 0.85s ease-out 1; }
-        .pd-quake-win { animation: pdQuake 1.2s ease-out 1; }
-        .pd-key { box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.5), 0 3px 0 rgba(0, 0, 0, 0.45); }
-        /* แผ่นแสดงผู้ถูกรางวัลล่าสุด */
-        .pd-count-plate {
-          background: #2a0a12;
-          box-shadow: inset 0 6px 0 rgba(0, 0, 0, 0.45);
-        }
-        .pd-oval {
-          background: #ffc83d;
-          box-shadow: inset 0 4px 0 rgba(255, 255, 255, 0.5), inset 0 -4px 0 rgba(178, 125, 0, 0.5), 0 5px 0 #b27d00;
-        }
-        .pd-ball {
-          background: #ff4b4b;
-          box-shadow: inset 3px 3px 0 rgba(255, 255, 255, 0.45), inset -3px -4px 0 rgba(0, 0, 0, 0.2), 0 5px 0 #b01e26;
-        }
-        .pd-stick {
-          background: #cfd6e4;
-          box-shadow: 3px 0 0 #8c95a8;
-        }
-        .pd-jar {
-          background: rgba(255, 255, 255, 0.06);
-          box-shadow: 0 8px 0 rgba(255, 255, 255, 0.14);
-        }
-        /* โลโก้แปะเป็นเทป (ขอบหยักซ้าย/ขวา เหมือนเทปกระดาษ) */
-        .pd-tape {
-          filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.45));
-        }
-        .pd-tape-in {
-          padding: 5px 16px;
-          background: linear-gradient(180deg, rgba(255, 251, 232, 0.94), rgba(240, 228, 190, 0.92));
-          clip-path: polygon(0 0, 4% 12%, 0 25%, 4% 38%, 0 50%, 4% 62%, 0 75%, 4% 88%, 0 100%, 100% 100%, 96% 88%, 100% 75%, 96% 62%, 100% 50%, 96% 38%, 100% 25%, 96% 12%, 100% 0);
-        }
-        /* ไฟกลมใต้หน้าต่างเลข */
-        .pd-lamp {
-          animation: pdLamp 1.2s steps(1) infinite;
-          box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
-        }
-        .pd-lamp-fast { animation-duration: 0.3s; }
-        /* ช่องหยอดเหรียญ + ถาดรับ */
-        .pd-slot {
-          background: #1b0509;
-          box-shadow: inset 0 4px 0 rgba(0, 0, 0, 0.6);
-        }
-        /* ฐานตู้ (สีเดียวกันทั้งหมด) */
-        .pd-foot {
-          background: #8f0f1a;
-          box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.2), 0 6px 0 #4f060d, -4px 10px 0 var(--pd-side),
-            -8px 14px 0 var(--pd-side), -12px 18px 0 var(--pd-side), -16px 22px 0 var(--pd-side), -20px 26px 0 var(--pd-side),
-            -24px 30px 0 var(--pd-side), -28px 34px 0 var(--pd-side), -32px 38px 0 var(--pd-side), -36px 42px 0 var(--pd-side),
-            -40px 46px 0 var(--pd-side), -44px 50px 0 var(--pd-side), -48px 54px 0 var(--pd-side), -52px 58px 0 var(--pd-side),
-            -56px 62px 0 var(--pd-side), -60px 66px 0 var(--pd-side), -64px 70px 0 var(--pd-side);
-        }
-
-        @keyframes pdWash {
-          0% { opacity: 0; }
-          100% { opacity: 1; }
-        }
-        @keyframes pdWashOut {
-          0% { opacity: 1; }
-          100% { opacity: 0; }
-        }
-        /* การ์ดลอยเข้ารายชื่อ: เด้งขึ้นเล็กน้อย → ลอยไปถึงรายชื่อ → เด้งกลับนิดนึง → จางหาย */
-        @keyframes pdCardFly {
-          0% { transform: translate(0, 0) scale(1); opacity: 1; }
-          14% { transform: translate(0, -14px) scale(1.06); opacity: 1; }
-          68% { transform: translate(var(--fx), var(--fy)) scale(var(--fs)); opacity: 1; }
-          80% { transform: translate(var(--fx), calc(var(--fy) - 12px)) scale(calc(var(--fs) * 1.1)); opacity: 1; }
-          100% { transform: translate(var(--fx), var(--fy)) scale(var(--fs)); opacity: 0; }
-        }
-        @keyframes pdRowPop {
-          0% { transform: scale(0.6); opacity: 0; }
-          55% { transform: scale(1.08); opacity: 1; }
-          80% { transform: scale(0.97); }
-          100% { transform: scale(1); opacity: 1; }
+          0%, 100% { box-shadow: 0 0 16px 2px rgba(255, 200, 40, 0.55), 0 0 36px 6px rgba(255, 170, 0, 0.3); }
+          50% { box-shadow: 0 0 28px 6px rgba(255, 228, 100, 0.95), 0 0 64px 14px rgba(255, 190, 0, 0.55); }
         }
         @keyframes pdTwinkle {
-          from { opacity: 0.1; }
-          to { opacity: 1; }
+          0%, 100% { opacity: 0; transform: scale(0.3) rotate(0deg); }
+          50% { opacity: 1; transform: scale(1.15) rotate(25deg); }
         }
-        .pd-wash {
-          position: fixed;
-          inset: 0;
-          z-index: 45;
-          pointer-events: none;
-          background: linear-gradient(115deg, rgba(255, 196, 40, 0.5), rgba(255, 244, 170, 0.7), rgba(255, 190, 30, 0.5), rgba(255, 236, 150, 0.7), rgba(255, 196, 40, 0.5));
-          background-size: 300% 100%;
-          animation: pdGold 2.2s linear infinite, pdWash 0.6s ease-out forwards;
+        @keyframes pdScanGray {
+          from { filter: none; opacity: 1; }
+          to { filter: grayscale(1) brightness(0.8); opacity: 0.75; }
         }
-        .pd-wash::before,
-        .pd-wash::after {
-          content: "";
-          position: absolute;
-          inset: 0;
+        @keyframes pdStamp {
+          0% { opacity: 0; transform: rotate(-14deg) scale(2.6); }
+          60% { opacity: 1; transform: rotate(-14deg) scale(0.92); }
+          100% { opacity: 1; transform: rotate(-14deg) scale(1); }
         }
-        .pd-wash::before {
-          background-image:
-            radial-gradient(circle at 20% 30%, #fff 0 2px, transparent 3px),
-            radial-gradient(circle at 70% 60%, #fff8c9 0 2px, transparent 3px),
-            radial-gradient(circle at 45% 80%, #fff 0 1.5px, transparent 2.5px);
-          background-size: 90px 90px, 130px 130px, 70px 70px;
-          animation: pdTwinkle 0.7s ease-in-out infinite alternate;
+        @keyframes pdPage { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes pdRise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+        @keyframes pdPop { 0% { transform: scale(1); } 40% { transform: scale(1.14); } 100% { transform: scale(1); } }
+        @keyframes pdBarUp { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
+        @keyframes pdFade { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes pdSheetUp { from { opacity: 0; transform: translateY(36px); } to { opacity: 1; transform: none; } }
+        @keyframes pdDialogIn { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: none; } }
+        .pd-gold-card {
+          background: linear-gradient(110deg, #b8860b, #ffe27a, #fff6c9, #ffd54a, #b8860b, #ffe27a, #b8860b);
+          background-size: 200% 100%;
+          animation: pdGold 2.2s linear infinite;
         }
-        .pd-wash::after {
-          background-image:
-            radial-gradient(circle at 30% 70%, #fff 0 2px, transparent 3px),
-            radial-gradient(circle at 80% 25%, #fffbe0 0 1.5px, transparent 2.5px),
-            radial-gradient(circle at 55% 45%, #fff 0 2px, transparent 3px);
-          background-size: 110px 110px, 80px 80px, 150px 150px;
-          background-position: 30px 40px, 10px 60px, 70px 20px;
-          animation: pdTwinkle 0.5s ease-in-out 0.3s infinite alternate;
-        }
-        .pd-noscroll { scrollbar-width: none; -ms-overflow-style: none; }
-        .pd-noscroll::-webkit-scrollbar { display: none; }
-
-        .pd-strip { animation: pdStrip 0.3s linear infinite; filter: blur(1.4px); will-change: transform; }
-        .pd-reel-stop { animation: pdLand 0.65s cubic-bezier(0.3, 0.7, 0.4, 1) both; }
-        .pd-shake { animation: pdShake 0.3s linear infinite; }
-        /* เครื่องสั่นแรงขึ้นตามระดับ --amp (px) / ความถี่ --spd */
-        @keyframes pdRumble {
-          0%, 100% { transform: translate(0, 0) rotate(0deg); }
-          20% { transform: translate(calc(var(--amp) * -1px), calc(var(--amp) * 0.4px)) rotate(calc(var(--amp) * -0.1deg)); }
-          40% { transform: translate(calc(var(--amp) * 1px), calc(var(--amp) * -0.4px)) rotate(calc(var(--amp) * 0.1deg)); }
-          60% { transform: translate(calc(var(--amp) * -0.7px), calc(var(--amp) * -0.5px)) rotate(calc(var(--amp) * -0.07deg)); }
-          80% { transform: translate(calc(var(--amp) * 0.7px), calc(var(--amp) * 0.5px)) rotate(calc(var(--amp) * 0.07deg)); }
-        }
-        @keyframes pdRumbleL {
-          0%, 100% { transform: translate(0, 0) rotate(0deg); }
-          20% { transform: translate(calc(var(--ramp) * -1px), calc(var(--ramp) * 0.4px)) rotate(calc(var(--ramp) * -0.1deg)); }
-          40% { transform: translate(calc(var(--ramp) * 1px), calc(var(--ramp) * -0.4px)) rotate(calc(var(--ramp) * 0.1deg)); }
-          60% { transform: translate(calc(var(--ramp) * -0.7px), calc(var(--ramp) * -0.5px)) rotate(calc(var(--ramp) * -0.07deg)); }
-          80% { transform: translate(calc(var(--ramp) * 0.7px), calc(var(--ramp) * 0.5px)) rotate(calc(var(--ramp) * 0.07deg)); }
-        }
-        .pd-rumble { animation: pdRumbleL var(--spd, 0.3s) linear infinite; }
-        /* สะดุ้งครั้งเดียวแล้วนิ่ง (A/B สลับกันเพื่อเริ่มใหม่ทุกครั้ง) */
-        @keyframes pdKickA {
-          0% { transform: translate(0, 0) rotate(0deg); }
-          12% { transform: translate(calc(var(--amp) * -1px), calc(var(--amp) * 0.5px)) rotate(calc(var(--amp) * -0.12deg)); }
-          28% { transform: translate(calc(var(--amp) * 0.9px), calc(var(--amp) * -0.5px)) rotate(calc(var(--amp) * 0.1deg)); }
-          44% { transform: translate(calc(var(--amp) * -0.6px), calc(var(--amp) * 0.3px)) rotate(calc(var(--amp) * -0.06deg)); }
-          60% { transform: translate(calc(var(--amp) * 0.35px), calc(var(--amp) * -0.2px)) rotate(calc(var(--amp) * 0.03deg)); }
-          80% { transform: translate(calc(var(--amp) * -0.15px), 0) rotate(0deg); }
-          100% { transform: translate(0, 0) rotate(0deg); }
-        }
-        @keyframes pdKickB {
-          0% { transform: translate(0, 0) rotate(0deg); }
-          12% { transform: translate(calc(var(--amp) * -1px), calc(var(--amp) * 0.5px)) rotate(calc(var(--amp) * -0.12deg)); }
-          28% { transform: translate(calc(var(--amp) * 0.9px), calc(var(--amp) * -0.5px)) rotate(calc(var(--amp) * 0.1deg)); }
-          44% { transform: translate(calc(var(--amp) * -0.6px), calc(var(--amp) * 0.3px)) rotate(calc(var(--amp) * -0.06deg)); }
-          60% { transform: translate(calc(var(--amp) * 0.35px), calc(var(--amp) * -0.2px)) rotate(calc(var(--amp) * 0.03deg)); }
-          80% { transform: translate(calc(var(--amp) * -0.15px), 0) rotate(0deg); }
-          100% { transform: translate(0, 0) rotate(0deg); }
-        }
-        /* สั่นเบา ๆ ต่อเนื่องไว้ข้างล่าง แล้วสะดุ้งทับครั้งเดียว จบแล้วกลับไปสั่นเบาต่อทันที ไม่นิ่ง */
-        .pd-kick-a { animation: pdRumbleL var(--spd, 0.3s) linear infinite, pdKickA 0.6s ease-out 1; }
-        .pd-kick-b { animation: pdRumbleL var(--spd, 0.3s) linear infinite, pdKickB 0.6s ease-out 1; }
-        /* แท่นรองตู้ */
-        .pd-podium {
-          background: linear-gradient(180deg, #a3121f 0%, #7a0c16 55%, #4f060d 100%);
-          box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.22), 0 8px 18px rgba(0, 0, 0, 0.45);
-        }
-        .pd-batch-wrap { animation: pdSlideUp 0.8s cubic-bezier(0.22, 0.9, 0.3, 1) both; }
-        .pd-batch-wrap.pd-card-out { animation: pdCardFly 0.95s ease-in-out forwards; }
-        /* ไฟรั่วออกจากตัวตู้ (กะพริบแบบสุ่มจังหวะ) */
-        @keyframes pdZap {
-          0%, 100% { opacity: 0; }
-          8% { opacity: 1; }
-          22% { opacity: 0.1; }
-          38% { opacity: 1; }
-          52% { opacity: 0; }
-          70% { opacity: 0.9; }
-          82% { opacity: 0; }
-        }
-        .pd-zap { animation: pdZap 0.3s steps(1) infinite; filter: drop-shadow(0 0 6px #7fd8ff) drop-shadow(0 0 14px #5ab8ff); }
-        .pd-live { animation: pdLive 1.4s ease-in-out infinite; }
-        .pd-bulb { animation: pdBulb 1s steps(1) infinite; }
-        .pd-bulb-fast { animation-duration: 0.28s; }
-        .pd-jackpot { animation: pdJackpot 0.5s ease-in-out 6; }
         .pd-gold-frame {
           background: linear-gradient(110deg, #b8860b, #ffe27a, #fff6c9, #ffd54a, #b8860b, #ffe27a, #b8860b);
           background-size: 200% 100%;
-          animation: pdGold 2.2s linear infinite, pdGlow 1.4s ease-in-out infinite,
-            pdSlideUp 0.8s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+          animation: pdGold 2.2s linear infinite, pdGlow 1.5s ease-in-out infinite;
         }
-        .pd-wash-out { animation: pdGold 2.2s linear infinite, pdWashOut 0.6s ease-in forwards; }
-        /* การ์ดผู้ถูกรางวัล: พื้นทองวิบวับ + เลื่อนลงตอนปิด */
-        .pd-row-pop { animation: pdRowPop 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
-        .pd-gold-card {
-          background: linear-gradient(110deg, #ffc83d, #fff3b0, #ffe27a, #ffd54a, #fff6c9, #ffc83d, #ffe27a);
-          background-size: 250% 100%;
-          animation: pdGold 2.4s linear infinite;
+        .pd-gold-static {
+          background: linear-gradient(110deg, #b8860b, #ffe27a, #fff6c9, #ffd54a, #b8860b);
         }
-        /* รายชื่อผู้ถูกรางวัล: พื้นทองเข้ม ตัวหนังสือสีทอง */
-        .pd-gold-list {
-          background: linear-gradient(110deg, #5e3a00, #8a5a00, #6b4200, #9a6700, #5e3a00, #8a5a00, #6b4200);
-          background-size: 250% 100%;
-          animation: pdGold 3.2s linear infinite;
+        .pd-land {
+          width: 100%;
+          height: 100%;
+          transform: translate(-50%, -50%);
         }
-        .pd-gold-text { color: #ffe27a; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55); }
-        .pd-gold-text-sub { color: #ffd54a; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55); }
-        .pd-gold-frame.pd-card-out {
-          animation: pdGold 2.2s linear infinite, pdGlow 1.4s ease-in-out infinite,
-            pdCardFly 0.95s ease-in-out forwards;
+        @media (orientation: portrait) {
+          .pd-land {
+            width: 100dvh;
+            height: 100dvw;
+            transform: translate(-50%, -50%) rotate(90deg);
+          }
         }
+        .pd-shimmer-blue {
+          background: linear-gradient(110deg, #0f1b4d 0%, #0f1b4d 32%, #2c45b8 44%, #8aa4ff 50%, #2c45b8 56%, #0f1b4d 68%, #0f1b4d 100%);
+          background-size: 300% 100%;
+          animation: pdSheen 3.2s linear infinite;
+        }
+        .pd-shimmer-red {
+          background: linear-gradient(110deg, #6b1d24 0%, #6b1d24 32%, #b83a4b 44%, #ff9fb0 50%, #b83a4b 56%, #6b1d24 68%, #6b1d24 100%);
+          background-size: 300% 100%;
+          animation: pdSheen 3.2s linear infinite;
+        }
+        .pd-twinkle { animation: pdTwinkle 1.6s ease-in-out infinite; }
+        .pd-spark { animation: pdTwinkle 1.6s ease-in-out infinite; }
+        .pd-twinkle:nth-child(1) { top: 2%; left: 6%; width: 1rem; height: 1rem; animation-delay: 0s; }
+        .pd-twinkle:nth-child(2) { top: 5%; left: 48%; width: 0.75rem; height: 0.75rem; animation-delay: 0.5s; }
+        .pd-twinkle:nth-child(3) { top: 3%; left: 90%; width: 1.25rem; height: 1.25rem; animation-delay: 1.1s; }
+        .pd-twinkle:nth-child(4) { top: 48%; left: 1%; width: 0.75rem; height: 0.75rem; animation-delay: 0.8s; }
+        .pd-twinkle:nth-child(5) { top: 52%; left: 94%; width: 1rem; height: 1rem; animation-delay: 0.3s; }
+        .pd-twinkle:nth-child(6) { top: 92%; left: 9%; width: 1.25rem; height: 1.25rem; animation-delay: 1.4s; }
+        .pd-twinkle:nth-child(7) { top: 94%; left: 52%; width: 0.75rem; height: 0.75rem; animation-delay: 0.2s; }
+        .pd-twinkle:nth-child(8) { top: 90%; left: 88%; width: 1rem; height: 1rem; animation-delay: 0.9s; }
+        .pd-scanned { animation: pdScanGray 0.5s ease-out forwards; }
+        .pd-scanned .pd-gold-frame, .pd-scanned .pd-twinkle { animation: none; }
+        .pd-stamp { transform: rotate(-14deg); animation: pdStamp 0.5s cubic-bezier(0.2, 0.8, 0.3, 1.2) 0.15s both; }
+        .pd-page { animation: pdPage 0.35s ease-out; }
+        .pd-rise { animation: pdRise 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards; animation-delay: calc(var(--i, 0) * 70ms); }
+        .pd-pop { animation: pdPop 0.28s ease-out; }
+        .pd-bar { animation: pdBarUp 0.45s cubic-bezier(0.22, 1, 0.36, 1) 0.1s backwards; }
+        .pd-fade { animation: pdFade 0.25s ease-out; }
+        @keyframes pdSlideIn { from { transform: translateY(100%); } to { transform: none; } }
+        @keyframes pdSlideOut { from { transform: none; } to { transform: translateY(100%); } }
+        @keyframes pdFadeOutBg { from { opacity: 1; } to { opacity: 0; } }
+        @keyframes pdDialogOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(0.96) translateY(12px); } }
+        .pd-sheet { animation: pdSlideIn 0.45s cubic-bezier(0.32, 0.72, 0, 1); }
+        .pd-sheet-out { animation: pdSlideOut 0.3s cubic-bezier(0.4, 0, 1, 1) forwards; }
+        .pd-fade-out { animation: pdFadeOutBg 0.3s ease-in forwards; }
+        @media (min-width: 768px) {
+          .pd-sheet { animation: pdSheetUp 0.4s cubic-bezier(0.22, 1, 0.36, 1); }
+          .pd-sheet-out { animation: pdDialogOut 0.25s ease-in forwards; }
+        }
+        .pd-dialog { animation: pdDialogIn 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
         @media (prefers-reduced-motion: reduce) {
-          .pd-gold-card, .pd-gold-list, .pd-row-pop { animation: none; }
-          .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-rumble, .pd-kick-a, .pd-kick-b, .pd-batch-wrap, .pd-zap, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-wash::after, .pd-quake, .pd-quake-win, .pd-bokeh-dot { animation: none; }
-          .pd-half-l { animation: none; transform: translate(-6px, 12px) rotate(13deg); }
-          .pd-half-r { animation: none; transform: translate(6px, 12px) rotate(-13deg); }
-          .pd-hammer, .pd-shard { display: none; }
-          .pd-btn-red:hover:not(:disabled), .pd-btn-red:active:not(:disabled) { transform: none; }
+          .pd-page, .pd-rise, .pd-pop, .pd-bar, .pd-fade, .pd-sheet, .pd-dialog, .pd-sheet-out, .pd-fade-out { animation: none; }
+          .pd-gold-frame, .pd-gold-card, .pd-shimmer-blue, .pd-shimmer-red, .pd-twinkle, .pd-spark { animation: none; }
+          .pd-twinkle, .pd-spark { opacity: 1; }
+          .pd-scanned { animation: none; filter: grayscale(1) brightness(0.8); opacity: 0.75; }
+          .pd-stamp { animation: none; }
         }
       `}</style>
 
-      {/* ===== พื้นหลังเบลอ ไฟร้านอาหารด้านหลัง ===== */}
-      <div aria-hidden className="pd-bokeh">
-        {BOKEH.map((b, i) => (
-          <span
-            key={i}
-            className="pd-bokeh-dot"
+      {/* พื้นหลังหน้าซื้อตั๋ว: รูปอยู่ด้านบน ติดจอ ไม่เลื่อนตาม ด้านล่างไล่เป็นสีเข้มมาชนรูป */}
+      {view === "buy" && (
+        <div aria-hidden className="pd-fade pointer-events-none fixed inset-0 z-0 bg-[#141414]">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={PAYCARD2_IMG} alt="" className="h-[60vh] w-full object-cover object-top" />
+          <div
+            className="absolute inset-0"
             style={{
-              left: `${b.l}%`,
-              top: `${b.t}%`,
-              width: b.s,
-              height: b.s,
-              opacity: b.o,
-              background: `radial-gradient(circle, ${b.c} 0%, ${b.c}66 55%, transparent 72%)`,
-              animationDelay: `${b.d}s`,
+              background:
+                "linear-gradient(to bottom, rgba(20,20,20,0) 0%, rgba(20,20,20,0.15) 20%, rgba(20,20,20,0.75) 45%, #141414 62%)",
             }}
           />
-        ))}
-      </div>
+        </div>
+      )}
 
-      {goldFlash && <div aria-hidden className={`pd-wash ${winnerClosing ? "pd-wash-out" : ""}`} />}
-
-      <canvas ref={canvasRef} aria-hidden className="pointer-events-none fixed inset-0 z-50 h-full w-full" />
-      <canvas ref={confettiRef} aria-hidden className="pointer-events-none fixed inset-0 z-50 h-full w-full" />
+      {/* แถบเมนูบน (เฉพาะแท็บเล็ต/คอมพิวเตอร์) */}
+      <TopNav
+        view={navView}
+        badges={badges}
+        golden={hasNewWin}
+        user={user}
+        ready={ready}
+        onGo={go}
+        onLogin={() => needLogin("home")}
+      />
 
       <main
-        className={`relative z-10 mx-auto flex w-full max-w-[1800px] flex-1 flex-col px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-5 lg:min-h-0 lg:pb-4 ${
-          quake ? "pd-quake" : shake ? "pd-quake-win" : ""
-        }`}
+        key={view}
+        className={`pd-page relative z-10 mx-auto w-full max-w-md px-5 pt-6 md:max-w-6xl md:px-8 md:pt-8 ${mainPad}`}
       >
-        <h1 className="sr-only">Lucky Draw</h1>
-
-        {note && (
-          <p role="alert" className="flex-none text-sm font-medium text-red-500">
-            {note}
-          </p>
-        )}
-
-        <div className="mt-3 grid flex-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] lg:gap-6">
-          {/* ===== คอลัมน์ซ้าย: ตู้ slot ทรงสูง + คันโยกข้าง (ไม่เลื่อน) ===== */}
-          <div className="pd-noscroll relative z-20 flex min-w-0 flex-col pb-10 pl-16 pt-10 sm:pl-16 lg:min-h-0 lg:overflow-visible lg:pb-16 lg:pl-28 lg:pr-2 lg:pt-20">
-            <div
-              ref={rowRef}
-              className="mx-auto flex w-full max-w-[58rem] items-center justify-center md:pr-1"
-              style={{
-                transform: zoom
-                  ? `translate(${zoomT.x}px, ${zoomT.y}px) perspective(1300px) rotateY(10deg) scale(1.45)`
-                  : "translate(0px, 0px) perspective(1300px) rotateY(17deg) scale(1)",
-                transformOrigin: `${zoomT.ox}% ${zoomT.oy}%`,
-                transition: "transform 1.1s cubic-bezier(0.22, 0.8, 0.24, 1)",
-              }}
-            >
-              <section
-                aria-label="ตู้สุ่มรหัสพนักงาน"
-                className={`relative min-w-0 flex-1 ${kick > 0 && (spinning || zapOn) ? (kick % 2 ? "pd-kick-a" : "pd-kick-b") : spinning ? "pd-rumble" : ""} ${
-                  winner && !spinning ? "pd-jackpot" : ""
-                }`}
-                style={
-                  spinning || zapOn
-                    ? ({
-                        // ตอนเครื่องทำงาน: สั่นเบา ๆ ต่อเนื่อง / ตอนเลขหยุด: สะดุ้งแรงขึ้นตามหลัก (zapOn)
-                        "--amp": 2 + heat * 2.2,
-                        "--ramp": 1.5 + heat * 0.3,
-                        "--spd": `${Math.max(0.2, 0.3 - heat * 0.01)}s`,
-                        filter: zapOn
-                          ? `drop-shadow(0 0 ${4 + heat * 4}px rgba(120, 205, 255, ${Math.min(0.9, 0.3 + heat * 0.09)}))`
-                          : undefined,
-                      } as CSSProperties)
-                    : undefined
-                }
-              >
-                {/* ไฟรั่วออกจากตัวตู้ตอนสุ่ม: ยิ่งหลักหลัง/ยิ่งใกล้ตู้ม ยิ่งเยอะและใหญ่ */}
-                {zapOn && (
-                  <div aria-hidden className="pointer-events-none absolute -inset-4 z-30">
-                    {BOLTS.slice(0, Math.min(BOLTS.length, 2 + heat * 2)).map((b, i) => (
-                      <svg
-                        key={i}
-                        viewBox="0 0 40 80"
-                        className="pd-zap absolute"
-                        style={{
-                          left: `${b.l}%`,
-                          top: `${b.t}%`,
-                          width: 26 + heat * 4,
-                          height: (26 + heat * 4) * 2,
-                          transform: `rotate(${b.r}deg)`,
-                          animationDelay: `${b.d}s`,
-                          animationDuration: `${b.u}s`,
-                        }}
-                      >
-                        <polyline
-                          points="20,0 9,24 23,34 6,60 21,70 14,80"
-                          fill="none"
-                          stroke="#7fd8ff"
-                          strokeWidth="7"
-                          strokeLinejoin="round"
-                          opacity="0.45"
-                        />
-                        <polyline
-                          points="20,0 9,24 23,34 6,60 21,70 14,80"
-                          fill="none"
-                          stroke="#ffffff"
-                          strokeWidth="2.5"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    ))}
-                  </div>
-                )}
-                {/* ===== หัวตู้: ป้ายโค้ง + หลอดไฟ ===== */}
-                <div className="pd-gold pd-crown rounded-b-xl rounded-t-[2.8rem] p-1.5">
-                  <div className="pd-marquee relative rounded-b-lg rounded-t-[2.4rem] px-3 pb-3 pt-3 text-center">
-                    <div aria-hidden className="flex justify-between px-2">
-                      {Array.from({ length: BULBS }).map((_, i) => (
-                        <span
-                          key={i}
-                          className={`pd-bulb h-2 w-2 rounded-full sm:h-2.5 sm:w-2.5 ${spinning ? "pd-bulb-fast" : ""}`}
-                          style={{ animationDelay: i % 2 ? "0s" : "-0.5s" }}
-                        />
-                      ))}
-                    </div>
-                    <p className="pd-title mt-2 text-4xl font-extrabold tracking-[0.12em] sm:text-5xl lg:text-6xl">
-                      LUCKY DRAW
-                    </p>
-                    <div className="pd-plate-green mx-auto mt-2 w-fit rounded-full border-2 border-[#ffd54a] px-6 py-0.5 text-xs font-extrabold tracking-[0.3em] text-[#fff6c9] sm:text-sm">
-                      ลุ้นของรางวัล
-                    </div>
-
-                    {/* โลโก้แปะเป็นเทปที่มุมป้าย */}
-                    <LogoTape className="-right-2 top-7 rotate-[9deg] sm:-right-3 sm:top-9" imgClassName="h-7 sm:h-9 lg:h-11" />
-                  </div>
+        {/* ===== หน้าหลัก ===== */}
+        {view === "home" && (
+          <>
+            {/* มือถือ: เว้นด้านบนไว้ให้แถบหัว (ข้อความ Home + ปุ่มเข้าสู่ระบบ) อยู่บนพื้นดำ แล้วรูปใหญ่อยู่ต่ำลงมา */}
+            <section className="relative -mt-6 ml-[calc(50%-50vw)] w-screen pt-[5.5rem] md:-mt-8 md:pt-6">
+              <header className="absolute inset-x-0 top-0 flex items-center justify-between px-5 pt-6 md:hidden">
+                <div>
+                  <h1 className="text-2xl font-bold leading-none">Home</h1>
+                  <p className="mt-1 text-[11px] text-white/60">เงินเดือนออกแล้ว มาเล่นกัน!</p>
                 </div>
+                {user ? (
+                  <button
+                    type="button"
+                    onClick={() => go("profile")}
+                    aria-label="โปรไฟล์"
+                    className="rounded-full ring-2 ring-white/20 transition active:scale-95"
+                  >
+                    <Avatar user={user} className="h-11 w-11 text-base" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => needLogin("home")}
+                    className="rounded-full bg-[#e50914] px-4 py-2.5 text-sm font-bold text-white transition active:scale-95"
+                  >
+                    เข้าสู่ระบบ
+                  </button>
+                )}
+              </header>
 
-                {/* ===== ตัวตู้สีแดง ===== */}
-                <div className="pd-body mt-3 flex flex-col gap-4 rounded-[1.8rem] p-3 sm:gap-5 sm:rounded-[2.2rem] sm:p-5">
-                  {/* หน้าต่างวงล้อ */}
-                  <div className="pd-gold rounded-[1.4rem] p-1.5 sm:p-2">
-                    <div ref={winRef} className="pd-bezel rounded-[1.1rem] p-2 sm:p-3">
-                      <p className="pb-1.5 text-center text-[10px] font-bold tracking-widest text-[#ffd54a] sm:text-xs">
-                        รหัสพนักงาน
-                      </p>
-                      <div className="flex gap-2 sm:gap-3" aria-live="polite">
-                        {digits.map((d, i) => {
-                          const rolling = spinning && !stopped[i];
-                          return (
-                            <div
-                              key={i}
-                              className={`pd-digit pd-reel relative min-w-0 flex-1 overflow-hidden rounded-lg font-extrabold text-black sm:rounded-xl ${
-                                stopped[i] ? "ring-2 ring-[#ffd54a] sm:ring-4" : ""
-                              }`}
-                              style={{ aspectRatio: "3 / 4.2" }}
-                            >
-                              {rolling ? (
-                                <div
-                                  className="pd-strip pd-num3d absolute inset-x-0 top-0 flex flex-col"
-                                  style={{
-                                    height: `${STRIP.length * 100}%`,
-                                    animationDuration: `${0.3 + i * 0.03}s`,
-                                    animationDelay: `-${i * 0.07}s`,
-                                  }}
-                                >
-                                  {STRIP.map((n, k) => (
-                                    <span
-                                      key={k}
-                                      className="flex items-center justify-center leading-none"
-                                      style={{ height: `${100 / STRIP.length}%` }}
-                                    >
-                                      {n}
-                                    </span>
-                                  ))}
-                                </div>
-                              ) : (
-                                <span
-                                  className={`absolute inset-0 flex items-center justify-center leading-none ${
-                                    stopped[i] ? "pd-reel-stop" : ""
-                                  } ${d === "-" ? "text-black/25" : "pd-num3d"}`}
-                                >
-                                  {d}
-                                </span>
-                              )}
-                              {/* เงาโค้งแบบวงล้อทรงกระบอก */}
-                              <span aria-hidden className="pd-drum pointer-events-none absolute inset-0" />
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
+              <div className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={PAYCARD_IMG}
+                  alt={`${EVENT.name} ${EVENT.tagline}`}
+                  className="block h-auto min-h-[15rem] w-full object-cover object-center md:h-[18rem] lg:h-[22rem]"
+                />
+                {/* ไล่สีเข้มจากด้านล่างขึ้นบน กลืนกับพื้นหลังเว็บ (เริ่มไล่ต่ำลง ให้เห็นรูปมากขึ้น) */}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0"
+                  style={{
+                    background:
+                      "linear-gradient(to top, #141414 0%, rgba(20,20,20,0.6) 14%, rgba(20,20,20,0) 45%)",
+                  }}
+                />
+                {/* ขอบบนของรูปกลืนกับพื้นดำ */}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-[#141414] to-transparent"
+                />
+              </div>
+            </section>
 
-                  {/* ไฟกลมใต้หน้าต่าง */}
-                  <div aria-hidden className="flex justify-center gap-3 sm:gap-4">
-                    {["#35d6e0", "#ffe27a", "#7dff6b", "#ff7ad9", "#35d6e0"].map((c, i) => (
-                      <span
-                        key={i}
-                        className={`pd-lamp h-3.5 w-3.5 rounded-full border-2 border-[#8f0f1a] sm:h-4 sm:w-4 ${
-                          spinning ? "pd-lamp-fast" : ""
-                        }`}
-                        style={{ background: c, animationDelay: i % 2 ? "0s" : "-0.6s" }}
-                      />
-                    ))}
-                  </div>
+            <div className="mt-3 flex items-center justify-between px-1 text-sm md:mt-4 md:text-base">
+              <span className="flex items-center gap-2">
+                <IconPin className="h-4 w-4 text-[#2f8f5b]" />
+                {EVENT.place}
+              </span>
+              <a
+                href={mapUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-semibold underline-offset-2 hover:underline md:text-sm"
+              >
+                ดูแผนที่ ↗
+              </a>
+            </div>
 
-                  {/* แผงปุ่มควบคุม */}
-                  <div className="pd-gold rounded-[1.6rem] p-1">
-                    <div className="pd-tray rounded-[1.4rem] p-3 sm:p-4">
-                      <div aria-hidden className="mb-3 flex justify-center gap-2 sm:gap-3">
-                        <span className="pd-key h-2.5 w-12 rounded-sm bg-[#35d6e0] sm:w-16" />
-                        <span className="pd-key h-2.5 w-12 rounded-sm bg-[#ffe0a0] sm:w-16" />
-                        <span className="pd-key h-2.5 w-12 rounded-sm bg-[#ff9a9a] sm:w-16" />
-                        <span className="pd-key h-2.5 w-12 rounded-sm bg-[#ffb0e0] sm:w-16" />
-                      </div>
-
-                      {/* จำนวนที่เหลือ (ซ้าย) + ปุ่มเริ่มสุ่ม — เว้นระยะกว้างกันชน/ซ้อนกับปุ่ม (รวมตอน hover ขยาย + เงาด้านซ้าย) */}
-                      <div className="flex items-center justify-center gap-8 sm:gap-14">
-                        <div className="pd-oval flex flex-none flex-col items-center rounded-[50%] px-5 py-1.5 sm:min-w-[7.5rem] sm:px-7">
-                          <span className="text-[10px] font-bold tracking-widest text-[#8f0f1a]">เหลือ</span>
-                          <span className="font-mono text-3xl font-extrabold leading-none text-[#e0243c] [text-shadow:0_2px_0_#fff0b0,0_3px_0_#b27d00] sm:text-4xl">
-                            <span aria-hidden className="pd-live mr-1 align-middle text-sm text-green-600">
-                              ●
-                            </span>
-                            {total}
-                          </span>
-                          <span className="text-[10px] font-bold tracking-widest text-[#8f0f1a]">ใบ</span>
-                        </div>
-
-                        <div className="relative min-w-[9rem] max-w-[15rem] flex-1">
-                          <button
-                            type="button"
-                            onClick={pressSpin}
-                            disabled={spinning || total === 0}
-                            className={`pd-btn-red relative min-h-14 w-full overflow-hidden rounded-2xl text-lg font-extrabold disabled:cursor-not-allowed sm:min-h-16 sm:text-xl ${
-                              spinning ? "opacity-0" : ""
+            <section aria-label="เลือกประเภทตั๋ว" className="mt-8 md:mt-12">
+              <h2 className="text-xl font-bold md:text-2xl">วันนี้อยากสนุกแบบไหน?</h2>
+              <p className="mt-1 text-sm text-white/60 md:text-base">เลือกตั๋วที่ใช่ แล้วไปสนุกกันเลย</p>
+              <div className="mt-4 grid grid-cols-2 gap-3 md:mt-6 md:gap-6">
+                {TICKETS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={pick}
+                    aria-label={`${t.title} ${baht(t.price)} ต่อใบ`}
+                    className="pd-rise block text-left transition duration-300 active:scale-[0.97] md:hover:scale-[1.03]"
+                  >
+                    {/* ชื่อตั๋ว (ตั๋วที่มีรูป): อยู่เหนือกรอบ */}
+                    {t.homeImage && (
+                      <p className="px-1 pb-2 text-lg font-bold text-white md:pb-3 md:text-2xl">{t.title}</p>
+                    )}
+                    <Perforated
+                      bg={t.shimmer}
+                      text={t.fg}
+                      dash={t.dash}
+                      top={
+                        t.homeImage ? (
+                          <TicketImage src={t.homeImage} alt={`${t.title} ${baht(t.price)} ต่อใบ`} />
+                        ) : (
+                          <div className="px-4 pb-3 pt-4 md:px-6 md:pb-4 md:pt-6">
+                            {iconOf(t.id, "h-6 w-6 md:h-8 md:w-8")}
+                            <p className="mt-2 text-lg font-bold leading-tight md:text-2xl">{t.title}</p>
+                            <p className="mt-1 text-xs md:text-sm">{t.homeNote}</p>
+                          </div>
+                        )
+                      }
+                      bottom={
+                        <div className="flex w-full items-end justify-between px-4 pb-4 pt-3 md:px-6 md:pb-6 md:pt-4">
+                          <p className="text-xl font-extrabold md:text-4xl">
+                            {baht(t.price)}
+                            <span className="text-xs font-medium"> / ใบ</span>
+                          </p>
+                          <span
+                            className={`hidden h-9 w-9 items-center justify-center rounded-full md:flex md:h-11 md:w-11 ${
+                              t.homeImage ? "bg-white text-black" : "bg-[#e50914] text-white"
                             }`}
                           >
-                            {btnLabel}
-                          </button>
-
-                          {/* ปุ่มหักเป็น 2 ท่อน (แสดงระหว่างสุ่ม พอสุ่มเสร็จกลับเป็นปุ่มปกติ) */}
-                          {spinning && (
-                            <div aria-hidden className="pointer-events-none absolute inset-0">
-                              <div className="pd-half-wrap pd-half-l">
-                                <div className="pd-half-face text-lg font-extrabold sm:text-xl">{btnLabel}</div>
-                              </div>
-                              <div className="pd-half-wrap pd-half-r">
-                                <div className="pd-half-face text-lg font-extrabold sm:text-xl">{btnLabel}</div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* เศษปุ่มที่แตกกระจายตอนค้อนกระทบ */}
-                          {quake && (
-                            <div aria-hidden className="pointer-events-none absolute inset-0 z-20">
-                              <span className="pd-flash" />
-                              {SHARDS.map((p, i) => (
-                                <span
-                                  key={i}
-                                  className="pd-shard"
-                                  style={
-                                    {
-                                      "--dx": `${p.x}px`,
-                                      "--dy": `${p.y}px`,
-                                      "--dr": `${p.r}deg`,
-                                      width: p.s,
-                                      height: p.s,
-                                      background: i % 2 ? "#ff4b4b" : "#c0262d",
-                                    } as CSSProperties
-                                  }
-                                />
-                              ))}
-                            </div>
-                          )}
-
-                          {/* ค้อนทุบปุ่ม */}
-                          {hammer && (
-                            <div aria-hidden className="pd-hammer">
-                              <span className="pd-hammer-loop" />
-                              <span className="pd-hammer-handle" />
-                              <span className="pd-hammer-head" />
-                            </div>
-                          )}
+                            <IconArrow className="h-5 w-5" />
+                          </span>
                         </div>
+                      }
+                    />
+                  </button>
+                ))}
+              </div>
 
-                        {/* ปุ่มตั้งค่า: เลือกสุ่มทีเดียวกี่คน */}
-                        <div className="relative flex-none">
-                          <button
-                            type="button"
-                            onClick={() => setShowSettings((v) => !v)}
-                            disabled={spinning || hammer}
-                            aria-label="ตั้งค่าจำนวนผู้ถูกรางวัลต่อการสุ่ม"
-                            aria-expanded={showSettings}
-                            className="pd-gold relative flex h-12 w-12 items-center justify-center rounded-full text-[#8f0f1a] transition active:scale-90 disabled:cursor-not-allowed disabled:opacity-50 sm:h-14 sm:w-14"
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              className="h-6 w-6 sm:h-7 sm:w-7"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2.2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              aria-hidden
-                            >
-                              <circle cx="12" cy="12" r="3.2" />
-                              <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1" />
-                            </svg>
-                            {batch > 1 && (
-                              <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-[#e0243c] px-1 text-center text-[11px] font-extrabold leading-5 text-white ring-2 ring-[#ffe27a]">
-                                {Math.min(batch, maxBatch)}
-                              </span>
-                            )}
-                          </button>
-
-                          {showSettings && (
-                            <div
-                              role="dialog"
-                              aria-label="ตั้งค่าการสุ่ม"
-                              className="absolute bottom-full right-0 z-40 mb-3 w-64 rounded-2xl border-2 border-[#ffc83d] bg-[#2a0a12] p-4 text-white shadow-[0_8px_0_rgba(0,0,0,0.4)]"
-                            >
-                              <p className="text-sm font-extrabold text-[#ffe27a]">สุ่มทีเดียวกี่คน</p>
-                              <div className="mt-3 flex items-center justify-center gap-4">
-                                <button
-                                  type="button"
-                                  onClick={() => setBatch((n) => Math.max(1, Math.min(n, maxBatch) - 1))}
-                                  disabled={batch <= 1}
-                                  aria-label="ลดจำนวน"
-                                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-xl font-extrabold text-black transition active:scale-90 disabled:opacity-40"
-                                >
-                                  −
-                                </button>
-                                <span className="min-w-12 text-center font-mono text-4xl font-extrabold">
-                                  {Math.min(batch, maxBatch)}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setBatch((n) => Math.min(maxBatch, Math.min(n, maxBatch) + 1))}
-                                  disabled={Math.min(batch, maxBatch) >= maxBatch}
-                                  aria-label="เพิ่มจำนวน"
-                                  className="flex h-10 w-10 items-center justify-center rounded-full bg-[#ffc83d] text-xl font-extrabold text-black transition active:scale-90 disabled:opacity-40"
-                                >
-                                  +
-                                </button>
-                              </div>
-                              <div className="mt-3 flex flex-wrap justify-center gap-2">
-                                {[1, 3, 5, 10].map((n) => (
-                                  <button
-                                    key={n}
-                                    type="button"
-                                    onClick={() => setBatch(Math.min(n, maxBatch))}
-                                    className={`min-w-10 rounded-full border px-3 py-1 text-sm font-bold transition active:scale-95 ${
-                                      Math.min(batch, maxBatch) === n
-                                        ? "border-[#ffc83d] bg-[#ffc83d] text-[#2a0a12]"
-                                        : "border-white/30 text-white/80"
-                                    }`}
-                                  >
-                                    {n}
-                                  </button>
-                                ))}
-                              </div>
-                              <p className="mt-3 text-center text-[11px] text-white/60">
-                                {Math.min(batch, maxBatch) > 1
-                                  ? `กดสุ่มครั้งเดียว ได้ ${Math.min(batch, maxBatch)} รายชื่อพร้อมกัน`
-                                  : "สุ่มทีละคน (เลขหยุดทีละหลัก)"}
-                                {" · "}สูงสุด {maxBatch}
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => setShowSettings(false)}
-                                className="mt-3 w-full rounded-xl bg-[#ffc83d] py-2 text-sm font-extrabold text-[#2a0a12] transition active:scale-95"
-                              >
-                                ตกลง
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div aria-hidden className="mt-4 flex gap-2">
-                        <span className="h-2.5 flex-1 rounded-full bg-[#ff4fc0] shadow-[0_3px_0_#a02d82]" />
-                        <span className="h-2.5 flex-1 rounded-full bg-[#ff4fc0] shadow-[0_3px_0_#a02d82]" />
-                        <span className="h-2.5 flex-1 rounded-full bg-[#ffb347] shadow-[0_3px_0_#b27019]" />
-                        <span className="h-2.5 flex-1 rounded-full bg-[#ff4fc0] shadow-[0_3px_0_#a02d82]" />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* แผงผู้ถูกรางวัลล่าสุด (แสดงหลังปิดการ์ดผู้ถูกรางวัล) */}
-                  <div className="pd-gold rounded-[1.6rem] p-1">
-                    <div className="pd-count-plate rounded-[1.4rem] p-2 sm:p-2.5">
-                      {latest && !winner ? (
-                        <div
-                          key={latest.code}
-                          className="pd-gold-card pd-row-pop flex items-center gap-4 rounded-[1.1rem] border-2 border-[#fff3b0] px-4 py-3 shadow-[0_4px_0_#b27d00] [text-shadow:0_1px_0_rgba(255,255,255,0.45)] sm:gap-5 sm:px-5 sm:py-4"
-                        >
-                          <WinnerAvatar
-                            w={latest}
-                            className="h-16 w-16 text-3xl ring-2 ring-white/80 sm:h-20 sm:w-20 sm:text-4xl"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-xl font-extrabold text-[#5a3500] sm:text-2xl">{latest.name}</p>
-                            {(latest.company || latest.department) && (
-                              <p className="truncate text-sm font-bold text-[#7a4b00]">
-                                {[latest.company, latest.department].filter(Boolean).join(" · ")}
-                              </p>
-                            )}
-                            <p className="font-mono text-sm font-semibold text-[#7a4b00]">{latest.empCode}</p>
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="rounded-2xl border border-dashed border-white/20 py-5 text-center text-sm text-white/50">
-                          {winner ? "กำลังประกาศผล..." : "ยังไม่มีผู้ถูกรางวัล"}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* ช่องหยอดเหรียญ + ถาดรับรางวัล */}
-                  <div aria-hidden className="flex items-center justify-between gap-3">
-                    <div className="pd-gold flex h-9 w-20 flex-none items-center justify-center rounded-lg sm:w-24">
-                      <span className="pd-slot h-1.5 w-10 rounded-full" />
-                    </div>
-                    <div className="pd-slot h-9 flex-1 rounded-b-2xl rounded-t-md border-b-4 border-[#ffc83d]" />
-                  </div>
-
-                  {idle && (
-                    <p className="text-center text-[11px] text-white/80 sm:text-xs">
-                      กดปุ่ม{`"เริ่มสุ่ม"`}
-                      <span className="hidden md:inline"> หรือดึงคันโยกด้านขวา</span> หรือกด Space เพื่อสุ่มผู้ถูกรางวัล
-                    </p>
-                  )}
+              <div className="mt-3 flex items-center gap-3 rounded-2xl bg-[#1f1f1f] p-4 md:mt-6 md:p-5">
+                <IconSpark className="h-7 w-7 shrink-0 text-[#2f8f5b]" />
+                <div>
+                  <p className="text-sm font-bold md:text-base">ความโชคดีอาจเป็นของคุณ!</p>
+                  <p className="mt-0.5 text-xs text-white/60 md:text-sm">ซื้อ Lucky Draw แล้วรอลุ้นพร้อมกัน</p>
                 </div>
+              </div>
+            </section>
+          </>
+        )}
 
-                {/* ฐานตู้ */}
-                <div aria-hidden className="pd-gold mx-3 mt-2 h-5 rounded-b-[1.5rem] sm:mx-6" />
-                <div aria-hidden className="pd-foot mt-2 h-4 rounded-b-2xl" />
-                <div aria-hidden className="pd-podium -mx-3 mt-6 h-9 rounded-t-xl border-t-4 border-[#ffd54a] sm:-mx-6 sm:h-12" />
-                <div aria-hidden className="pd-podium -mx-6 h-9 border-t-2 border-[#ffd54a]/60 sm:-mx-12 sm:h-14" />
-                <div aria-hidden className="pd-gold -mx-8 h-3 rounded-b-md sm:-mx-16" />
-                <div aria-hidden className="mx-auto -mt-1 h-6 w-[115%] -translate-x-[6.5%] rounded-[50%] bg-black/45 blur-xl" />
-              </section>
+        {/* ===== เลือกตั๋ว (ขั้นที่ 1) ===== */}
+        {view === "buy" && (
+          <section aria-label="เลือกตั๋ว" className="md:mx-auto md:max-w-5xl">
+            <SubHeader title="เลือกตั๋วของคุณ" onBack={() => go("home")} />
+            <div className="mt-6">
+              <Steps current={1} />
+            </div>
 
-              {/* ===== คันโยกข้างตู้ (แสดงตั้งแต่จอ md ขึ้นไป) ===== */}
+            {/* มือถือ: เรียงลง / คอมพิวเตอร์: 2 ตั๋วเรียงซ้ายขวา */}
+            <div className="mt-8 flex flex-col gap-4 md:mt-10 md:grid md:grid-cols-2 md:items-start md:gap-6">
+              {TICKETS.map((t) => {
+                const q = cart[t.id] ?? 0;
+
+                // ส่วนบน: ตั๋วที่มีรูปใช้รูปเดียวกับหน้าหลัก (ชื่อตั๋วอยู่เหนือกรอบ) / ตั๋วอื่นใช้การ์ดข้อความ
+                // ส่วนล่าง (หลังรอยประ): ราคา + ปุ่ม + - แยกจากตัวตั๋วเหมือนกันทุกใบ
+                // กดที่ตัวตั๋วไม่เปิดหน้าแสดงตั๋ว (หน้าแสดงตั๋วอยู่เฉพาะหน้า "ตั๋วของฉัน")
+                return (
+                  <div key={t.id} className="pd-rise">
+                    {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-white">{t.title}</p>}
+                    <Perforated
+                      bg={t.shimmer}
+                      text={t.fg}
+                      dash={t.dash}
+                      top={
+                        t.homeImage ? (
+                          <TicketImage src={t.homeImage} alt={t.title} />
+                        ) : (
+                          <div className="p-4">
+                            <div className="flex items-center gap-3">
+                              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
+                                {iconOf(t.id, "h-6 w-6")}
+                              </span>
+                              <div>
+                                <p className="text-lg font-bold leading-tight">{t.title}</p>
+                                <p className="text-[10px] font-semibold tracking-widest opacity-70">{t.sub}</p>
+                              </div>
+                            </div>
+                            <p className="mt-4 text-sm opacity-80">{t.blurb}</p>
+                          </div>
+                        )
+                      }
+                      bottom={
+                        <div className="flex items-center justify-between gap-2 px-4 pb-4 pt-3">
+                          <p className="text-3xl font-extrabold">
+                            {baht(t.price)}
+                            <span className="text-xs font-medium opacity-70"> / ใบ</span>
+                          </p>
+                          <Stepper
+                            value={q}
+                            max={MAX_QTY}
+                            name={t.title}
+                            onChange={(n) => setQty(t.id, n)}
+                            onDark={!!t.homeImage}
+                          />
+                        </div>
+                      }
+                    />
+                  </div>
+                );
+              })}
+
+              <div className="md:col-span-2">
+                <InfoBox
+                  icon={<IconShield className="h-5 w-5" />}
+                  title="ตั๋วแต่ละประเภทใช้แทนกันไม่ได้"
+                  text="ตั๋วเข้าซุ้ม 1 ใบ = ตั๋วเล่นซุ้ม 2 ใบ (ใบละ ฿50) + ตั๋วรับตั๋วกระดาษ 1 ใบ ใช้ได้เฉพาะวันงานที่ระบุเท่านั้น"
+                />
+              </div>
+            </div>
+
+            {/* แถบสรุปยอดติดขอบล่าง (มือถือ: เหนือแถบเมนู / คอมพิวเตอร์: ชิดล่างสุด) พื้นกระจกเบลอ */}
+            <CheckoutBar aboveNav>
+              <div className="md:flex md:items-center md:justify-between md:gap-8">
+                <div className="flex items-end justify-between md:items-center md:gap-8">
+                  <div>
+                    <p className="text-xs text-white/70">ทั้งหมด {cartCount} ใบ</p>
+                    <p className="text-sm font-bold">ยอดรวม</p>
+                  </div>
+                  <p className="text-4xl font-extrabold">
+                    <span key={cartTotal} className="pd-pop inline-block">
+                      {baht(cartTotal)}
+                    </span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toPay}
+                  disabled={cartCount === 0}
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e50914] py-4 text-base font-bold text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-white/15 disabled:text-white/50 md:mt-0 md:w-80 md:shrink-0"
+                >
+                  {user ? "ชำระเงิน" : "เข้าสู่ระบบเพื่อชำระเงิน"}
+                  <IconArrow className="h-5 w-5 text-white" />
+                </button>
+              </div>
+            </CheckoutBar>
+          </section>
+        )}
+
+        {/* ===== ชำระเงิน (ขั้นที่ 2): สรุปรายการ ===== */}
+        {view === "pay" && (
+          <section aria-label="ชำระเงิน" className="md:mx-auto md:max-w-3xl">
+            <SubHeader title="ชำระเงิน" onBack={() => go("buy")} />
+            <div className="mt-6">
+              <Steps current={2} />
+            </div>
+
+            <div className="mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-4 md:p-6">
+              <h2 className="text-base font-bold">สรุปรายการ</h2>
+              <p className="mt-0.5 text-xs text-white/50">
+                {EVENT.name} · {EVENT.date}
+              </p>
+              <ul className="mt-3 divide-y divide-white/10">
+                {cartLines.map(({ def, qty: q }) => (
+                  <li key={def.id} className="flex items-center justify-between gap-3 py-3">
+                    <div className="flex items-center gap-3">
+                      {def.homeImage ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={def.homeImage}
+                          alt={def.title}
+                          className="h-12 w-auto shrink-0 object-contain md:h-14"
+                        />
+                      ) : (
+                        <span
+                          className={`flex h-10 w-10 items-center justify-center rounded-xl ${def.card} ${def.fg}`}
+                        >
+                          {iconOf(def.id, "h-5 w-5")}
+                        </span>
+                      )}
+                      <div>
+                        <p className="text-sm font-bold">{def.title}</p>
+                        <p className="text-xs text-white/50">
+                          {baht(def.price)} × {q}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-base font-bold">{baht(def.price * q)}</p>
+                  </li>
+                ))}
+              </ul>
+              {/* รหัสพนักงานมาจากบัญชี (ตั้งตอนสมัคร) ไม่ต้องกรอกซ้ำ */}
+              {cartHasLucky && user?.empCode && (
+                <p className="mt-3 border-t border-white/10 pt-3 text-xs text-white/60">
+                  รหัสพนักงานสำหรับลุ้น Lucky Draw:{" "}
+                  <span className="font-mono font-bold text-white">{user.empCode}</span>
+                </p>
+              )}
+            </div>
+
+            <div className="mt-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-4 md:p-6">
+              <h2 className="text-base font-bold">วิธีชำระเงิน</h2>
+              <div className="mt-3 flex items-center justify-between rounded-2xl border-2 border-white/40 bg-[#2a2a2a] px-4 py-3">
+                <span className="text-sm font-bold">PromptPay (สแกน QR)</span>
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#e50914] text-white">
+                  <IconCheck className="h-3.5 w-3.5" />
+                </span>
+              </div>
+              <p className="mt-2 text-xs text-white/50">
+                กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน โอนแล้วส่งสลีปภายใน 60 นาที รอเจ้าหน้าที่ตรวจสอบ
+              </p>
+            </div>
+
+            <CheckoutBar>
+              {payError && (
+                <p role="alert" className="mb-2 text-sm font-medium text-red-600">
+                  {payError}
+                </p>
+              )}
+              <div className="md:flex md:items-center md:justify-between md:gap-8">
+                <div className="flex items-end justify-between md:items-center md:gap-8">
+                  <div>
+                    <p className="text-xs text-white/50">ทั้งหมด {cartCount} ใบ</p>
+                    <p className="text-sm font-bold">ยอดรวม</p>
+                  </div>
+                  <p className="text-4xl font-extrabold">{baht(cartTotal)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={confirmPay}
+                  disabled={payBusy}
+                  className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e50914] py-4 text-base font-bold text-white transition active:scale-[0.98] disabled:opacity-60 md:mt-0 md:w-80 md:shrink-0"
+                >
+                  {payBusy ? "กำลังสร้าง QR..." : "สร้าง QR เพื่อชำระเงิน"}
+                  <IconArrow className="h-5 w-5 text-white" />
+                </button>
+              </div>
+            </CheckoutBar>
+          </section>
+        )}
+
+        {/* ===== ชำระเงิน (ขั้นที่ 2): โอน + ส่งสลีป ===== */}
+        {view === "qr" && paymentId && (
+          <SlipPay
+            paymentId={paymentId}
+            onBack={leaveQr}
+            onPaid={finishPaid}
+            onNeedLogin={() => {
+              setPaymentId(null);
+              needLogin("tickets");
+            }}
+          />
+        )}
+
+        {/* ===== รับตั๋ว (ขั้นที่ 3) ===== */}
+        {view === "done" && justBought && (
+          <section aria-label="ซื้อตั๋วสำเร็จ">
+            <Steps current={3} />
+            <div className="mt-8 flex flex-col items-center text-center">
+              <span className="pd-pop flex h-16 w-16 items-center justify-center rounded-full bg-white text-black">
+                <IconCheck className="h-9 w-9" />
+              </span>
+              <h1 className="mt-4 text-2xl font-bold md:text-3xl">ได้รับตั๋วแล้ว!</h1>
+              <p className="mt-1 text-sm text-white/60 md:text-base">
+                {justBought.length} ใบ · รวม {baht(justBought.reduce((s, o) => s + o.price, 0))}
+              </p>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-4 md:mt-8 md:grid md:grid-cols-2 md:items-start md:gap-6 lg:grid-cols-3">
+              {justBought.map((o) => (
+                <TicketPass key={o.code} def={defOf(o.ticket)} order={o} />
+              ))}
+            </div>
+
+            <div className="mt-6 flex gap-3 md:mx-auto md:mt-8 md:max-w-md">
               <button
                 type="button"
-                onClick={pressSpin}
-                disabled={spinning || total === 0}
-                aria-label="ดึงคันโยกเพื่อสุ่ม"
-                className="relative hidden h-56 w-16 shrink-0 flex-col items-center justify-start self-center disabled:cursor-not-allowed disabled:opacity-60 md:flex"
+                onClick={() => {
+                  setJustBought(null);
+                  go("buy");
+                }}
+                className="flex-1 rounded-2xl border border-white/40 px-5 py-3.5 font-semibold transition active:scale-[0.98]"
               >
-                <span aria-hidden className="pd-gold absolute -left-1 top-[6.4rem] h-5 w-6 rounded-r-md" />
-                <span
-                  className="pd-ball h-11 w-11 rounded-full transition-transform duration-300"
-                  style={{ transform: spinning ? "translateY(96px)" : "translateY(0)" }}
-                />
-                <span
-                  className="pd-stick -mt-1 w-3 rounded-full transition-all duration-300"
-                  style={{ height: spinning ? 8 : 104, transform: spinning ? "translateY(96px)" : "translateY(0)" }}
-                />
-                <span className="pd-gold mt-auto h-7 w-11 rounded-md" />
+                ซื้อเพิ่ม
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setJustBought(null);
+                  setTab("ready");
+                  go("tickets");
+                }}
+                className="flex-1 rounded-2xl bg-[#e50914] px-5 py-3.5 font-semibold text-white transition active:scale-[0.98]"
+              >
+                ดูตั๋วของฉัน
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* ===== ตั๋วของฉัน ===== */}
+        {view === "tickets" && (
+          <section aria-label="ตั๋วของฉัน">
+            <header>
+              <h1 className="text-3xl font-bold">ตั๋วของฉัน</h1>
+              <p className="mt-1 text-sm text-white/60">ความสนุกรอบนี้ พร้อมแล้ว!</p>
+            </header>
+
+            <div
+              role="tablist"
+              aria-label="สถานะตั๋ว"
+              className="mt-5 grid grid-cols-2 rounded-full border border-white/10 bg-[#1f1f1f] p-1 md:max-w-md"
+            >
+              {(
+                [
+                  ["ready", `ตั๋ว (${orders.length})`],
+                  ["status", `สถานะ (${pending.length})`],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === id}
+                  onClick={() => setTab(id)}
+                  className={`rounded-full px-1 py-2.5 text-sm font-bold transition duration-300 active:scale-95 ${
+                    tab === id ? "bg-[#e50914] text-white" : "text-white/60"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {user && tab === "status" && (
+              <>
+                {pending.length === 0 ? (
+                  <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
+                    <p className="text-white/60">ไม่มีรายการที่รอดำเนินการ</p>
+                  </div>
+                ) : (
+                  <div className="mt-5 flex flex-col gap-3 md:grid md:grid-cols-2 md:items-start md:gap-4">
+                    {pending.map((p) => {
+                      const badge = PAY_BADGE[p.status];
+                      const openPayment = () => {
+                        setPaymentId(p.id);
+                        go("qr");
+                      };
+
+                      // กดที่การ์ด = เปิดหน้าโอนเงิน/ส่งสลีป/ดูสถานะ (หน้าเดียวกับเดิม)
+                      return (
+                        <div
+                          key={p.id}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`ดูรายการ ${p.ref} สถานะ ${badge.label}`}
+                          onClick={openPayment}
+                          onKeyDown={(e) => {
+                            if (e.target !== e.currentTarget) return;
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openPayment();
+                            }
+                          }}
+                          className="pd-rise cursor-pointer rounded-2xl border border-dashed border-white/25 bg-[#1f1f1f] p-4 transition duration-300 active:scale-[0.98] md:hover:border-white/40"
+                        >
+                          {/* ตั๋วที่ซื้อในรายการนี้: รูป + ชื่อ + จำนวนใบ */}
+                          {p.items && p.items.length > 0 && (
+                            <ul className="mb-3 flex flex-col gap-2 border-b border-white/10 pb-3">
+                              {p.items.map((it) => {
+                                const d = defOf(it.ticket);
+                                return (
+                                  <li key={it.ticket} className="flex items-center gap-3">
+                                    {d.homeImage ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={d.homeImage}
+                                        alt={d.title}
+                                        className="h-14 w-auto shrink-0 object-contain"
+                                      />
+                                    ) : (
+                                      <span
+                                        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${d.card} ${d.fg}`}
+                                      >
+                                        {iconOf(d.id, "h-5 w-5")}
+                                      </span>
+                                    )}
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-bold">{d.title}</p>
+                                      <p className="text-xs text-white/50">{it.qty} ใบ</p>
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-bold">
+                                รายการ {p.ref} · {baht(p.amount)}
+                              </p>
+                              <span
+                                className={`mt-1.5 inline-block rounded-full px-2.5 py-1 text-xs font-bold ${badge.cls}`}
+                              >
+                                {badge.label}
+                              </span>
+                              {p.status === "rejected" && p.rejectReason && (
+                                <p className="mt-1 text-xs text-red-600">{p.rejectReason}</p>
+                              )}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {/* ยกเลิกได้เฉพาะรายการที่ยังไม่ได้ส่งสลีป */}
+                              {p.status === "awaiting_slip" && (
+                                <button
+                                  type="button"
+                                  disabled={cancelingId === p.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCancelTarget(p);
+                                  }}
+                                  aria-label={`ยกเลิกรายการ ${p.ref}`}
+                                  className="flex h-10 w-10 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-600 transition active:scale-95 disabled:opacity-60"
+                                >
+                                  <IconTrash className="h-5 w-5" />
+                                </button>
+                              )}
+                              <IconArrow className="h-5 w-5 text-white/50" />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+
+            {ready && !user && (
+              <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
+                <p className="text-white/60">เข้าสู่ระบบเพื่อดูตั๋วของคุณ</p>
+                <button
+                  type="button"
+                  onClick={() => needLogin("tickets")}
+                  className="mt-4 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+                >
+                  เข้าสู่ระบบ
+                </button>
+              </div>
+            )}
+
+            {(user || !ready) && tab === "ready" && (
+              <>
+                {!ready || orders.length === 0 ? (
+                  <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
+                    <p className="text-white/60">ยังไม่มีตั๋ว</p>
+                    <button
+                      type="button"
+                      onClick={() => go("buy")}
+                      className="mt-4 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+                    >
+                      ไปซื้อตั๋ว
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-5 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
+                    {TICKETS.map((t) => {
+                      const mine = orders.filter((o) => o.ticket === t.id);
+                      if (mine.length === 0) return null;
+                      const count = mine.filter((o) => !o.used).length; // ใบที่ยังไม่ใช้
+                      const usedCount = mine.length - count; // ใบที่ใช้แล้ว
+                      const wonCount = mine.filter((o) => !o.used && o.won).length;
+                      // มีตั๋วถูกรางวัล: กรอบทอง + ออร่า + ประกาย + พื้นการ์ดสีทองวิบวับ / ไม่มี: พื้นวิบวับตามสีตั๋ว (ไม่มีกรอบ ไม่มีออร่า)
+                      const goldWin = wonCount > 0;
+
+                      // หน้าตาเหมือนหน้า "ซื้อตั๋ว" แต่ไม่มีราคา: ส่วนล่างเป็นจำนวนใบที่เหลือ (+ ใช้แล้วกี่ใบ) + ปุ่มแสดงตั๋ว
+                      const card = (
+                        <Perforated
+                          bg={goldWin ? "pd-gold-card" : t.shimmer}
+                          text={goldWin ? "text-[#5a3b00]" : t.fg}
+                          dash={goldWin ? "border-[#5a3b00]/30" : t.dash}
+                          top={
+                            t.homeImage ? (
+                              <TicketImage src={t.homeImage} alt={t.title} />
+                            ) : (
+                              <div className="p-4">
+                                <div className="flex items-center gap-3">
+                                  <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
+                                    {iconOf(t.id, "h-6 w-6")}
+                                  </span>
+                                  <div>
+                                    <p className="text-lg font-bold leading-tight">{t.title}</p>
+                                    <p className="text-[10px] font-semibold tracking-widest opacity-70">{t.sub}</p>
+                                  </div>
+                                </div>
+                                <p className="mt-4 text-sm opacity-80">{t.groupNote}</p>
+                              </div>
+                            )
+                          }
+                          bottom={
+                            <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-3">
+                              <div>
+                                <p className="text-3xl font-extrabold">
+                                  {count}
+                                  <span className="text-xs font-medium opacity-70"> ใบ</span>
+                                </p>
+                                {usedCount > 0 && (
+                                  <p className="text-xs font-semibold opacity-70">ใช้แล้ว {usedCount} ใบ</p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {wonCount > 0 && (
+                                  <span
+                                    className={`rounded-full px-3 py-1.5 text-xs font-extrabold ${
+                                      goldWin ? "bg-white text-[#5a3b00]" : "pd-gold-frame text-[#5a3b00]"
+                                    }`}
+                                  >
+                                    ถูกรางวัล {wonCount} ใบ
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openSheet(t.id);
+                                  }}
+                                  className="rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition active:scale-[0.96]"
+                                >
+                                  แสดงตั๋ว
+                                </button>
+                              </div>
+                            </div>
+                          }
+                        />
+                      );
+
+                      return (
+                        <div key={t.id} className="pd-rise">
+                          {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-white">{t.title}</p>}
+                          {goldWin ? <GoldFrame>{card}</GoldFrame> : card}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="mt-4 md:mt-6">
+                  <InfoBox
+                    icon={<IconInfo className="h-5 w-5" />}
+                    title="ใช้ตั๋วง่าย ๆ ที่หน้างาน"
+                    text="เปิดตั๋ว แล้วให้เจ้าหน้าที่สแกนก่อนร่วมสนุก ตั๋วที่สแกนแล้วจะเป็นสีเทาและมีตราประทับ"
+                  />
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
+        {/* ===== โปรไฟล์ ===== */}
+        {view === "profile" && (
+          <section aria-label="โปรไฟล์" className="md:mx-auto md:max-w-4xl">
+            <h1 className="text-3xl font-bold">โปรไฟล์</h1>
+
+            {!user ? (
+              <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
+                <p className="text-white/60">{ready ? "ยังไม่ได้เข้าสู่ระบบ" : "กำลังโหลด..."}</p>
+                {ready && (
+                  <button
+                    type="button"
+                    onClick={() => needLogin("profile")}
+                    className="mt-4 rounded-full bg-[#e50914] px-6 py-2.5 font-semibold text-white transition active:scale-95"
+                  >
+                    เข้าสู่ระบบ / สมัครสมาชิก
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="md:mt-6 md:grid md:grid-cols-[18rem_minmax(0,1fr)] md:items-start md:gap-6">
+                <div className="mt-6 flex flex-col items-center rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center text-white md:col-start-1 md:row-start-1 md:mt-0">
+                  <div className="relative">
+                    <Avatar user={user} className="h-44 w-44 text-7xl md:h-56 md:w-56 md:text-8xl" />
+                    {avatarBusy && !avatarDraft && (
+                      <span
+                        role="status"
+                        className="absolute inset-0 flex items-center justify-center rounded-full bg-black/60 text-sm font-semibold"
+                      >
+                        กำลังอัปโหลด...
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => avatarInputRef.current?.click()}
+                      disabled={avatarBusy}
+                      aria-label={user.avatarAt ? "เปลี่ยนรูปโปรไฟล์" : "อัปโหลดรูปโปรไฟล์"}
+                      className="absolute bottom-1 right-1 flex h-12 w-12 items-center justify-center rounded-full border-4 border-[#1f1f1f] bg-white text-black shadow-[0_2px_8px_rgba(0,0,0,0.5)] transition active:scale-90 disabled:opacity-60"
+                    >
+                      <IconCamera className="h-6 w-6" />
+                    </button>
+                    <input
+                      ref={avatarInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="sr-only"
+                      tabIndex={-1}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = ""; // เลือกรูปเดิมซ้ำได้
+                        if (f) pickAvatarFile(f);
+                      }}
+                    />
+                  </div>
+                  {user.avatarAt && (
+                    <button
+                      type="button"
+                      onClick={removeAvatar}
+                      disabled={avatarBusy}
+                      className="mt-3 rounded-full px-4 py-1.5 text-xs font-semibold text-white/70 transition hover:bg-white/10 active:opacity-60 disabled:opacity-50"
+                    >
+                      ลบรูปโปรไฟล์
+                    </button>
+                  )}
+                  {avatarError && !avatarDraft && (
+                    <p role="alert" className="mt-2 text-sm font-medium text-red-500">
+                      {avatarError}
+                    </p>
+                  )}
+                  <p className="mt-3 max-w-full truncate text-lg font-bold md:text-xl">{user.name}</p>
+                  <p className="max-w-full truncate text-xs text-white/60 md:text-sm">@{user.username}</p>
+                </div>
+
+                <div className="mt-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:col-start-2 md:row-span-2 md:row-start-1 md:mt-0 md:p-6">
+                  <h2 className="text-lg font-bold">ข้อมูลผู้ซื้อ</h2>
+                  <p className="mt-1 text-sm text-white/60">ใช้กรอกข้อมูลให้อัตโนมัติตอนซื้อตั๋ว</p>
+                  <dl className="mt-4 divide-y divide-white/10 overflow-hidden rounded-2xl bg-[#2a2a2a] text-sm">
+                    {profileRows.map(([label, value]) => (
+                      <div key={label} className="flex items-start justify-between gap-4 px-4 py-2.5">
+                        <dt className="shrink-0 text-white/60">{label}</dt>
+                        <dd className="min-w-0 break-words text-right font-semibold">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {returnToPay && !user.empCode && (
+                    <p role="alert" className="mt-3 rounded-xl bg-amber-100 px-4 py-3 text-sm font-semibold text-amber-800">
+                      กรอกรหัสพนักงานก่อนซื้อ Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้ บันทึกแล้วระบบพากลับไปชำระเงินต่อ
+                    </p>
+                  )}
+                  <div className="mt-4 space-y-4">
+                    <label className="block">
+                      <span className="text-sm font-medium">ชื่อที่แสดง</span>
+                      <input
+                        value={accName}
+                        onChange={(e) => {
+                          setAccName(e.target.value);
+                          setAccSaved(false);
+                        }}
+                        autoComplete="name"
+                        className={inputCls}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-sm font-medium">เบอร์โทร</span>
+                      <input
+                        value={accPhone}
+                        onChange={(e) => {
+                          setAccPhone(e.target.value);
+                          setAccSaved(false);
+                        }}
+                        inputMode="numeric"
+                        autoComplete="tel"
+                        placeholder="0812345678"
+                        className={inputCls}
+                      />
+                    </label>
+                    {/* รหัสพนักงานแสดงในแถวข้อมูลด้านบน แก้ไม่ได้ (กรอกตอนสมัคร) ช่องนี้ขึ้นเฉพาะบัญชีเก่าที่ยังไม่มีรหัส */}
+                    {!user.empCode && (
+                      <label className="block">
+                        <span className="text-sm font-medium">รหัสพนักงาน ({EMP_CODE_LENGTH} หลัก)</span>
+                        <input
+                          value={accEmp}
+                          onChange={(e) => {
+                            setAccEmp(e.target.value.replace(/\D/g, "").slice(0, EMP_CODE_LENGTH));
+                            setAccSaved(false);
+                          }}
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={EMP_CODE_LENGTH}
+                          placeholder={"0".repeat(EMP_CODE_LENGTH)}
+                          className={`${inputCls} font-mono tracking-[0.3em]`}
+                        />
+                        <span className="mt-1 block text-xs text-white/50">
+                          ใช้ลุ้นรางวัล Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้
+                        </span>
+                      </label>
+                    )}
+                    {accError && (
+                      <p role="alert" className="text-sm font-medium text-red-600">
+                        {accError}
+                      </p>
+                    )}
+                    {accSaved && (
+                      <p role="status" className="text-sm font-medium text-[#2f8f5b]">
+                        บันทึกแล้ว
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={saveProfile}
+                      disabled={!profileDirty || accBusy}
+                      className="flex h-14 w-full items-center justify-center rounded-full bg-[#e50914] text-base font-bold text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-white/15 disabled:text-white/50"
+                    >
+                      {accBusy ? "กำลังบันทึก" : "บันทึก"}
+                    </button>
+                    {profileDirty && !accBusy && (
+                      <button
+                        type="button"
+                        onClick={resetProfile}
+                        className="h-10 w-full rounded-full text-sm font-semibold text-white/70 transition hover:bg-white/10 active:opacity-60"
+                      >
+                        ยกเลิกการเปลี่ยนแปลง
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="mt-4 w-full rounded-2xl border border-white/40 py-3.5 font-semibold transition active:scale-[0.98] md:col-start-1 md:row-start-2 md:mt-0"
+                >
+                  ออกจากระบบ
+                </button>
+              </div>
+            )}
+          </section>
+        )}
+      </main>
+
+      {/* ===== เข้าสู่ระบบ / สมัครสมาชิก =====
+          วางนอก <main> เพราะ AuthShell เป็นกรอบเต็มจอ z-50 ต้องชนะแถบเมนู z-40 */}
+      {view === "auth" &&
+        (authMode === "login" ? (
+          <LoginForm
+            onAuthed={handleAuthed}
+            onSwitch={setAuthMode}
+            onBack={() => go(afterAuth === "pay" ? "buy" : "home")}
+            subtitle={afterAuth === "pay" ? "เข้าสู่ระบบก่อน เพื่อชำระเงินและรับตั๋ว" : undefined}
+          />
+        ) : (
+          <RegisterForm
+            onAuthed={handleAuthed}
+            onSwitch={setAuthMode}
+            onBack={() => go(afterAuth === "pay" ? "buy" : "home")}
+          />
+        ))}
+
+      {showNav && <BottomNav view={navView} badges={badges} golden={hasNewWin} onGo={go} />}
+
+      {/* ===== หน้าต่างปรับรูปโปรไฟล์ (ลากขยับ/ซูม แล้วกดบันทึก) ===== */}
+      {avatarDraft && (
+        <AvatarCropper
+          file={avatarDraft}
+          busy={avatarBusy}
+          error={avatarError}
+          onCancel={() => {
+            setAvatarDraft(null);
+            setAvatarError("");
+          }}
+          onSave={saveAvatarDraft}
+        />
+      )}
+
+      {/* ===== popup ยืนยันการยกเลิกรายการโอนเงิน ===== */}
+      {cancelTarget && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="cancel-title"
+          className="pd-fade fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => {
+            if (!cancelingId) setCancelTarget(null);
+          }}
+        >
+          <div
+            className="pd-dialog w-full max-w-sm rounded-3xl bg-[#1f1f1f] p-6 text-center text-white"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-50 text-red-600">
+              <IconTrash className="h-7 w-7" />
+            </span>
+            <h2 id="cancel-title" className="mt-4 text-lg font-bold">
+              ยกเลิกรายการนี้ใช่ไหม?
+            </h2>
+            <p className="mt-1 text-sm text-white/60">
+              รายการ <span className="font-mono font-bold">{cancelTarget.ref}</span> · {baht(cancelTarget.amount)}
+            </p>
+            <p className="mt-1 text-xs text-white/50">ยกเลิกแล้วกู้คืนไม่ได้ ถ้าโอนเงินไปแล้วอย่ายกเลิก</p>
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setCancelTarget(null)}
+                disabled={cancelingId !== null}
+                className="flex-1 rounded-2xl border border-white/40 py-3 text-sm font-semibold transition active:scale-[0.98] disabled:opacity-60"
+              >
+                ไม่ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={() => cancelPayment(cancelTarget.id)}
+                disabled={cancelingId !== null}
+                className="flex-1 rounded-2xl bg-red-600 py-3 text-sm font-bold text-white transition active:scale-[0.98] disabled:opacity-60"
+              >
+                {cancelingId ? "กำลังยกเลิก..." : "ยืนยันยกเลิก"}
               </button>
             </div>
           </div>
-
-          {/* ===== คอลัมน์ขวา: โหลตั๋ว + ประวัติ ===== */}
-          <div className="flex min-w-0 flex-col gap-6 lg:min-h-0">
-            {/* ===== โหลตั๋ว ===== */}
-            <section aria-label="โหลตั๋ว Lucky Draw" className="flex flex-none flex-col items-center">
-              <div className="pd-gold h-4 w-40 rounded-t-xl sm:w-52" />
-              <div className="relative w-full max-w-lg">
-                <div className="pd-jar relative h-64 w-full overflow-hidden rounded-b-[3rem] rounded-t-2xl border-4 border-white/30 lg:h-[36vh] lg:min-h-[15rem]">
-                  {shown.map((t) => {
-                    const s = ticketStyle(t.code);
-                    // ตั๋วที่อยู่ตั้งแต่เปิดหน้า: หล่นตามจังหวะสุ่ม / ตั๋วที่เพิ่งเข้าโหล (admin เพิ่งอนุมัติ): หล่นทันที
-                    const delay = initialRef.current?.has(t.code) ? s.delay : 0;
-                    return (
-                      <div
-                        key={t.code}
-                        className="absolute flex h-8 w-14 flex-col items-center justify-center rounded-md pd-ticket border border-dashed border-white/50 bg-[#6b1d24] text-[8px] font-bold leading-tight text-white"
-                        style={
-                          {
-                            left: `${s.left}%`,
-                            bottom: `${s.bottom}%`,
-                            "--rot": `${s.rot}deg`,
-                            animation: `pdDrop ${s.dur}s cubic-bezier(.3,1.2,.5,1) ${delay}s both`,
-                          } as CSSProperties
-                        }
-                      >
-                        <span className="tracking-widest">LUCKY</span>
-                        <span className="font-mono text-[7px] opacity-80">{t.empCode}</span>
-                      </div>
-                    );
-                  })}
-                  {total === 0 && (
-                    <p className="absolute inset-0 flex items-center justify-center text-sm text-white/50">โหลว่างเปล่า</p>
-                  )}
-                  {/* แสงสะท้อนบนแก้วโหล */}
-                  <span
-                    aria-hidden
-                    className="pointer-events-none absolute bottom-14 left-3 top-4 w-3 rounded-full bg-white/15 blur-[1px]"
-                  />
-                  <span
-                    aria-hidden
-                    className="pointer-events-none absolute bottom-20 left-8 top-10 w-1 rounded-full bg-white/10"
-                  />
-                  <div className="pointer-events-none absolute inset-x-0 bottom-3 text-center">
-                    <span className="rounded-full bg-black/60 px-4 py-1.5 text-sm font-bold">
-                      <span aria-hidden className="pd-live mr-1.5 text-green-400">
-                        ●
-                      </span>
-                      เหลือ {total} ใบ
-                    </span>
-                  </div>
-                </div>
-
-                {/* โลโก้แปะเป็นเทปที่มุมโหลตั๋ว (อยู่นอก overflow-hidden ของโหล จะได้ไม่โดนตัด) */}
-                <LogoTape className="-right-3 top-3 rotate-[10deg]" imgClassName="h-8 sm:h-10" />
-              </div>
-            </section>
-
-            {/* ===== ประวัติผู้ถูกรางวัล ===== */}
-            <section ref={winnerListRef} aria-label="ผู้ถูกรางวัลแล้ว" className="flex min-h-0 flex-1 flex-col">
-              <h2 className="flex-none text-lg font-bold">ผู้ถูกรางวัลแล้ว ({winners.length})</h2>
-              {winners.length === 0 ? (
-                <p className="mt-3 rounded-2xl border border-dashed border-white/20 p-5 text-center text-sm text-white/50">
-                  ยังไม่มีผู้ถูกรางวัล
-                </p>
-              ) : (
-                <ul className="pd-noscroll pd-gold-list mt-3 max-h-[28rem] min-h-0 flex-1 divide-y divide-[#ffd54a]/25 overflow-y-auto rounded-2xl border-2 border-[#d9a516] shadow-[0_5px_0_#4a2c00] lg:max-h-none">
-                  {winners.map((w, i) => (
-                    <li
-                      key={w.code}
-                      className={`flex items-center gap-3 px-4 py-3 ${
-                        hiddenCodes.includes(w.code) ? "invisible" : popCodes.includes(w.code) ? "pd-row-pop" : ""
-                      }`}
-                    >
-                      <WinnerAvatar w={w} className="h-12 w-12 text-xl ring-2 ring-[#ffd54a]/70" />
-                      <div className="min-w-0 flex-1">
-                        <p className="pd-gold-text truncate text-sm font-extrabold">
-                          {winners.length - i}. {w.name}
-                        </p>
-                        {(w.company || w.department) && (
-                          <p className="pd-gold-text-sub truncate text-xs font-semibold">
-                            {[w.company, w.department].filter(Boolean).join(" · ")}
-                          </p>
-                        )}
-                        <p className="pd-gold-text-sub font-mono text-xs font-semibold">รหัส {w.empCode}</p>
-                      </div>
-                      <p className="pd-gold-text-sub shrink-0 text-xs font-semibold">{fmt(w.wonAt)}</p>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          </div>
         </div>
-      </main>
-
-      {/* ===== ผู้ถูกรางวัล (การ์ดลอยเหนือหน้า เลื่อนขึ้นจากด้านล่าง กด Space หรือปุ่มปิดแล้วเลื่อนลง) ===== */}
-      {winner && !spinning && batchWin.length > 1 && (
-        <section
-          ref={winnerCardRef}
-          aria-label="ผู้ถูกรางวัลทั้งหมด"
-          className={`pd-batch-wrap fixed inset-x-3 bottom-4 z-[46] mx-auto max-w-6xl sm:bottom-6 ${
-            winnerClosing ? "pd-card-out" : ""
-          }`}
-        >
-          <div className="mb-2 flex items-center justify-between gap-3 px-2">
-            <p className="text-lg font-extrabold tracking-widest text-[#ffe27a] [text-shadow:0_2px_6px_rgba(0,0,0,0.7)] sm:text-2xl">
-              ยินดีด้วย! ผู้ถูกรางวัล {batchWin.length} คน
-            </p>
-            <button
-              type="button"
-              onClick={closeWinner}
-              disabled={winnerClosing}
-              className="min-h-9 rounded-full border-2 border-[#6b4200]/60 bg-[#ffe27a] px-4 text-xs font-bold text-[#5a3500] sm:text-sm"
-            >
-              ปิด (Space)
-            </button>
-          </div>
-          <div
-            className={`pd-noscroll grid max-h-[78vh] gap-3 overflow-y-auto p-1 ${
-              batchWin.length === 2 ? "grid-cols-1 sm:grid-cols-2" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-            }`}
-          >
-            {batchWin.map((b, i) => (
-              <div
-                key={b.code}
-                className="pd-gold-card relative min-w-0 rounded-[1.3rem] px-4 pb-4 pt-3 shadow-[0_6px_0_rgba(0,0,0,0.35)] [text-shadow:0_1px_0_rgba(255,255,255,0.45)]"
-              >
-                <span className="absolute left-3 top-3 flex h-7 w-7 items-center justify-center rounded-full bg-[#5a3500] text-sm font-extrabold text-[#ffe27a]">
-                  {i + 1}
-                </span>
-                <p className="text-center text-xs font-extrabold tracking-widest text-[#7a4b00]">ผู้ถูกรางวัล</p>
-                <div className="mt-2 flex items-center gap-4">
-                  <WinnerAvatar w={b} className="h-20 w-20 flex-none text-4xl ring-4 ring-white/80 sm:h-24 sm:w-24 sm:text-5xl" />
-                  <div className="min-w-0 flex-1 text-left">
-                    <p className="break-words text-xl font-extrabold leading-tight text-[#5a3500] sm:text-2xl">{b.name}</p>
-                    {(b.company || b.department) && (
-                      <p className="mt-1 break-words text-sm font-bold text-[#7a4b00]">
-                        {[b.company, b.department].filter(Boolean).join(" · ")}
-                      </p>
-                    )}
-                    <p className="mt-1 text-sm font-semibold text-[#7a4b00]">
-                      รหัสพนักงาน <span className="font-mono font-extrabold text-[#5a3500]">{b.empCode}</span>
-                    </p>
-                    <p className="mt-0.5 break-all font-mono text-[10px] text-[#7a4b00]/70">{b.code}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
       )}
 
-      {winner && !spinning && batchWin.length <= 1 && (
-        <section
-          ref={winnerCardRef}
-          aria-label="ผู้ถูกรางวัล"
-          className={`pd-gold-frame fixed inset-x-3 bottom-4 z-[46] mx-auto max-w-3xl rounded-[2rem] p-1.5 sm:bottom-6 ${
-            winnerClosing ? "pd-card-out" : ""
+      {/* ===== หน้าต่างแสดงตั๋ว (มือถือ: เลื่อนขึ้นจากด้านล่าง / คอมพิวเตอร์: กลางจอ) ===== */}
+      {sheet && sheetDef && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sheet-title"
+          className={`fixed inset-0 z-50 flex items-end justify-center bg-black/40 md:items-center md:p-6 ${
+            sheetClosing ? "pd-fade-out" : "pd-fade"
           }`}
+          onClick={closeSheet}
         >
-          {/* ป้ายไฟรอบการ์ด (ดวงไฟกระพริบแบบเดียวกับหัวตู้) */}
-          <div className="pd-marquee rounded-[1.7rem] px-3 py-3 sm:px-4 sm:py-4">
-            <div aria-hidden className="flex justify-between px-2">
-              {Array.from({ length: WIN_BULBS_X }).map((_, i) => (
-                <span
-                  key={i}
-                  className="pd-bulb pd-bulb-fast h-2.5 w-2.5 rounded-full sm:h-3 sm:w-3"
-                  style={{ animationDelay: i % 2 ? "0s" : "-0.14s" }}
-                />
-              ))}
+          <div
+            className={`relative max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-[#1f1f1f] p-5 pb-8 text-white md:max-w-3xl md:rounded-3xl md:p-8 ${
+              sheetClosing ? "pd-sheet-out" : "pd-sheet"
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 id="sheet-title" className="text-xl font-bold">
+                {sheetDef.title} · เหลือ {sheetReadyCount}/{sheetOrders.length} ใบ
+              </h2>
+              <button
+                type="button"
+                onClick={closeSheet}
+                className="rounded-full bg-[#1f1f1f] px-4 py-1.5 text-sm font-semibold"
+              >
+                ปิด
+              </button>
             </div>
+            <p className="mt-1 text-xs text-white/60">
+              {sheetDef.id === "booth"
+                ? "แตะที่ตั๋วเพื่อแสดงบาร์โค้ดเต็มจอ แล้วให้เจ้าหน้าที่สแกนทีละใบ ตั๋วที่สแกนแล้วจะเป็นสีเทาและมีตราประทับ"
+                : "แสดงตั๋วนี้ให้เจ้าหน้าที่สแกนที่หน้างาน ตั๋วที่สแกนแล้วจะเป็นสีเทาและมีตราประทับ"}
+            </p>
 
-            <div className="my-2.5 flex items-stretch gap-2.5 sm:my-3 sm:gap-3">
-              <div aria-hidden className="flex flex-col justify-between py-1">
-                {Array.from({ length: WIN_BULBS_Y }).map((_, i) => (
-                  <span
-                    key={i}
-                    className="pd-bulb pd-bulb-fast h-2.5 w-2.5 rounded-full sm:h-3 sm:w-3"
-                    style={{ animationDelay: i % 2 ? "0s" : "-0.14s" }}
-                  />
-                ))}
-              </div>
-
-              <div className="pd-gold-card relative min-w-0 flex-1 rounded-[1.3rem] px-4 pb-5 pt-4 [text-shadow:0_1px_0_rgba(255,255,255,0.45)] sm:px-6 sm:pb-6 sm:pt-5">
-                <button
-                  type="button"
-                  onClick={closeWinner}
-                  disabled={winnerClosing}
-                  className="absolute right-3 top-3 min-h-9 rounded-full border-2 border-[#6b4200]/60 bg-white/30 px-4 text-xs font-bold text-[#5a3500] sm:text-sm"
-                >
-                  ปิด (Space)
-                </button>
-                <p className="pr-28 text-sm font-extrabold tracking-widest text-[#7a4b00] sm:text-base">
-                  ยินดีด้วย! ผู้ถูกรางวัล
-                </p>
-                <div className="mt-4 flex items-center gap-5 sm:gap-7">
-                  <WinnerAvatar
-                    w={winner}
-                    className="h-24 w-24 text-5xl ring-4 ring-white/80 sm:h-36 sm:w-36 sm:text-7xl"
-                  />
-                  <div className="min-w-0 flex-1 text-left">
-                    <p className="break-words text-3xl font-extrabold leading-tight text-[#5a3500] sm:text-5xl">
-                      {winner.name}
-                    </p>
-                    {(winner.company || winner.department) && (
-                      <p className="mt-1.5 break-words text-base font-bold text-[#7a4b00] sm:text-xl">
-                        {[winner.company, winner.department].filter(Boolean).join(" · ")}
-                      </p>
-                    )}
-                    <p className="mt-1.5 text-base font-semibold text-[#7a4b00] sm:text-xl">
-                      รหัสพนักงาน <span className="font-mono font-extrabold text-[#5a3500]">{winner.empCode}</span>
-                    </p>
-                    <p className="mt-0.5 break-all font-mono text-xs text-[#7a4b00]/70">{winner.code}</p>
+            {sheetGroups.map((g) => {
+              if (g.list.length === 0) return null;
+              const left = g.list.filter((o) => !o.used).length;
+              return (
+                <div key={g.key}>
+                  {g.key === "value" && (
+                    <h3 className="mt-5 flex items-center gap-2 text-base font-bold">
+                      <span className="rounded-full bg-[#d9f27a] px-2.5 py-0.5 text-sm font-extrabold text-[#14402c]">
+                        {baht(g.list[0].price)}
+                      </span>
+                      ตั๋วเล่นซุ้ม (มีมูลค่า) · เหลือ {left}/{g.list.length} ใบ
+                    </h3>
+                  )}
+                  {g.key === "paper" && (
+                    <h3 className="mt-6 flex items-center gap-2 text-base font-bold">
+                      <span className="rounded-full bg-[#b45309] px-2.5 py-0.5 text-sm font-extrabold text-white">
+                        ไม่มีมูลค่า
+                      </span>
+                      ตั๋วรับตั๋วกระดาษ · เหลือ {left}/{g.list.length} ใบ
+                    </h3>
+                  )}
+                  <div className="mt-4 flex flex-col gap-4 md:grid md:grid-cols-2 md:items-start md:gap-6">
+                    {g.list.map((o) => (
+                      <div
+                        key={o.code}
+                        ref={(el) => {
+                          if (el) flipRefs.current.set(o.code, el);
+                          else flipRefs.current.delete(o.code);
+                        }}
+                      >
+                        <TicketPass
+                          def={sheetDef}
+                          order={o}
+                          scanned={o.used === true}
+                          fresh={settling.includes(o.code)}
+                          calm
+                          onBarcode={setBarcodeCode}
+                        />
+                      </div>
+                    ))}
                   </div>
                 </div>
-              </div>
-
-              <div aria-hidden className="flex flex-col justify-between py-1">
-                {Array.from({ length: WIN_BULBS_Y }).map((_, i) => (
-                  <span
-                    key={i}
-                    className="pd-bulb pd-bulb-fast h-2.5 w-2.5 rounded-full sm:h-3 sm:w-3"
-                    style={{ animationDelay: i % 2 ? "-0.14s" : "0s" }}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div aria-hidden className="flex justify-between px-2">
-              {Array.from({ length: WIN_BULBS_X }).map((_, i) => (
-                <span
-                  key={i}
-                  className="pd-bulb pd-bulb-fast h-2.5 w-2.5 rounded-full sm:h-3 sm:w-3"
-                  style={{ animationDelay: i % 2 ? "-0.14s" : "0s" }}
-                />
-              ))}
-            </div>
+              );
+            })}
           </div>
-        </section>
+        </div>
+      )}
+
+      {/* ===== บาร์โค้ดเต็มจอแนวนอน (แตะตั๋วเข้าซุ้มในหน้าต่างแสดงตั๋ว) ===== */}
+      {sheet && barcodeOrder && (
+        <BarcodeFullscreen
+          order={barcodeOrder}
+          def={defOf(barcodeOrder.ticket)}
+          leaving={barcodeLeaving}
+          onClose={() => setBarcodeCode(null)}
+        />
       )}
     </div>
   );
