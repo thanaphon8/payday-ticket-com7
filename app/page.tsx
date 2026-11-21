@@ -26,6 +26,9 @@ const EVENT = {
   place: "ลานกิจกรรม Payday Park", // TODO: แก้สถานที่
 };
 
+// ชื่อบัญชีผู้รับเงิน (แสดงในหน้าโอนเงิน)
+const RECEIVER = { th: "คอมเซเว่น เพื่อการกุศล", en: "COM7 PUBLIC CO.,LTD. FOR CHARITY" };
+
 // รูปการ์ดหน้าหลัก + พื้นหลังหน้าซื้อตั๋ว (ไฟล์ใน public/img/)
 const PAYCARD_IMG = "/img/paycard.jpg";
 const PAYCARD2_IMG = "/img/paycard2.jpg"; // พื้นหลังหน้าซื้อตั๋ว
@@ -88,8 +91,8 @@ const TICKETS: TicketDef[] = [
     homeNote: "ลุ้นรางวัลสุดเซอร์ไพรส์",
     homeImage: "/img/p2.png",
     blurb: "1 ใบ = 1 สิทธิ์สุ่มของรางวัล ภายในงาน", // TODO: แก้ให้ตรงสิทธิ์จริง
-    // ราคา 50 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
-    price: 50,
+    // ราคา 1 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
+    price: 1,
     layout: "compact",
     groupNote: "ลุ้นของรางวัล • 1 สิทธิ์",
     chips: ["รอสุ่มภายในงาน", "ยังไม่ได้ใช้สิทธิ์"],
@@ -1440,8 +1443,10 @@ function SlipPay({
             </div>
           ) : (
             <div className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center md:mt-0 md:p-6">
-              <p className="text-xs text-white/50">โอนตามยอดนี้เป๊ะ ๆ</p>
               <p className="mt-1 text-4xl font-extrabold">{baht(pay.amount)}</p>
+              <p className="mt-3 text-xs text-white/50">ชื่อบัญชีผู้รับ</p>
+              <p className="text-base font-bold">{RECEIVER.th}</p>
+              <p className="text-xs text-white/60">{RECEIVER.en}</p>
 
               <div className="mx-auto mt-4 flex aspect-square w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-white p-2 md:max-w-[19rem]">
                 {qrFailed || !pay.qrUrl ? (

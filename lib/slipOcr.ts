@@ -8,7 +8,7 @@ import { createWorker, type Worker } from "tesseract.js";
 //  2) สร้าง next.config.ts ที่มี serverExternalPackages: ["tesseract.js", "sharp"] แล้วรีสตาร์ท dev server
 //  3) ครั้งแรก tesseract.js โหลดไฟล์ภาษา tha/eng จากอินเทอร์เน็ต (ใหญ่ ใช้เวลานาน)
 //     โหลดเสร็จจะเก็บไว้ในโฟลเดอร์ชั่วคราวของเครื่อง ครั้งถัดไปเร็วขึ้นมาก
-//  4) (ไม่บังคับ) .env: RECEIVER_NAME=ชื่อผู้รับ ถ้าไม่ตั้ง ใช้ "บริษัท คอมเซเว่น จำกัด (มหาชน)"
+//  4) (ไม่บังคับ) .env: RECEIVER_NAME=ชื่อผู้รับ ถ้าไม่ตั้ง ใช้ "คอมเซเว่น เพื่อการกุศล"
 //     ตั้งหลายชื่อได้ คั่นด้วย , (ใช้เมื่อชื่อผู้รับเปลี่ยน)
 
 export type SlipOcr = {
@@ -34,8 +34,8 @@ export type SlipCheck = {
   error?: string | null;
 };
 
-// ชื่อผู้รับที่ยอมรับ (บิลของร้านจะแสดงเป็นชื่อบริษัทนี้บนสลีป)
-export const RECEIVER_NAME_DEFAULT = "บริษัท คอมเซเว่น จำกัด (มหาชน)";
+// ชื่อผู้รับที่ยอมรับ (แสดงบนสลีปเป็นชื่อบัญชีนี้)
+export const RECEIVER_NAME_DEFAULT = "คอมเซเว่น เพื่อการกุศล";
 
 // เวลาโอนต้องไม่เกินกี่นาทีหลังสร้างออเดอร์ (และต้องเป็นวันเดียวกับออเดอร์ตามเวลาไทย)
 export const MAX_TRANSFER_DELAY_MIN = 60;
@@ -156,8 +156,10 @@ function receiverMatches(flat: string): boolean {
     .map(norm)
     .filter((n) => n.length >= 4);
   if (names.some((n) => text.includes(n))) return true;
-  // ถ้าอ่านชื่อเต็มไม่ครบ ยอมรับเมื่อเจอคำหลักของชื่อบริษัท
-  return text.includes("คอมเซเวน") || text.includes("เซเวนจำกัด") || text.includes("comseven");
+  // ถ้าอ่านชื่อเต็มไม่ครบ ยอมรับเมื่อเจอคำหลักของชื่อผู้รับ (ไทย: "คอมเซเวน"+"กุศล" / อังกฤษ: "COM7 PUBLIC"+"CHARITY")
+  if ((text.includes("คอมเซเวน") && text.includes("กุศล")) || text.includes("คอมเซเวนเพือการกุศล")) return true;
+  // สลีปที่ตั้งมือถือเป็นภาษาอังกฤษ: "COM7 PUBLIC CO.,LTD. FOR CHARITY"
+  return text.includes("com7public") && text.includes("charity");
 }
 
 /* ---------- วันเวลาโอน ---------- */
@@ -177,10 +179,10 @@ const MONTHS = [
   "ธ\\.?ค\\.?|Dec",
 ];
 const DATE_RE = new RegExp(
-  `(\\d{1,2}) ?(${MONTHS.map((m) => `(?:${m})`).join("|")}) ?(\\d{2,4})\\D{0,4}?(\\d{1,2}):(\\d{2})`,
+  `(\\d{1,2}) ?(${MONTHS.map((m) => `(?:${m})`).join("|")}) ?(\\d{2,4})\\D{0,4}?(\\d{1,2}):(\\d{2})(?: ?([AaPp])\\.?[Mm]\\.?)?`,
   "i",
 );
-const DATE_NUM_RE = /(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})\D{0,4}?(\d{1,2}):(\d{2})/;
+const DATE_NUM_RE = /(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})\D{0,4}?(\d{1,2}):(\d{2})(?: ?([AaPp])\.?[Mm]\.?)?/;
 
 // แปลงเป็น ISO (UTC) โดยตีความเวลาบนสลีปเป็นเวลาไทย (UTC+7)
 function toIso(day: number, mi: number, ys: string, thaiYear2: boolean, hh: number, mm: number): string | null {
@@ -193,16 +195,25 @@ function toIso(day: number, mi: number, ys: string, thaiYear2: boolean, hh: numb
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+// สลีปภาษาอังกฤษใช้ AM/PM (เช่น 6:09 PM = 18:09)
+function to24(hh: number, ap?: string): number {
+  if (!ap) return hh;
+  const pm = ap.toLowerCase() === "p";
+  if (pm && hh < 12) return hh + 12;
+  if (!pm && hh === 12) return 0;
+  return hh;
+}
+
 function parseTransferAt(spaced: string): string | null {
   const m = DATE_RE.exec(spaced);
   if (m) {
     const tok = m[2];
     const mi = MONTHS.findIndex((x) => new RegExp(`^(?:${x})$`, "i").test(tok));
-    const iso = toIso(Number(m[1]), mi, m[3], /[ก-๙]/.test(tok), Number(m[4]), Number(m[5]));
+    const iso = toIso(Number(m[1]), mi, m[3], /[ก-๙]/.test(tok), to24(Number(m[4]), m[6]), Number(m[5]));
     if (iso) return iso;
   }
   const n = DATE_NUM_RE.exec(spaced);
-  if (n) return toIso(Number(n[1]), Number(n[2]) - 1, n[3], true, Number(n[4]), Number(n[5]));
+  if (n) return toIso(Number(n[1]), Number(n[2]) - 1, n[3], true, to24(Number(n[4]), n[6]), Number(n[5]));
   return null;
 }
 
