@@ -41,12 +41,18 @@ export const RECEIVER_NAME_DEFAULT = "คอมเซเว่น เพื่�
 // เวลาโอนต้องไม่เกินกี่นาทีหลังสร้างออเดอร์ (และต้องเป็นวันเดียวกับออเดอร์ตามเวลาไทย)
 export const MAX_TRANSFER_DELAY_MIN = 60;
 
-const INIT_WAIT_MS = 25_000; // รอ worker พร้อมได้นานแค่ไหนต่อหนึ่งคำขอ (โหลดภาษาต่อเบื้องหลังได้)
-const OCR_WAIT_MS = 30_000; // เวลารวมสำหรับอ่านรูปหลังจาก worker พร้อมแล้ว
+const INIT_WAIT_MS = 40_000; // รอ worker พร้อมได้นานแค่ไหนต่อหนึ่งคำขอ (โหลดภาษาต่อเบื้องหลังได้)
+const TOTAL_MS = 55_000; // เวลารวมทั้งคำขอ (รอ worker + อ่านรูป) ต้องน้อยกว่า maxDuration 60 วิ ของ route
 
-let workerP: Promise<Worker> | null = null;
-let thaiOk = true;
-let queue: Promise<unknown> = Promise.resolve();
+// เก็บ worker ไว้ที่ globalThis: ตอน dev โมดูลถูกโหลดใหม่บ่อย (HMR) ถ้าเก็บในตัวแปรโมดูล จะสร้าง worker ซ้อนหลายตัวจนช้า/ค้าง
+type OcrState = {
+  workerP: Promise<Worker> | null;
+  thaiOk: boolean;
+  queue: Promise<unknown>;
+  warmed: boolean;
+};
+const g = globalThis as unknown as { __slipOcr?: OcrState };
+const S: OcrState = (g.__slipOcr ??= { workerP: null, thaiOk: true, queue: Promise.resolve(), warmed: false });
 
 // ไฟล์ภาษาในโปรเจกต์ (ต้องมีทั้ง tha และ eng) ใช้ไฟล์นี้ก่อน ไม่ต้องโหลดจากอินเทอร์เน็ต
 const TESSDATA_DIR = path.join(process.cwd(), "tessdata");
@@ -55,51 +61,66 @@ const hasLocalLang = () =>
 
 async function makeWorker(): Promise<Worker> {
   const local = hasLocalLang();
+  console.log(`[OCR] เริ่มเตรียม worker (ไฟล์ภาษา: ${local ? "ในโปรเจกต์ " + TESSDATA_DIR : "โหลดจากเน็ต"})`);
+  const t0 = Date.now();
+  let lastStatus = "";
   const opts = {
     cachePath: path.join(os.tmpdir(), "tesseract-cache"),
-    errorHandler: (e: unknown) => console.error("tesseract worker error:", e),
+    errorHandler: (e: unknown) => console.error("[OCR] tesseract worker error:", e),
+    logger: (m: { status?: string; progress?: number }) => {
+      // log เฉพาะตอนสถานะเปลี่ยน (ไม่ log ตอนอ่านรูป) ไว้ดูใน terminal ว่าค้างตรงขั้นไหน
+      if (!m.status || m.status === "recognizing text" || m.status === lastStatus) return;
+      lastStatus = m.status;
+      console.log(`[OCR] ${m.status} (${Math.round((Date.now() - t0) / 1000)}s)`);
+    },
     ...(local ? ({ langPath: TESSDATA_DIR, gzip: false, cacheMethod: "none" } as const) : {}),
   };
   try {
-    thaiOk = true;
-    return await createWorker(["tha", "eng"], 1, opts);
+    S.thaiOk = true;
+    const w = await createWorker(["tha", "eng"], 1, opts);
+    console.log(`[OCR] worker พร้อมแล้ว ใช้เวลา ${Math.round((Date.now() - t0) / 1000)} วินาที`);
+    return w;
   } catch (e) {
     // โหลดภาษาไทยไม่ได้ ถอยไปใช้อังกฤษอย่างเดียว จะได้ยังอ่านยอดและวันเวลาที่เป็นตัวเลขได้
-    console.error("โหลดภาษาไทยของ tesseract ไม่ได้ ใช้ eng อย่างเดียว:", e);
-    thaiOk = false;
+    console.error("[OCR] โหลดภาษาไทยของ tesseract ไม่ได้ ใช้ eng อย่างเดียว:", e);
+    S.thaiOk = false;
     return await createWorker(["eng"], 1, opts);
   }
 }
 
 function getWorker() {
-  if (!workerP) {
-    workerP = makeWorker().catch((e) => {
-      workerP = null;
+  if (!S.workerP) {
+    S.workerP = makeWorker().catch((e) => {
+      console.error("[OCR] เตรียม worker ไม่สำเร็จ:", e);
+      S.workerP = null;
       throw e;
     });
   }
-  return workerP;
+  return S.workerP;
 }
 
 // ปิด worker ที่ค้าง แล้วเริ่มใหม่ในคำขอถัดไป
 function resetWorker() {
-  const p = workerP;
-  workerP = null;
-  queue = Promise.resolve();
+  const p = S.workerP;
+  S.workerP = null;
+  S.queue = Promise.resolve();
   p?.then((w) => w.terminate()).catch(() => undefined);
 }
 
-// เริ่มโหลด worker ตั้งแต่ตอนโหลดโมดูล ให้การโหลดภาษาครั้งแรกเกิดเบื้องหลัง ไม่ผูกกับเวลารอของคำขอ
-getWorker().catch((e) => console.error("เตรียม OCR ไม่สำเร็จ:", e));
+// เริ่มโหลด worker ตั้งแต่ตอนโหลดโมดูล (ครั้งเดียวต่อโปรเซส) ให้การโหลดภาษาครั้งแรกเกิดเบื้องหลัง ไม่ผูกกับเวลารอของคำขอ
+if (!S.warmed) {
+  S.warmed = true;
+  getWorker().catch(() => undefined);
+}
 
 // ให้ OCR ทำทีละใบ กัน worker ตัวเดียวถูกเรียกชนกัน
 function recognize(img: Buffer): Promise<string> {
-  const job = queue.then(async () => {
+  const job = S.queue.then(async () => {
     const w = await getWorker();
     const { data } = await w.recognize(img);
     return data.text;
   });
-  queue = job.catch(() => undefined);
+  S.queue = job.catch(() => undefined);
   return job;
 }
 
@@ -133,18 +154,21 @@ async function readText(buf: Buffer, pass: number) {
 
 /* ---------- ยอดเงิน ---------- */
 
-const NUM = "([0-9][0-9,]*(?:\\.[0-9]{1,2})?)";
+// ยอดเงินในสลีปมีทศนิยม 2 ตำแหน่งเสมอ (เช่น 1.00 / 1,000.00) อ่านจากข้อความที่ยังเว้นวรรค/ขึ้นบรรทัดไว้
+// ห้ามรวมเป็นบรรทัดเดียวติดกัน: OCR มักมีตัวอักษรขยะ (เช่น "5") อยู่บรรทัดเดียวกับคำว่า Amount ถ้าตัดช่องว่างทิ้งจะกลายเป็น "51.00"
+const AMOUNT_RE = /(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)\.(\d{2})(?!\d)/g;
+const AMOUNT_UNIT_RE = /(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})? ?(?:บาท|Baht|THB)/gi;
 
-// คืนยอดที่เป็นไปได้ทั้งหมด (ยอดที่มีป้าย "จำนวน" มาก่อน) ให้ checkSlip เทียบกับยอดออเดอร์
-function parseAmounts(flat: string): number[] {
+// คืนยอดที่เป็นไปได้ทั้งหมด ให้ checkSlip เทียบกับยอดออเดอร์
+function parseAmounts(text: string): number[] {
+  const t = text.replace(/[ \t ]+/g, " ");
   const found: number[] = [];
   const push = (s: string) => {
     const n = Number(s.replace(/,/g, ""));
     if (Number.isFinite(n) && n > 0 && !found.includes(n)) found.push(n);
   };
-  for (const m of flat.matchAll(new RegExp(`(?:จำนวนเงิน|จำนวน|Amount)[:：]?฿?${NUM}`, "gi"))) push(m[1]);
-  for (const m of flat.matchAll(new RegExp(`${NUM}(?:บาท|THB)`, "gi"))) push(m[1]);
-  for (const m of flat.matchAll(/(?<![\d.])(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}(?!\d)/g)) push(m[0]);
+  for (const m of t.matchAll(AMOUNT_RE)) push(`${m[1]}.${m[2]}`);
+  for (const m of t.matchAll(AMOUNT_UNIT_RE)) push(m[1]);
   return found;
 }
 
@@ -155,7 +179,7 @@ const norm = (s: string) =>
   s
     .toLowerCase()
     .replace(/[\s()（）.\-_]/g, "")
-    .replace(/[\u0E48-\u0E4C]/g, "");
+    .replace(/[่-์]/g, "");
 
 function receiverMatches(flat: string): boolean {
   const text = norm(flat);
@@ -230,7 +254,7 @@ function parseTransferAt(spaced: string): string | null {
 function analyze(text: string) {
   const flat = text.replace(/\s+/g, "");
   const spaced = text.replace(/(?<=[ก-๙.])\s+(?=[ก-๙.])/g, "").replace(/\s+/g, " ");
-  return { amounts: parseAmounts(flat), receiverOk: receiverMatches(flat), transferAt: parseTransferAt(spaced) };
+  return { amounts: parseAmounts(text), receiverOk: receiverMatches(flat), transferAt: parseTransferAt(spaced) };
 }
 
 // ไม่โยน error: อ่านไม่ได้ = ค่าว่าง ให้ admin ตรวจเอง (error เก็บใน out.error)
@@ -245,12 +269,17 @@ export async function ocrSlip(buf: Buffer): Promise<SlipOcr> {
     readable: false,
   };
   const texts: string[] = [];
+  const startedAt = Date.now();
 
   try {
-    // รอ worker พร้อมก่อน ถ้ายังโหลดภาษาไม่เสร็จ ปล่อยให้โหลดต่อเบื้องหลัง แล้วให้ลองอัพโหลดใหม่
-    await withTimeout(getWorker(), INIT_WAIT_MS, "OCR กำลังเตรียมระบบ (โหลดภาษาครั้งแรก) รอสักครู่แล้วอัพโหลดใหม่");
+    // รอ worker พร้อมก่อน ถ้ายังโหลดภาษาไม่เสร็จ ปล่อยให้โหลดต่อเบื้องหลัง (ไม่ปิด worker) แล้วให้ลองอัพโหลดใหม่
+    await withTimeout(
+      getWorker(),
+      INIT_WAIT_MS,
+      "OCR กำลังเตรียมระบบ (โหลดภาษาครั้งแรก) รอสักครู่แล้วอัพโหลดใหม่",
+    );
 
-    const deadline = Date.now() + OCR_WAIT_MS;
+    const deadline = startedAt + TOTAL_MS;
     for (let i = 0; i < PASSES.length; i++) {
       const left = deadline - Date.now();
       if (left < 3000) break;
@@ -262,10 +291,10 @@ export async function ocrSlip(buf: Buffer): Promise<SlipOcr> {
       if (!out.transferAt) out.transferAt = r.transferAt;
       if (out.amounts.length > 0 && out.receiverOk && out.transferAt) break;
     }
-    if (!thaiOk) out.error = "โหลดภาษาไทยไม่ได้ อ่านได้เฉพาะตัวเลขและตัวอักษรอังกฤษ";
+    if (!S.thaiOk) out.error = "โหลดภาษาไทยไม่ได้ อ่านได้เฉพาะตัวเลขและตัวอักษรอังกฤษ";
   } catch (e) {
     out.error = e instanceof Error ? e.message : String(e);
-    console.error("OCR สลีปไม่สำเร็จ:", e);
+    console.error("[OCR] อ่านสลีปไม่สำเร็จ:", e);
     if (out.error === "OCR timeout") resetWorker(); // worker อาจค้าง เริ่มใหม่ในคำขอถัดไป
   }
 
