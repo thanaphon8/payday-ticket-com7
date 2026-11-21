@@ -5,7 +5,7 @@ import { Prompt } from "next/font/google";
 
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
 
-// ต้องตรงกับ EMP_CODE_LENGTH ใน lib/tickets.ts
+// ต้องตรงกับ EMP_CODE_LENGTH ใน lib/tickets.ts (จำนวนหลักสูงสุด / รหัสสั้นกว่านี้ช่องหน้าแสดง x)
 const EMP_LEN = 7;
 const SHOW_MAX = 60; // จำนวนตั๋วสูงสุดที่วาดหล่นในโหล (ตัวเลข "เหลือ ... ใบ" นับจริงทั้งหมด)
 const FIRST_STOP_MS = 3000; // ตัวเลขสปินกี่ ms (นับจากกดเริ่ม) ก่อนหยุดหลักแรก
@@ -780,6 +780,10 @@ export default function SpinPage() {
     // เซิร์ฟเวอร์ส่ง winners (หลายคน) มา / เผื่อเวอร์ชันเก่าส่ง winner คนเดียว
     const list: Winner[] = Array.isArray(data.winners) && data.winners.length > 0 ? data.winners : [data.winner as Winner];
     const w = list[0];
+    // รหัสต่ำกว่า EMP_LEN หลัก: เติม x ด้านหน้า (เลขชิดขวา) เช่น 12345 → xx12345
+    const shownCode = String(w.empCode ?? "")
+      .slice(-EMP_LEN)
+      .padStart(EMP_LEN, "x");
     const remaining = Number(data.remaining ?? 0);
     // ให้ตัวเลขสปินครบ FIRST_STOP_MS (นับจากกดเริ่ม) ก่อนเริ่มหยุดหลักแรก
     const wait = Math.max(0, FIRST_STOP_MS - (Date.now() - t0));
@@ -820,7 +824,7 @@ export default function SpinPage() {
             sfx.zap(i + 1);
             setDigits((prev) => {
               const n = [...prev];
-              n[i] = w.empCode[i] ?? "0";
+              n[i] = shownCode[i] ?? "x"; // ช่องที่ไม่มีเลข (รหัสสั้นกว่า 7 หลัก) = x
               return n;
             });
             setStopped((prev) => {

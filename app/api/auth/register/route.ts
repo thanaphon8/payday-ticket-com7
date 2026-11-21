@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/mongodb";
 import { createSession, hashPassword, validPassword, validPhone, validUsername } from "@/lib/auth";
-import { EMP_CODE_LENGTH, validEmpCode } from "@/lib/tickets";
+import { EMP_CODE_LENGTH, EMP_CODE_MIN, validEmpCode } from "@/lib/tickets";
 import { validateOrg } from "../../../components/branches";
 
 // รับ id เป็นเลขจำนวนเต็มบวก (ตัวเลขหรือสตริงตัวเลข) ไม่ใช่ = null
@@ -26,7 +26,8 @@ export async function POST(req: Request) {
   const errors: Record<string, string> = {};
   if (name.length < 2) errors.name = "กรอกชื่อ-นามสกุลให้ครบ";
   if (!validPhone(phone)) errors.phone = "เบอร์โทรต้องมี 10 หลัก ขึ้นต้นด้วย 0";
-  if (!validEmpCode(empCode)) errors.empCode = `รหัสพนักงานต้องเป็นตัวเลข ${EMP_CODE_LENGTH} หลัก`;
+  if (!validEmpCode(empCode))
+    errors.empCode = `รหัสพนักงานต้องเป็นตัวเลข ${EMP_CODE_MIN}-${EMP_CODE_LENGTH} หลัก`;
   if (!validUsername(username)) errors.username = "username ต้องยาว 3-20 ตัว ใช้ได้เฉพาะ a-z 0-9 . _";
   if (!validPassword(password)) errors.password = "รหัสผ่านต้องยาวอย่างน้อย 6 ตัวอักษร";
   // บริษัทบังคับ / แผนกหรือสาขา (ตามที่บริษัทนั้นมี) บังคับ และต้องอยู่ในบริษัทที่เลือก

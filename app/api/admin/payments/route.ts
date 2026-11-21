@@ -4,8 +4,11 @@ import { getDb } from "@/lib/mongodb";
 import { requireAdmin } from "@/lib/auth";
 import { expireStale, type PaymentTicket } from "@/lib/tickets";
 import type { SlipCheck } from "@/lib/slipOcr";
+import { departmentsOf, getCompany } from "../../../components/departments";
+import { branchesOf, branchFullLabel } from "../../../components/branches";
 
 const LISTABLE = ["reviewing", "approved", "auto", "rejected"] as const;
+const LIST_LIMIT = 300; // ค้นหาฝั่งหน้าเว็บ จึงส่งมาเยอะขึ้นเพื่อให้ค้นเจอ
 
 // เคยถูกปฏิเสธ (ไม่ว่าตอนนี้สถานะอะไร) = status rejected หรือมี rejectCount / rejectReason
 const EVER_REJECTED = {
@@ -33,6 +36,22 @@ function avatarUrlOf(id: ObjectId, u: Document | undefined) {
   return `/api/admin/users/${id.toString()}/avatar${v ? `?v=${encodeURIComponent(v)}` : ""}`;
 }
 
+// รหัสพนักงาน + บริษัท + แผนก (สำนักงานใหญ่) หรือสาขา (หน้าร้าน) ของผู้ใช้ ตามที่เลือกตอนสมัคร (บัญชีเก่า = null)
+function orgOfUser(u: Document | undefined) {
+  const cid = typeof u?.companyId === "number" ? u.companyId : null;
+  const did = typeof u?.departmentId === "number" ? u.departmentId : null;
+  const bid = typeof u?.branchId === "number" ? u.branchId : null;
+  const company = cid ? (getCompany(cid)?.name ?? null) : null;
+  const dept = cid && did ? (departmentsOf(cid).find((d) => d.id === did)?.name ?? null) : null;
+  const branchDoc = cid && bid ? branchesOf(cid).find((b) => b.id === bid) : undefined;
+  const branch = branchDoc ? branchFullLabel(branchDoc) : null;
+  return {
+    empCode: typeof u?.empCode === "string" && u.empCode ? u.empCode : null,
+    company,
+    department: dept ?? branch,
+  };
+}
+
 // รายการสำหรับหน้า admin: ?status=reviewing (ค่าเริ่มต้น) | approved | auto | rejected
 // auto = อนุมัติแล้วโดยระบบอัตโนมัติ (reviewedBy = "auto") ซึ่งยังนับรวมอยู่ใน approved ด้วย
 // rejected = ทุกรายการที่เคยถูกปฏิเสธ (แม้ผู้ซื้อส่งสลีปใหม่แล้วก็ยังอยู่ในแถบนี้)
@@ -40,6 +59,7 @@ function avatarUrlOf(id: ObjectId, u: Document | undefined) {
 // counts.bans = จำนวนผู้ใช้ที่ถูกแบนอยู่ตอนนี้ (ใช้แสดงจุดแดงที่เมนู "ถูกแบน")
 // slip.check = ผล OCR เทียบกับรายการ (null = สลีปเก่าที่ยังไม่เคยตรวจ)
 // avatarUrl = รูปโปรไฟล์ผู้ซื้อ / retry = ไม่ใช่ null ถ้าส่งสลีปใหม่ในออเดอร์เดิมหลังถูกปฏิเสธ (แท็ก "แก้ไข")
+// empCode / company / department = ข้อมูลของผู้ซื้อ (ไว้ให้หน้าเว็บค้นหา)
 export async function GET(req: Request) {
   const guard = await requireAdmin();
   if (!guard.ok) return NextResponse.json({ error: guard.status === 401 ? "กรุณาเข้าสู่ระบบ" : "ไม่มีสิทธิ์" }, { status: guard.status });
@@ -67,7 +87,7 @@ export async function GET(req: Request) {
       .find(filter)
       // รอตรวจ: เก่าสุดก่อน (ตรวจตามคิว) / ประวัติ: ใหม่สุดก่อน
       .sort(status === "reviewing" ? { slipAt: 1 } : { createdAt: -1 })
-      .limit(100)
+      .limit(LIST_LIMIT)
       .toArray(),
   ]);
 
@@ -82,7 +102,10 @@ export async function GET(req: Request) {
   const userDocs = userIds.length
     ? await db
         .collection("users")
-        .find({ _id: { $in: userIds } }, { projection: { avatarFileId: 1, avatarAt: 1 } })
+        .find(
+          { _id: { $in: userIds } },
+          { projection: { avatarFileId: 1, avatarAt: 1, empCode: 1, companyId: 1, departmentId: 1, branchId: 1 } },
+        )
         .toArray()
     : [];
   const userById = new Map(userDocs.map((u) => [u._id.toString(), u]));
@@ -91,11 +114,16 @@ export async function GET(req: Request) {
     const tickets = d.tickets as PaymentTicket[];
     const slip = d.slipId ? slipById.get(String(d.slipId)) : undefined;
     const uid = d.userId instanceof ObjectId ? d.userId : null;
+    const user = uid ? userById.get(uid.toString()) : undefined;
+    const org = orgOfUser(user);
     return {
       id: d._id.toString(),
       ref: d.ref as string,
       name: d.name as string,
       phone: d.phone as string,
+      empCode: org.empCode ?? (typeof d.empCode === "string" && d.empCode ? d.empCode : null),
+      company: org.company,
+      department: org.department,
       amount: d.amount as number,
       status: d.status as string,
       auto: d.status === "approved" && d.reviewedBy === "auto",
@@ -104,7 +132,7 @@ export async function GET(req: Request) {
       booth: tickets.filter((t) => t.ticket === "booth").length,
       lucky: tickets.filter((t) => t.ticket === "lucky").length,
       rejectReason: (d.rejectReason as string | undefined) ?? null,
-      avatarUrl: uid ? avatarUrlOf(uid, userById.get(uid.toString())) : null,
+      avatarUrl: uid ? avatarUrlOf(uid, user) : null,
       retry: retryOf(d),
       slip: slip
         ? {

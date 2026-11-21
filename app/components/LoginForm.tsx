@@ -67,7 +67,7 @@ export default function LoginForm({
       <form
         onSubmit={submit}
         noValidate
-        className="mt-4 space-y-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:p-6"
+        className="mt-4 space-y-4 rounded-[2.25rem] border border-white/10 bg-[#1f1f1f] p-6 md:p-7"
       >
         <Field
           label="Username"
@@ -90,7 +90,7 @@ export default function LoginForm({
         />
 
         {errors.form && (
-          <p role="alert" className="text-sm font-medium text-red-400">
+          <p role="alert" className="px-4 text-sm font-medium text-red-400">
             {errors.form}
           </p>
         )}

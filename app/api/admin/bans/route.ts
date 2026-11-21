@@ -4,6 +4,8 @@ import { getDb } from "@/lib/mongodb";
 import { banUser, requireAdmin, unbanUser } from "@/lib/auth";
 import type { PaymentTicket } from "@/lib/tickets";
 import type { SlipCheck } from "@/lib/slipOcr";
+import { departmentsOf, getCompany } from "../../../components/departments";
+import { branchesOf, branchFullLabel } from "../../../components/branches";
 
 // ระยะเวลาแบนที่ admin เลือกได้ (นาที) null = ถาวร
 const DURATIONS: Record<string, number | null> = {
@@ -12,6 +14,24 @@ const DURATIONS: Record<string, number | null> = {
   "7d": 7 * 24 * 60,
   permanent: null,
 };
+
+type Org = { empCode: string | null; company: string | null; department: string | null };
+
+// รหัสพนักงาน + บริษัท + แผนก (สำนักงานใหญ่) หรือสาขา (หน้าร้าน) ของผู้ใช้ ตามที่เลือกตอนสมัคร (บัญชีเก่า = null)
+function orgOfUser(u: Document): Org {
+  const cid = typeof u.companyId === "number" ? u.companyId : null;
+  const did = typeof u.departmentId === "number" ? u.departmentId : null;
+  const bid = typeof u.branchId === "number" ? u.branchId : null;
+  const company = cid ? (getCompany(cid)?.name ?? null) : null;
+  const dept = cid && did ? (departmentsOf(cid).find((d) => d.id === did)?.name ?? null) : null;
+  const branchDoc = cid && bid ? branchesOf(cid).find((b) => b.id === bid) : undefined;
+  const branch = branchDoc ? branchFullLabel(branchDoc) : null;
+  return {
+    empCode: typeof u.empCode === "string" && u.empCode ? u.empCode : null,
+    company,
+    department: dept ?? branch,
+  };
+}
 
 // แท็ก "แก้ไข" = ออเดอร์เดิมที่เคยถูกปฏิเสธ แล้วผู้ซื้อส่งสลีปใหม่เข้ามา (ตอนนี้รอตรวจ/อนุมัติแล้ว)
 // ออเดอร์ใหม่ที่ผู้ซื้อกดสร้างเอง (QR ใหม่) เป็นคนละรายการ จึงไม่ติดแท็ก
@@ -35,13 +55,16 @@ function avatarUrlOf(u: WithId<Document>) {
 }
 
 // รูปแบบเดียวกับรายการในหน้า "รอตรวจ" (/api/admin/payments) เพื่อให้การ์ดหน้าถูกแบนแสดงเหมือนกัน
-function toItem(d: WithId<Document>, slip: WithId<Document> | undefined, avatarUrl: string | null) {
+function toItem(d: WithId<Document>, slip: WithId<Document> | undefined, avatarUrl: string | null, org: Org) {
   const tickets = (d.tickets as PaymentTicket[] | undefined) ?? [];
   return {
     id: d._id.toString(),
     ref: d.ref as string,
     name: d.name as string,
     phone: d.phone as string,
+    empCode: org.empCode ?? (typeof d.empCode === "string" && d.empCode ? d.empCode : null),
+    company: org.company,
+    department: org.department,
     amount: d.amount as number,
     status: d.status as string,
     auto: d.status === "approved" && d.reviewedBy === "auto",
@@ -64,7 +87,7 @@ function toItem(d: WithId<Document>, slip: WithId<Document> | undefined, avatarU
 
 // รายชื่อผู้ใช้ที่ถูกแบนอยู่ตอนนี้ (bannedUntil ยังไม่ถึงเวลา) พร้อมรายการ + สลีปที่ทำให้ถูกแบน
 // รายการที่ทำให้ถูกแบน = users.banPaymentId / แบนเก่าที่ไม่ได้เก็บไว้ ใช้รายการล่าสุดที่เคยส่งสลีปแทน (payment = null ถ้าไม่เคยส่ง)
-// คืน { bans: [{ id, username, name, phone, avatarUrl, bannedUntil, bannedAt, banReason, payment }] } (แบนถาวร bannedUntil = ปี 9999)
+// คืน { bans: [{ id, username, name, phone, empCode, company, department, avatarUrl, bannedUntil, bannedAt, banReason, payment }] } (แบนถาวร bannedUntil = ปี 9999)
 export async function GET() {
   const guard = await requireAdmin();
   if (!guard.ok)
@@ -99,16 +122,20 @@ export async function GET() {
     bans: users.map((u, i) => {
       const p = payOf[i];
       const avatarUrl = avatarUrlOf(u);
+      const org = orgOfUser(u);
       return {
         id: u._id.toString(),
         username: (u.username as string | undefined) ?? "",
         name: (u.name as string | undefined) ?? "",
         phone: (u.phone as string | undefined) ?? "",
+        empCode: org.empCode,
+        company: org.company,
+        department: org.department,
         avatarUrl,
         bannedUntil: u.bannedUntil as string,
         bannedAt: (u.bannedAt as string | undefined) ?? null,
         banReason: (u.banReason as string | undefined) ?? null,
-        payment: p ? toItem(p, p.slipId ? slipById.get(String(p.slipId)) : undefined, avatarUrl) : null,
+        payment: p ? toItem(p, p.slipId ? slipById.get(String(p.slipId)) : undefined, avatarUrl, org) : null,
       };
     }),
   });

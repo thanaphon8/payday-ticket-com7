@@ -6,7 +6,7 @@ import { Prompt } from "next/font/google";
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
 
 type ListTab = "reviewing" | "approved" | "auto" | "rejected";
-type Tab = ListTab | "summary" | "scans" | "bans";
+type Tab = ListTab | "summary" | "scans" | "bans" | "spin";
 type SlipCheck = {
   amount: number | null;
   amountOk: boolean;
@@ -24,6 +24,9 @@ type Item = {
   ref: string;
   name: string;
   phone: string;
+  empCode: string | null;
+  company: string | null;
+  department: string | null; // แผนก (สำนักงานใหญ่) หรือสาขา (หน้าร้าน)
   amount: number;
   status: string;
   auto: boolean;
@@ -60,6 +63,9 @@ type ScanRow = {
   at: string;
   name: string | null;
   phone: string | null;
+  empCode: string | null;
+  company: string | null;
+  department: string | null;
   ticket: string | null;
   firstUsedAt: string | null;
   boothId: string | null;
@@ -83,11 +89,27 @@ type BanRow = {
   username: string;
   name: string;
   phone: string;
+  empCode: string | null;
+  company: string | null;
+  department: string | null;
   avatarUrl: string | null;
   bannedUntil: string;
   bannedAt: string | null;
   banReason: string | null;
   payment: Item | null;
+};
+// ผู้ถูกรางวัลจากตู้สุ่ม (rank = ลำดับที่ได้รางวัล คนแรก = 1)
+type SpinWinner = {
+  id: string;
+  rank: number;
+  code: string;
+  wonAt: string | null;
+  name: string;
+  phone: string;
+  empCode: string | null;
+  company: string | null;
+  department: string | null;
+  avatarUrl: string | null;
 };
 type BanDuration = "1h" | "24h" | "7d" | "permanent";
 // จำนวนรายการ "อัตโนมัติ" / "ถูกแบน" ที่ admin เปิดดูล่าสุด (เก็บในเบราว์เซอร์) ใช้ทำจุดแดง
@@ -147,6 +169,19 @@ const fmtDay = (ymd: string) =>
 // แบนถาวร = bannedUntil เป็นปี 9999
 const isForever = (iso: string) => iso.startsWith("9999");
 
+// ค้นหา: ตัดช่องว่าง/ตัวพิมพ์ใหญ่เล็ก / พิมพ์เบอร์โทรมีขีดหรือเว้นวรรคก็เจอ
+const fold = (s: string) => s.toLowerCase().replace(/\s+/g, "");
+const digitsOf = (s: string) => s.replace(/\D/g, "");
+function matches(query: string, fields: (string | null | undefined)[]) {
+  const f = fold(query);
+  if (!f) return true;
+  const d = /^[\d\s-]+$/.test(query) ? digitsOf(query) : "";
+  return fields.some((x) => !!x && (fold(x).includes(f) || (d !== "" && digitsOf(x).includes(d))));
+}
+// บรรทัดข้อมูลองค์กรใต้ชื่อ: รหัสพนักงาน · บริษัท · แผนก/สาขา
+const orgText = (x: { empCode: string | null; company: string | null; department: string | null }) =>
+  [x.empCode ? `รหัส ${x.empCode}` : null, x.company, x.department].filter(Boolean).join(" · ");
+
 function beep() {
   try {
     const C = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -165,15 +200,15 @@ function beep() {
   }
 }
 
-// รูปโปรไฟล์ผู้ซื้อ (ไม่มีรูป/โหลดไม่ได้ = วงกลมตัวอักษรแรกของชื่อ)
-function Avatar({ src, name }: { src: string | null; name: string }) {
+// รูปโปรไฟล์ผู้ซื้อ (ไม่มีรูป/โหลดไม่ได้ = วงกลมตัวอักษรแรกของชื่อ) className = ขนาด + ขนาดตัวอักษร
+function Avatar({ src, name, className = "h-10 w-10 text-base" }: { src: string | null; name: string; className?: string }) {
   const [bad, setBad] = useState(false);
   const initial = (name || "?").trim().charAt(0) || "?";
   if (!src || bad) {
     return (
       <span
         aria-hidden="true"
-        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#e3ecd6] text-base font-bold text-[#4d6652]"
+        className={`flex shrink-0 items-center justify-center rounded-full bg-[#e3ecd6] font-bold text-[#4d6652] ${className}`}
       >
         {initial}
       </span>
@@ -186,7 +221,7 @@ function Avatar({ src, name }: { src: string | null; name: string }) {
       alt=""
       loading="lazy"
       onError={() => setBad(true)}
-      className="h-10 w-10 shrink-0 rounded-full bg-[#e3ecd6] object-cover"
+      className={`shrink-0 rounded-full bg-[#e3ecd6] object-cover ${className}`}
     />
   );
 }
@@ -262,6 +297,8 @@ export default function AdminPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [scanData, setScanData] = useState<ScanData | null>(null);
   const [banList, setBanList] = useState<BanRow[] | null>(null);
+  const [spinList, setSpinList] = useState<SpinWinner[] | null>(null);
+  const [query, setQuery] = useState(""); // คำค้นหา (ชื่อ / รหัสพนักงาน / แผนก / เบอร์โทร) ใช้กับทุกแถบที่เป็นรายชื่อ
   const [boothFilter, setBoothFilter] = useState(""); // กรองประวัติสแกนเฉพาะซุ้ม ("" = ทุกซุ้ม)
   const [menuOpen, setMenuOpen] = useState(false); // มือถือ: เมนูรายการเต็มจอ
   const [sound, setSound] = useState(true);
@@ -289,9 +326,11 @@ export default function AdminPage() {
   const load = useCallback(async () => {
     try {
       const current = tabRef.current;
-      const special = current === "summary" || current === "scans" || current === "bans";
+      const special = current === "summary" || current === "scans" || current === "bans" || current === "spin";
       const listStatus: ListTab =
-        current === "summary" || current === "scans" || current === "bans" ? "reviewing" : current;
+        current === "summary" || current === "scans" || current === "bans" || current === "spin"
+          ? "reviewing"
+          : current;
       const scansUrl = `/api/admin/scans${boothRef.current ? `?booth=${encodeURIComponent(boothRef.current)}` : ""}`;
       const extraUrl =
         current === "summary"
@@ -300,7 +339,9 @@ export default function AdminPage() {
             ? scansUrl
             : current === "bans"
               ? "/api/admin/bans"
-              : null;
+              : current === "spin"
+                ? "/api/admin/spin-winners"
+                : null;
       const [res, extraRes] = await Promise.all([
         fetch(`/api/admin/payments?status=${listStatus}`, { cache: "no-store" }),
         extraUrl ? fetch(extraUrl, { cache: "no-store" }) : Promise.resolve(null),
@@ -325,12 +366,16 @@ export default function AdminPage() {
               ? "โหลดสรุปยอดไม่ได้ กำลังลองใหม่"
               : current === "scans"
                 ? "โหลดประวัติสแกนไม่ได้ กำลังลองใหม่"
-                : "โหลดรายชื่อผู้ถูกแบนไม่ได้ กำลังลองใหม่",
+                : current === "spin"
+                  ? "โหลดรายชื่อผู้ถูกรางวัลไม่ได้ กำลังลองใหม่"
+                  : "โหลดรายชื่อผู้ถูกแบนไม่ได้ กำลังลองใหม่",
           );
         } else if (current === "summary") {
           setSummary((await extraRes.json()) as Summary);
         } else if (current === "scans") {
           setScanData((await extraRes.json()) as ScanData);
+        } else if (current === "spin") {
+          setSpinList(((await extraRes.json()) as { winners: SpinWinner[] }).winners);
         } else {
           setBanList(((await extraRes.json()) as { bans: BanRow[] }).bans);
         }
@@ -424,6 +469,8 @@ export default function AdminPage() {
     setSummary(null);
     setScanData(null);
     setBanList(null);
+    setSpinList(null);
+    setQuery("");
     setBoothFilter("");
     setCounts({ reviewing: 0, approved: 0, auto: 0, rejected: 0, bans: 0 });
     setDetailId(null);
@@ -555,6 +602,7 @@ export default function AdminPage() {
     ["bans", "ถูกแบน"],
     ["summary", "สรุปยอด"],
     ["scans", "สแกนตั๋ว"],
+    ["spin", "ผลสุ่ม Spin"],
   ];
 
   const heading =
@@ -564,12 +612,28 @@ export default function AdminPage() {
         ? "ประวัติสแกนตั๋ว"
         : tab === "bans"
           ? "ผู้ใช้ที่ถูกแบน"
-          : tab === "auto"
-            ? "อนุมัติอัตโนมัติ"
-            : "ตรวจสลีป";
+          : tab === "spin"
+            ? "ผู้ถูกรางวัล Spin"
+            : tab === "auto"
+              ? "อนุมัติอัตโนมัติ"
+              : "ตรวจสลีป";
 
   // เงินรวมที่ทุกซุ้มยิงได้ (ไม่นับจุดรับตั๋วกระดาษ เพราะไม่มีมูลค่า)
   const boothTotal = scanData ? scanData.booths.reduce((s, b) => s + b.amount, 0) : 0;
+
+  // รายชื่อที่กรองตามคำค้นหา (ชื่อ / รหัสพนักงาน / แผนก / เบอร์โทร ฯลฯ)
+  const q = query.trim();
+  const searching = q !== "";
+  const itemRows = items.filter((p) => matches(q, [p.name, p.phone, p.empCode, p.company, p.department, p.ref]));
+  const banRows = banList
+    ? banList.filter((b) => matches(q, [b.name, b.username, b.phone, b.empCode, b.company, b.department, b.payment?.ref]))
+    : null;
+  const scanRows = scanData
+    ? scanData.scans.filter((s) => matches(q, [s.name, s.phone, s.empCode, s.company, s.department, s.code, s.boothName]))
+    : [];
+  const spinRows = spinList
+    ? spinList.filter((w) => matches(q, [w.name, w.phone, w.empCode, w.company, w.department, w.code]))
+    : null;
 
   // จุดแดงบนเมนู: รอตรวจ = ยังมีรายการค้างอยู่ / อัตโนมัติ + ถูกแบน = มีรายการใหม่เข้ามาหลังจากที่เปิดดูล่าสุด (ไม่นับตอนเปิดดูเมนูนั้นอยู่)
   const dotFor = (id: Tab): boolean =>
@@ -585,6 +649,7 @@ export default function AdminPage() {
   function selectTab(id: Tab) {
     setTab(id);
     setItems([]);
+    setQuery("");
     setDetailId(null);
     setConfirmId(null);
     setRejectId(null);
@@ -595,7 +660,7 @@ export default function AdminPage() {
   // ปุ่มเมนูรายการ (แถบด้านข้างบนคอมพิวเตอร์ / เมนูเต็มจอบนมือถือ)
   const navItem = (id: Tab, label: string, big: boolean) => {
     const active = tab === id;
-    const count = id === "summary" || id === "scans" ? null : counts[id];
+    const count = id === "summary" || id === "scans" || id === "spin" ? null : counts[id];
     return (
       <button
         key={id}
@@ -646,6 +711,51 @@ export default function AdminPage() {
         ล็อก
       </button>
     </>
+  );
+
+  // ช่องค้นหารายชื่อ (ใช้ทุกแถบที่เป็นรายชื่อ ยกเว้นสรุปยอด)
+  const searchBox =
+    tab === "summary" ? null : (
+      <div className="relative mt-4">
+        <svg
+          viewBox="0 0 24 24"
+          className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#6b7f6f]"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          aria-hidden
+        >
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="M16 16l4.5 4.5" />
+        </svg>
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="ค้นหา ชื่อ / รหัสพนักงาน / แผนก / เบอร์โทร"
+          aria-label="ค้นหารายชื่อ"
+          autoComplete="off"
+          maxLength={100}
+          className="min-h-12 w-full rounded-full border border-[#cfdcc0] bg-white pl-12 pr-12 text-base outline-none focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a] sm:text-sm"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            aria-label="ล้างคำค้นหา"
+            className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-lg font-bold text-[#6b7f6f] hover:bg-[#e3ecd6]"
+          >
+            ×
+          </button>
+        )}
+      </div>
+    );
+
+  const noMatch = (
+    <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+      ไม่พบรายการที่ตรงกับ “{q}”
+    </div>
   );
 
   // ปุ่ม ปฏิเสธ / แบน / อนุมัติ ของรายการในแถบ "รอตรวจ"
@@ -805,6 +915,7 @@ export default function AdminPage() {
           บัญชี @{b.username}
           {b.name ? ` · ${b.name}` : ""} · {b.phone}
         </p>
+        {orgText(b) && <p className="break-words text-[11px] text-[#4d6652] sm:text-xs">{orgText(b)}</p>}
         {b.bannedAt && <p className="text-[11px] text-[#6b7f6f] sm:text-xs">ถูกแบนเมื่อ {fmtSec(b.bannedAt)}</p>}
         {b.banReason && <p className="break-words text-[11px] text-[#6b7f6f] sm:text-xs">เหตุผล: {b.banReason}</p>}
         {b.payment && (
@@ -896,6 +1007,7 @@ export default function AdminPage() {
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold">{p.name}</p>
                   <p className="text-xs text-[#4d6652] sm:text-sm">{p.phone}</p>
+                  {orgText(p) && <p className="break-words text-[11px] text-[#4d6652] sm:text-xs">{orgText(p)}</p>}
                 </div>
               </div>
               <p className="mt-2 text-xs text-[#4d6652] sm:text-sm">
@@ -1033,13 +1145,16 @@ export default function AdminPage() {
                     ? "ยอดขายนับจากรายการที่อนุมัติแล้วเท่านั้น รายการที่รอตรวจแสดงแยกไว้ต่างหาก"
                     : tab === "scans"
                       ? "ประวัติการยิงบาร์โค้ดตั๋วเข้างานจากหน้า /ticket แยกตามบัญชีซุ้ม ดูได้ว่าซุ้มไหนยิงให้ใคร เวลาไหน และรวมเป็นเงินเท่าไหร่ ตั๋ว 1 ใบยิงผ่านได้ครั้งเดียว ครั้งต่อไปจะขึ้นว่าซ้ำ"
-                      : tab === "bans"
-                        ? "ผู้ซื้อที่ถูกแบนไม่ให้สร้างรายการและส่งสลีป (ระบบแบนเองเมื่ออ่านสลีปได้แต่ไม่ผ่านข้อใดข้อหนึ่ง: ยอดเงิน ผู้รับเงิน วันเวลาโอน หรือ admin แบนเอง) การ์ดแสดงสลีปและผลตรวจของรายการที่ทำให้ถูกแบน กดปลดแบนได้ก่อนครบเวลา ส่วนการอนุมัติ/ปฏิเสธรายการทำที่เมนู “รอตรวจ”"
-                        : tab === "auto"
-                          ? "รายการที่ระบบอนุมัติให้เองเพราะตรวจสลีปผ่านครบทุกข้อ (ยอดเงิน ผู้รับ วันเวลาโอน เลขอ้างอิง) และออกตั๋วแล้ว รายการเหล่านี้อยู่ในเมนู “อนุมัติแล้ว” ด้วย"
-                          : "ระบบอ่านรูปสลีปจริงแล้วเทียบกับออเดอร์ ✓ = ตรงกับรายการ (เวลาโอนต้องเป็นวันเดียวกับออเดอร์และไม่เกิน 1 ชั่วโมงหลังสร้างออเดอร์) / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
+                      : tab === "spin"
+                        ? "รายชื่อผู้ที่ถูกรางวัลจากตู้สุ่ม (หน้า /spin) ทุกรอบ เรียงคนที่ได้ล่าสุดขึ้นก่อน อันดับคือลำดับที่ได้รางวัล (คนแรก = อันดับ 1)"
+                        : tab === "bans"
+                          ? "ผู้ซื้อที่ถูกแบนไม่ให้สร้างรายการและส่งสลีป (ระบบแบนเองเมื่ออ่านสลีปได้แต่ไม่ผ่านข้อใดข้อหนึ่ง: ยอดเงิน ผู้รับเงิน วันเวลาโอน หรือ admin แบนเอง) การ์ดแสดงสลีปและผลตรวจของรายการที่ทำให้ถูกแบน กดปลดแบนได้ก่อนครบเวลา ส่วนการอนุมัติ/ปฏิเสธรายการทำที่เมนู “รอตรวจ”"
+                          : tab === "auto"
+                            ? "รายการที่ระบบอนุมัติให้เองเพราะตรวจสลีปผ่านครบทุกข้อ (ยอดเงิน ผู้รับ วันเวลาโอน เลขอ้างอิง) และออกตั๋วแล้ว รายการเหล่านี้อยู่ในเมนู “อนุมัติแล้ว” ด้วย"
+                            : "ระบบอ่านรูปสลีปจริงแล้วเทียบกับออเดอร์ ✓ = ตรงกับรายการ (เวลาโอนต้องเป็นวันเดียวกับออเดอร์และไม่เกิน 1 ชั่วโมงหลังสร้างออเดอร์) / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” และ “Ref1” กับรายการเข้าบัญชีก่อนกดอนุมัติ"}
                 </p>
                 <div className="mt-3 flex gap-2 md:hidden">{controlButtons}</div>
+                {searchBox}
               </header>
 
               {note && (
@@ -1132,6 +1247,68 @@ export default function AdminPage() {
                     </p>
                   </section>
                 )
+              ) : tab === "spin" ? (
+                !spinRows ? (
+                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                    กำลังโหลดรายชื่อผู้ถูกรางวัล...
+                  </div>
+                ) : spinList && spinList.length === 0 ? (
+                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                    ยังไม่มีผู้ถูกรางวัลจากตู้สุ่ม
+                  </div>
+                ) : spinRows.length === 0 ? (
+                  noMatch
+                ) : (
+                  <section className="mt-5 sm:mt-6">
+                    <p className="text-xs font-semibold text-[#4d6652] sm:text-sm">
+                      ผู้ถูกรางวัลทั้งหมด {num(spinList?.length ?? 0)} คน
+                      {searching ? ` · พบ ${num(spinRows.length)} คน` : ""}
+                    </p>
+                    <ul className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+                      {spinRows.map((w) => (
+                        <li key={w.id} className="min-w-0 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+                          <div className="flex items-center justify-between gap-3 bg-[#14402c] px-4 py-2.5 text-white">
+                            <span className="rounded-full bg-[#d9f27a] px-3 py-0.5 text-sm font-extrabold text-[#14402c]">
+                              อันดับ {num(w.rank)}
+                            </span>
+                            <span className="text-xs font-semibold text-white/80 sm:text-sm">{fmtSec(w.wonAt)}</span>
+                          </div>
+                          <div className="flex gap-3 p-4">
+                            <Avatar
+                              key={w.avatarUrl ?? "none"}
+                              src={w.avatarUrl}
+                              name={w.name}
+                              className="h-16 w-16 text-2xl sm:h-20 sm:w-20 sm:text-3xl"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="break-words text-lg font-extrabold leading-tight sm:text-xl">{w.name || "-"}</p>
+                              <dl className="mt-2 space-y-1 text-xs sm:text-sm">
+                                <div className="flex gap-2">
+                                  <dt className="w-20 shrink-0 text-[#6b7f6f]">รหัสพนักงาน</dt>
+                                  <dd className="min-w-0 break-all font-mono font-bold">{w.empCode ?? "-"}</dd>
+                                </div>
+                                <div className="flex gap-2">
+                                  <dt className="w-20 shrink-0 text-[#6b7f6f]">เบอร์โทร</dt>
+                                  <dd className="min-w-0 break-all font-semibold">{w.phone || "-"}</dd>
+                                </div>
+                                <div className="flex gap-2">
+                                  <dt className="w-20 shrink-0 text-[#6b7f6f]">บริษัท</dt>
+                                  <dd className="min-w-0 break-words font-semibold">{w.company ?? "-"}</dd>
+                                </div>
+                                <div className="flex gap-2">
+                                  <dt className="w-20 shrink-0 text-[#6b7f6f]">แผนก/สาขา</dt>
+                                  <dd className="min-w-0 break-words font-semibold">{w.department ?? "-"}</dd>
+                                </div>
+                              </dl>
+                              <p className="mt-2 break-all font-mono text-[10px] text-[#6b7f6f]">{w.code}</p>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-3 text-[11px] text-[#6b7f6f] sm:text-xs">รีเฟรชอัตโนมัติทุก 10 วินาที</p>
+                  </section>
+                )
               ) : tab === "scans" ? (
                 !scanData ? (
                   <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
@@ -1195,6 +1372,10 @@ export default function AdminPage() {
                       </div>
                       {scanData.scans.length === 0 ? (
                         <p className="border-t border-[#e3ecd6] p-6 text-center text-sm text-[#4d6652]">ยังไม่มีการยิงตั๋ว</p>
+                      ) : scanRows.length === 0 ? (
+                        <p className="border-t border-[#e3ecd6] p-6 text-center text-sm text-[#4d6652]">
+                          ไม่พบรายการที่ตรงกับ “{q}”
+                        </p>
                       ) : (
                         <div className="overflow-x-auto border-t border-[#e3ecd6]">
                           <table className="w-full min-w-[680px] text-left text-xs sm:text-sm">
@@ -1209,7 +1390,7 @@ export default function AdminPage() {
                               </tr>
                             </thead>
                             <tbody>
-                              {scanData.scans.map((s) => {
+                              {scanRows.map((s) => {
                                 const r = SCAN_LABEL[s.result] ?? { label: s.result, cls: "bg-[#e3ecd6] text-[#14402c]" };
                                 return (
                                   <tr key={s.id} className="border-t border-[#e3ecd6] align-top">
@@ -1218,6 +1399,7 @@ export default function AdminPage() {
                                     <td className="px-2 py-2.5">
                                       <p className="font-semibold">{s.name ?? "-"}</p>
                                       {s.phone && <p className="text-[#4d6652]">{s.phone}</p>}
+                                      {orgText(s) && <p className="text-[#6b7f6f]">{orgText(s)}</p>}
                                     </td>
                                     <td className="px-2 py-2.5">
                                       <p className="break-all font-mono">{s.code}</p>
@@ -1246,17 +1428,19 @@ export default function AdminPage() {
                   </section>
                 )
               ) : tab === "bans" ? (
-                !banList ? (
+                !banRows ? (
                   <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
                     กำลังโหลดรายชื่อผู้ถูกแบน...
                   </div>
-                ) : banList.length === 0 ? (
+                ) : banList && banList.length === 0 ? (
                   <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
                     ไม่มีผู้ใช้ที่ถูกแบนอยู่ตอนนี้
                   </div>
+                ) : banRows.length === 0 ? (
+                  noMatch
                 ) : (
                   <ul className="mt-5 space-y-4 sm:mt-6">
-                    {banList.map((b) =>
+                    {banRows.map((b) =>
                       b.payment ? (
                         renderPayment(b.payment, banFooter(b))
                       ) : (
@@ -1277,9 +1461,11 @@ export default function AdminPage() {
                 <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
                   {tab === "reviewing" ? "ไม่มีสลีปรอตรวจ" : "ยังไม่มีรายการ"}
                 </div>
+              ) : itemRows.length === 0 ? (
+                noMatch
               ) : (
                 <ul className="mt-5 space-y-4 sm:mt-6">
-                  {items.map((p) =>
+                  {itemRows.map((p) =>
                     renderPayment(p, tab === "reviewing" ? renderActions(p, p.slip?.check?.ok === true) : null),
                   )}
                 </ul>

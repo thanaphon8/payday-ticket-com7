@@ -7,6 +7,7 @@ import {
   AuthShell,
   CheckIcon,
   EMP_CODE_LENGTH,
+  EMP_CODE_MIN,
   EyeButton,
   Field,
   MIN_PASSWORD,
@@ -369,7 +370,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
       if (!validPhone(digitsOnly(phone)))
         err.phone = "เบอร์โทรต้องมี 10 หลัก ขึ้นต้นด้วย 0";
       if (!validEmp(digitsOnly(empCode)))
-        err.empCode = `รหัสพนักงานต้องเป็นตัวเลข ${EMP_CODE_LENGTH} หลัก`;
+        err.empCode = `รหัสพนักงานต้องเป็นตัวเลข ${EMP_CODE_MIN}-${EMP_CODE_LENGTH} หลัก`;
     } else if (s === 1) {
       if (!companyId) err.companyId = "เลือกบริษัทของคุณ";
     } else if (s === 2) {
@@ -569,7 +570,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
                   error={errors.phone}
                 />
                 <Field
-                  label={`รหัสพนักงาน (${EMP_CODE_LENGTH} หลัก)`}
+                  label={`รหัสพนักงาน (${EMP_CODE_MIN}-${EMP_CODE_LENGTH} หลัก)`}
                   value={empCode}
                   onChange={edit("empCode", (v) =>
                     setEmpCode(digitsOnly(v).slice(0, EMP_CODE_LENGTH))
@@ -577,7 +578,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
                   inputMode="numeric"
                   autoComplete="off"
                   maxLength={EMP_CODE_LENGTH}
-                  placeholder={"0".repeat(EMP_CODE_LENGTH)}
+                  placeholder="เช่น 1234567"
                   error={errors.empCode}
                   hint="ใช้ลุ้นรางวัล Lucky Draw กรอกแล้วแก้ไขภายหลังไม่ได้"
                   mono

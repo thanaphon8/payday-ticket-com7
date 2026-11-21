@@ -7,7 +7,8 @@ import type { ReactNode } from "react";
 /* ค่าคงที่ / ชนิดข้อมูล / ตัวตรวจ ที่ LoginForm และ RegisterForm ใช้ร่วมกัน      */
 /* ------------------------------------------------------------------ */
 
-// รหัสพนักงาน: ตัวเลขล้วน 7 หลัก (ต้องตรงกับ EMP_CODE_LENGTH ใน lib/tickets.ts)
+// รหัสพนักงาน: ตัวเลขล้วน 1-7 หลัก (EMP_CODE_LENGTH = จำนวนหลักสูงสุด ต้องตรงกับ lib/tickets.ts)
+export const EMP_CODE_MIN = 1;
 export const EMP_CODE_LENGTH = 7;
 export const MIN_PASSWORD = 6;
 export const USERNAME_RE = /^[a-zA-Z0-9._]{3,20}$/;
@@ -57,7 +58,7 @@ export const digitsOnly = (s: string) => s.replace(/\D/g, "");
 export const validPhone = (p: string) => /^0\d{9}$/.test(p);
 
 export const validEmp = (c: string) =>
-  new RegExp(`^\\d{${EMP_CODE_LENGTH}}$`).test(c);
+  new RegExp(`^\\d{${EMP_CODE_MIN},${EMP_CODE_LENGTH}}$`).test(c);
 
 // ส่ง login / register: สำเร็จคืน user / ล้มเหลวคืน errors (รายช่อง หรือ form)
 export async function postAuth(
@@ -274,7 +275,7 @@ export function Field({
   const msgId = `${id}-msg`;
   return (
     <div>
-      <label htmlFor={id} className="text-sm font-medium">
+      <label htmlFor={id} className="block px-4 text-sm font-medium">
         {label}
       </label>
       <div className="relative mt-1">
@@ -293,7 +294,7 @@ export function Field({
           spellCheck={plain ? false : undefined}
           aria-invalid={error ? true : undefined}
           aria-describedby={error || hint ? msgId : undefined}
-          className={`block h-14 w-full appearance-none rounded-xl border bg-[#2a2a2a] px-4 text-base text-white outline-none transition-[border-color,box-shadow] placeholder:text-white/40 focus:ring-2 ${
+          className={`block h-14 w-full appearance-none rounded-full border bg-[#2a2a2a] px-5 text-base text-white outline-none transition-[border-color,box-shadow] placeholder:text-white/40 focus:ring-2 ${
             error
               ? "border-red-500 focus:border-red-500 focus:ring-red-500/25"
               : "border-white/15 focus:border-white/60 focus:ring-white/20"
@@ -304,11 +305,11 @@ export function Field({
         )}
       </div>
       {error ? (
-        <p id={msgId} role="alert" className="mt-1 text-sm font-medium text-red-400">
+        <p id={msgId} role="alert" className="mt-1 px-4 text-sm font-medium text-red-400">
           {error}
         </p>
       ) : hint ? (
-        <p id={msgId} className="mt-1 text-xs text-white/50">
+        <p id={msgId} className="mt-1 px-4 text-xs text-white/50">
           {hint}
         </p>
       ) : null}

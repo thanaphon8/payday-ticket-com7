@@ -17,10 +17,12 @@ export const BOOTH_SET: readonly { part: BoothPart; price: number }[] = [
   { part: "paper", price: 0 },
 ];
 
-// รหัสพนักงาน: ตัวเลขล้วน 7 หลัก (กรอกครั้งเดียวต่อการสั่งซื้อ ใช้กับตั๋ว Lucky Draw ทุกใบในรายการนั้น)
-// ต้องตรงกับ EMP_CODE_LENGTH ใน app/page.tsx
+// รหัสพนักงาน: ตัวเลขล้วน 1-7 หลัก (กรอกครั้งเดียวต่อการสั่งซื้อ ใช้กับตั๋ว Lucky Draw ทุกใบในรายการนั้น)
+// EMP_CODE_LENGTH = จำนวนหลักสูงสุด ต้องตรงกับ EMP_CODE_LENGTH ใน app/page.tsx
+export const EMP_CODE_MIN = 1;
 export const EMP_CODE_LENGTH = 7;
-export const validEmpCode = (c: string) => new RegExp(`^\\d{${EMP_CODE_LENGTH}}$`).test(c);
+export const validEmpCode = (c: string) =>
+  new RegExp(`^\\d{${EMP_CODE_MIN},${EMP_CODE_LENGTH}}$`).test(c);
 
 // เวลาที่ผู้ซื้อมีในการโอน + ส่งสลีป (นาที) นับใหม่ทุกครั้งที่ถูกปฏิเสธสลีป
 // พอส่งสลีปแล้ว (สถานะ reviewing) ไม่หมดอายุ รอ admin ตรวจกี่ชั่วโมงก็ได้
