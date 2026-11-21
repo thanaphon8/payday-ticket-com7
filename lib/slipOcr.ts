@@ -1,3 +1,4 @@
+import fs from "fs";
 import os from "os";
 import path from "path";
 import sharp, { type Sharp } from "sharp";
@@ -6,8 +7,8 @@ import { createWorker, type Worker } from "tesseract.js";
 // ต้องทำก่อนใช้:
 //  1) npm i tesseract.js
 //  2) สร้าง next.config.ts ที่มี serverExternalPackages: ["tesseract.js", "sharp"] แล้วรีสตาร์ท dev server
-//  3) ครั้งแรก tesseract.js โหลดไฟล์ภาษา tha/eng จากอินเทอร์เน็ต (ใหญ่ ใช้เวลานาน)
-//     โหลดเสร็จจะเก็บไว้ในโฟลเดอร์ชั่วคราวของเครื่อง ครั้งถัดไปเร็วขึ้นมาก
+//  3) ไฟล์ภาษา: วาง tessdata/tha.traineddata และ tessdata/eng.traineddata ไว้ในโปรเจกต์ (ใช้บน Vercel ไม่ต้องโหลดจากเน็ต)
+//     ถ้าไม่มีไฟล์ในโฟลเดอร์นี้ tesseract.js จะโหลดจากอินเทอร์เน็ตตอนรันครั้งแรก (ใหญ่ ใช้เวลานาน) แล้วเก็บไว้ในโฟลเดอร์ชั่วคราว
 //  4) (ไม่บังคับ) .env: RECEIVER_NAME=ชื่อผู้รับ ถ้าไม่ตั้ง ใช้ "คอมเซเว่น เพื่อการกุศล"
 //     ตั้งหลายชื่อได้ คั่นด้วย , (ใช้เมื่อชื่อผู้รับเปลี่ยน)
 
@@ -47,10 +48,17 @@ let workerP: Promise<Worker> | null = null;
 let thaiOk = true;
 let queue: Promise<unknown> = Promise.resolve();
 
+// ไฟล์ภาษาในโปรเจกต์ (ต้องมีทั้ง tha และ eng) ใช้ไฟล์นี้ก่อน ไม่ต้องโหลดจากอินเทอร์เน็ต
+const TESSDATA_DIR = path.join(process.cwd(), "tessdata");
+const hasLocalLang = () =>
+  ["tha", "eng"].every((l) => fs.existsSync(path.join(TESSDATA_DIR, `${l}.traineddata`)));
+
 async function makeWorker(): Promise<Worker> {
+  const local = hasLocalLang();
   const opts = {
     cachePath: path.join(os.tmpdir(), "tesseract-cache"),
     errorHandler: (e: unknown) => console.error("tesseract worker error:", e),
+    ...(local ? ({ langPath: TESSDATA_DIR, gzip: false, cacheMethod: "none" } as const) : {}),
   };
   try {
     thaiOk = true;

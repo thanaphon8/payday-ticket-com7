@@ -7,6 +7,9 @@ import { compressSlip, readSlip } from "@/lib/slip";
 import { checkSlip, ocrSlip } from "@/lib/slipOcr";
 import { uploadSlip } from "@/lib/drive";
 
+// Vercel: OCR ครั้งแรก (cold start) ใช้เวลานาน ต้องขยายเวลาฟังก์ชัน (Hobby สูงสุด 60 วินาที)
+export const maxDuration = 60;
+
 const MAX_BYTES = 8 * 1024 * 1024;
 const OK_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
