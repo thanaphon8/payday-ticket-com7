@@ -1585,6 +1585,9 @@ export default function Home() {
   const [cart, setCart] = useState<Cart>({});
   const [justBought, setJustBought] = useState<Order[] | null>(null);
 
+  // จำนวนตั๋วที่ขายแล้วทั้งหมด (แสดงในหน้าหลัก): booth = ชุด / lucky = ใบ
+  const [sold, setSold] = useState<Record<TicketId, number> | null>(null);
+
   // ชำระเงิน
   const [payName, setPayName] = useState("");
   const [payPhone, setPayPhone] = useState("");
@@ -1656,6 +1659,25 @@ export default function Home() {
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
+  }, [view]);
+
+  // โหลดจำนวนตั๋วที่ขายแล้วในหน้าหลัก (ใครก็เห็น ไม่ต้อง login) รีเฟรชทุก 30 วิ
+  useEffect(() => {
+    if (view !== "home") return;
+    let cancelled = false;
+    const loadSold = async () => {
+      const r = await api<Partial<Record<TicketId, number>>>("/api/stats");
+      if (r.ok && !cancelled) {
+        const next = { booth: r.data.booth ?? 0, lucky: r.data.lucky ?? 0 };
+        setSold((prev) => (prev && prev.booth === next.booth && prev.lucky === next.lucky ? prev : next));
+      }
+    };
+    loadSold();
+    const t = setInterval(loadSold, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
   }, [view]);
 
   // โหลดรายการตั๋วถูกรางวัลที่เคยเห็นแล้ว (แยกตามผู้ใช้)
@@ -2425,6 +2447,23 @@ export default function Home() {
                       }
                     />
                   </button>
+                ))}
+              </div>
+
+              {/* จำนวนตั๋วที่ขายแล้ว: ตั๋วเข้าซุ้มนับเป็นชุด / Lucky Draw นับเป็นใบ */}
+              <div className="mt-3 grid grid-cols-2 gap-3 md:mt-6 md:gap-6">
+                {TICKETS.map((t) => (
+                  <div key={t.id} className="rounded-2xl bg-[#1f1f1f] p-4 md:p-5">
+                    <p className="text-xs text-white/60 md:text-sm">
+                      {t.id === "booth" ? "ตั๋วเข้าซุ้มที่จำหน่ายแล้ว" : "Lucky Draw ที่ขายแล้ว"}
+                    </p>
+                    <p className="mt-1 text-2xl font-extrabold tabular-nums md:text-3xl">
+                      {sold ? sold[t.id].toLocaleString("th-TH") : "–"}
+                      <span className="text-xs font-medium text-white/60">
+                        {t.id === "booth" ? " ชุด" : " ใบ"}
+                      </span>
+                    </p>
+                  </div>
                 ))}
               </div>
 

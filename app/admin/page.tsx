@@ -55,6 +55,8 @@ type Summary = {
   daily: { date: string; orders: number; booth: number; lucky: number; amount: number }[];
   generatedAt: string;
 };
+// จำนวนตั๋วที่ขายแล้ว (อนุมัติแล้วเท่านั้น) จาก /api/stats เดียวกับหน้าหลัก: booth = ชุด / lucky = ใบ
+type Sold = { booth: number; lucky: number };
 // ประวัติการยิงบาร์โค้ดตั๋วเข้างาน (มาจากหน้า /ticket ของแต่ละซุ้ม)
 type ScanRow = {
   id: string;
@@ -295,6 +297,7 @@ export default function AdminPage() {
   const [counts, setCounts] = useState<Counts>({ reviewing: 0, approved: 0, auto: 0, rejected: 0, bans: 0 });
   const [seen, setSeen] = useState<Seen>({ auto: 0, bans: 0 });
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [sold, setSold] = useState<Sold | null>(null);
   const [scanData, setScanData] = useState<ScanData | null>(null);
   const [banList, setBanList] = useState<BanRow[] | null>(null);
   const [spinList, setSpinList] = useState<SpinWinner[] | null>(null);
@@ -372,6 +375,16 @@ export default function AdminPage() {
           );
         } else if (current === "summary") {
           setSummary((await extraRes.json()) as Summary);
+          // จำนวนตั๋วที่ขายแล้ว (อนุมัติแล้วเท่านั้น) ใช้แหล่งเดียวกับหน้าหลัก
+          try {
+            const st = await fetch("/api/stats", { cache: "no-store" });
+            if (st.ok) {
+              const s = (await st.json()) as Partial<Sold>;
+              setSold({ booth: s.booth ?? 0, lucky: s.lucky ?? 0 });
+            }
+          } catch {
+            /* ข้ามได้ รอบหน้าลองใหม่ */
+          }
         } else if (current === "scans") {
           setScanData((await extraRes.json()) as ScanData);
         } else if (current === "spin") {
@@ -467,6 +480,7 @@ export default function AdminPage() {
     await fetch("/api/admin/login", { method: "DELETE" }).catch(() => {});
     setItems([]);
     setSummary(null);
+    setSold(null);
     setScanData(null);
     setBanList(null);
     setSpinList(null);
@@ -1192,6 +1206,16 @@ export default function AdminPage() {
                         title="ตั๋ว Lucky Draw"
                         value={`${num(summary.lucky.count)} ใบ`}
                         sub={`รวมเป็นเงิน ${baht(summary.lucky.amount)}`}
+                      />
+                      <Stat
+                        title="ตั๋วเข้าซุ้มที่จำหน่ายแล้ว"
+                        value={sold ? `${num(sold.booth)} ชุด` : "–"}
+                        sub="อนุมัติแล้วเท่านั้น (เหมือนหน้าหลัก)"
+                      />
+                      <Stat
+                        title="Lucky Draw ที่ขายแล้ว"
+                        value={sold ? `${num(sold.lucky)} ใบ` : "–"}
+                        sub="อนุมัติแล้วเท่านั้น (เหมือนหน้าหลัก)"
                       />
                       <Stat
                         title="รอตรวจ (ยังไม่นับในยอดขาย)"
