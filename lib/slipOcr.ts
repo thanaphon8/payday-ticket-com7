@@ -38,6 +38,18 @@ export type SlipCheck = {
 // ชื่อผู้รับที่ยอมรับ (แสดงบนสลีปเป็นชื่อบัญชีนี้)
 export const RECEIVER_NAME_DEFAULT = "คอมเซเว่น เพื่อการกุศล";
 
+// ชื่อผู้รับอื่นที่ปรากฏบนสลีปของแต่ละธนาคาร (บัญชีเดียวกัน แต่แต่ละธนาคารแสดงชื่อไม่เหมือนกัน)
+// รับเสมอ แม้ตั้ง RECEIVER_NAME ใน .env เพิ่มชื่อใหม่ที่ธนาคารอื่นแสดงได้ที่นี่
+export const RECEIVER_ALIASES = [
+  "บมจ. คอมเซเว่น เพื่อการกุศล", // กสิกรไทย (K+)
+  "COM7 FOR CHARITY", // กรุงเทพ (Bualuang mBanking)
+  "COM7 PUBLIC COMPANY LIMITED FOR CHARITY",
+  "COM7 PUBLIC CO.,LTD. FOR CHARITY",
+];
+
+// Biller ID ของผู้รับ (บางธนาคารแสดงเลขนี้ใต้ชื่อ) ใช้ยืนยันผู้รับอีกทาง
+export const RECEIVER_BILLER_IDS = ["010753600031508"];
+
 // เวลาโอนต้องไม่เกินกี่นาทีหลังสร้างออเดอร์ (และต้องเป็นวันเดียวกับออเดอร์ตามเวลาไทย)
 export const MAX_TRANSFER_DELAY_MIN = 60;
 
@@ -161,7 +173,7 @@ const AMOUNT_UNIT_RE = /(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})? ?(?:�
 
 // คืนยอดที่เป็นไปได้ทั้งหมด ให้ checkSlip เทียบกับยอดออเดอร์
 function parseAmounts(text: string): number[] {
-  const t = text.replace(/[ \t ]+/g, " ");
+  const t = text.replace(/[ \t ]+/g, " ");
   const found: number[] = [];
   const push = (s: string) => {
     const n = Number(s.replace(/,/g, ""));
@@ -183,15 +195,16 @@ const norm = (s: string) =>
 
 function receiverMatches(flat: string): boolean {
   const text = norm(flat);
-  const names = (process.env.RECEIVER_NAME ?? RECEIVER_NAME_DEFAULT)
-    .split(",")
+  // Biller ID ของผู้รับ (กรุงเทพแสดงใต้ชื่อ)
+  if (RECEIVER_BILLER_IDS.some((id) => text.includes(id))) return true;
+  const names = [...(process.env.RECEIVER_NAME ?? RECEIVER_NAME_DEFAULT).split(","), ...RECEIVER_ALIASES]
     .map(norm)
     .filter((n) => n.length >= 4);
   if (names.some((n) => text.includes(n))) return true;
-  // ถ้าอ่านชื่อเต็มไม่ครบ ยอมรับเมื่อเจอคำหลักของชื่อผู้รับ (ไทย: "คอมเซเวน"+"กุศล" / อังกฤษ: "COM7 PUBLIC"+"CHARITY")
+  // ถ้าอ่านชื่อเต็มไม่ครบ ยอมรับเมื่อเจอคำหลักของชื่อผู้รับ (ไทย: "คอมเซเวน"+"กุศล" / อังกฤษ: "COM7"+"CHARITY")
   if ((text.includes("คอมเซเวน") && text.includes("กุศล")) || text.includes("คอมเซเวนเพือการกุศล")) return true;
-  // สลีปที่ตั้งมือถือเป็นภาษาอังกฤษ: "COM7 PUBLIC CO.,LTD. FOR CHARITY"
-  return text.includes("com7public") && text.includes("charity");
+  // สลีปภาษาอังกฤษ: "COM7 FOR CHARITY" / "COM7 PUBLIC CO.,LTD. FOR CHARITY"
+  return text.includes("com7") && text.includes("charity");
 }
 
 /* ---------- วันเวลาโอน ---------- */
