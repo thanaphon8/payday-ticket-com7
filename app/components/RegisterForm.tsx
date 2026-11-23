@@ -587,7 +587,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
                   error={errors.phone}
                 />
                 <Field
-                  label={`รหัสพนักงาน (${EMP_CODE_MIN}-${EMP_CODE_LENGTH} หลัก)`}
+                  label="รหัสพนักงาน"
                   value={empCode}
                   onChange={edit("empCode", (v) =>
                     setEmpCode(digitsOnly(v).slice(0, EMP_CODE_LENGTH))

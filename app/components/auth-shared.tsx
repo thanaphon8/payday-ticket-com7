@@ -267,7 +267,7 @@ export function Field({
   autoComplete?: string;
   autoFocus?: boolean;
   inputMode?: "numeric" | "text";
-  mono?: boolean; // ฟอนต์ตัวเลขเว้นระยะ (รหัสพนักงาน)
+  mono?: boolean; // ฟอนต์ตัวเลขเว้นระยะ (รหัสพนักงาน) ใช้เฉพาะตอนมีตัวเลขที่พิมพ์ ข้อความแนะนำใช้ฟอนต์ปกติ
   plain?: boolean; // ปิดตัวพิมพ์ใหญ่อัตโนมัติ/แก้คำ (username)
   trailing?: ReactNode;
 }) {
@@ -298,7 +298,7 @@ export function Field({
             error
               ? "border-red-500 focus:border-red-500 focus:ring-red-500/25"
               : "border-white/15 focus:border-white/60 focus:ring-white/20"
-          } ${mono ? "font-mono tracking-[0.3em]" : ""} ${trailing ? "pr-14" : ""}`}
+          } ${mono && value ? "font-mono tracking-[0.3em]" : ""} ${trailing ? "pr-14" : ""}`}
         />
         {trailing && (
           <div className="absolute inset-y-0 right-2 flex items-center">{trailing}</div>
