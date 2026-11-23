@@ -8,7 +8,7 @@ const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600
 // ต้องตรงกับ EMP_CODE_LENGTH ใน lib/tickets.ts (จำนวนหลักสูงสุด / รหัสสั้นกว่านี้ช่องหน้าแสดง x)
 const EMP_LEN = 7;
 const SHOW_MAX = 60; // จำนวนตั๋วสูงสุดที่วาดหล่นในโหล (ตัวเลข "เหลือ ... ใบ" นับจริงทั้งหมด)
-const FIRST_STOP_MS = 3000; // ตัวเลขสปินกี่ ms (นับจากกดเริ่ม) ก่อนหยุดหลักแรก
+const FIRST_STOP_MS = 2000; // ตัวเลขสปินกี่ ms (นับจากกดเริ่ม) ก่อนหยุดหลักแรก
 const ZOOM_CENTER_Y = 0.6; // ตอนซูม ตัวเลขอยู่สูงจากบนจอกี่ส่วน (0.5 = กลางจอ / มากกว่า = ตัวตู้ต่ำลง)
 const STEP_MS = 1000; // ระยะห่างระหว่างการหยุดแต่ละหลัก (รอ 1 วิก่อนแสดงเลขถัดไป)
 const POLL_MS = 3000; // รีเฟรชโหลสด: ตั๋วที่ admin เพิ่งอนุมัติจะหล่นเข้าโหลเอง
@@ -16,7 +16,7 @@ const BULBS = 22; // จำนวนหลอดไฟประดับตู�
 const WIN_BULBS_X = 16; // จำนวนหลอดไฟขอบบน/ล่างของการ์ดผู้ถูกรางวัล
 const WIN_BULBS_Y = 6; // จำนวนหลอดไฟขอบซ้าย/ขวาของการ์ดผู้ถูกรางวัล
 const CURSOR_HIDE_MS = 5000; // ไม่ขยับเมาส์กี่ ms แล้วซ่อนเมาส์
-const LOGO_SRC = "/img/logo.png"; // โลโก้ที่แปะเป็นเทปบนหัวตู้และโหลตั๋ว
+const LOGO_SRC = "/img/com.png"; // โลโก้บนหัวตู้และโหลตั๋ว
 const STRIP = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; // แถบตัวเลขที่เลื่อนวนในแต่ละหลัก
 
 const MAX_BATCH = 20; // สุ่มทีเดียวได้สูงสุดกี่คน (ต้องตรงกับ MAX_BATCH ใน app/api/spin/route.ts)
@@ -128,14 +128,12 @@ function WinnerAvatar({ w, className }: { w: Winner; className: string }) {
   );
 }
 
-// โลโก้แปะเป็นเทปที่มุม (className = ตำแหน่ง/การหมุน)
-function LogoTape({ className, imgClassName }: { className: string; imgClassName: string }) {
+// โลโก้ (className = ตำแหน่ง) ไม่มีเทป ไม่เอียง
+function Logo({ className, imgClassName }: { className: string; imgClassName: string }) {
   return (
-    <div aria-hidden className={`pd-tape pointer-events-none absolute z-20 ${className}`}>
-      <div className="pd-tape-in">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={LOGO_SRC} alt="" draggable={false} className={`block w-auto object-contain ${imgClassName}`} />
-      </div>
+    <div aria-hidden className={`pointer-events-none absolute z-20 ${className}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={LOGO_SRC} alt="" draggable={false} className={`block w-auto object-contain ${imgClassName}`} />
     </div>
   );
 }
@@ -348,15 +346,13 @@ export default function SpinPage() {
   const fxRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null); // แคนวาสเดียว วาดทั้งพลุและกระดาษทอง
   const winRef = useRef<HTMLDivElement>(null); // หน้าต่างตัวเลข
   const rowRef = useRef<HTMLDivElement>(null); // กล่องตู้ทั้งตัว (ใช้คำนวณซูม)
   const fwRaf = useRef(0);
   const winnerCardRef = useRef<HTMLElement>(null); // การ์ดทองลอยประกาศผู้ถูกรางวัล
   const winnerListRef = useRef<HTMLElement>(null); // กล่องรายชื่อผู้ถูกรางวัล (จุดที่การ์ดลอยเข้าไป)
-  const confettiRef = useRef<HTMLCanvasElement>(null); // แคนวาสกระดาษทอง (แยกจากพลุ จะได้ไม่มีรอยหาง)
-  const cfRaf = useRef(0);
-  const fwActive = useRef(false); // true = พลุยิงต่อเรื่อย ๆ จนกว่าจะปิดการ์ดผู้ถูกรางวัล
+  const fwActive = useRef(false); // true = ยิงพลุ/โปรยกระดาษต่อเรื่อย ๆ จนกว่าจะปิดการ์ดผู้ถูกรางวัล
 
   // รีเฟรชสด: ไม่เขียนทับตอนกำลังสุ่ม และทิ้งผลที่ขอไว้ก่อนเริ่ม/จบการสุ่ม (กันตั๋วที่ถูกตัดแล้วกลับมาในโหล)
   const spinningRef = useRef(false);
@@ -432,7 +428,6 @@ export default function SpinPage() {
       stopVictory();
       fwActive.current = false;
       cancelAnimationFrame(fwRaf.current);
-      cancelAnimationFrame(cfRaf.current);
     };
   }, []);
 
@@ -495,8 +490,9 @@ export default function SpinPage() {
     setPwBusy(false);
   }
 
-  /* ---------- พลุ ---------- */
-  const fireworks = useCallback(() => {
+  /* ---------- ฉลองผลออก: ระเบิด + พลุ + กระดาษทอง (แคนวาสเดียว, เฟรมเรตลื่นด้วย dt, จำกัดจำนวนอนุภาค) ---------- */
+  // ระเบิดตูมแรกกลางจอ + ปืนกระดาษมุมล่าง แล้วยิงพลุ/โปรยกระดาษเบา ๆ ต่อจนกว่าจะปิดการ์ดผู้ถูกรางวัล (fwActive = false)
+  const celebrate = useCallback(() => {
     const cv = canvasRef.current;
     if (!cv) return;
     const ctx = cv.getContext("2d");
@@ -504,139 +500,174 @@ export default function SpinPage() {
     cancelAnimationFrame(fwRaf.current);
     fwActive.current = true;
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     const W = window.innerWidth;
     const H = window.innerHeight;
-    cv.width = W * dpr;
-    cv.height = H * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cv.width = Math.round(W * dpr);
+    cv.height = Math.round(H * dpr);
 
-    type P = { x: number; y: number; vx: number; vy: number; life: number; color: string };
-    const ps: P[] = [];
-    const colors = ["#ffd54a", "#ff4d4d", "#4dd2ff", "#7dff6b", "#ff7ad9", "#ffffff", "#ffb300"];
-    let nextBurst = 0;
+    type Spark = { x: number; y: number; vx: number; vy: number; life: number; decay: number; color: string; w: number };
+    type Paper = { x: number; y: number; vx: number; vy: number; w: number; h: number; rot: number; vr: number; ph: number; color: string };
+    const SPARK_MAX = 420;
+    const PAPER_MAX = 170;
+    const sparks: Spark[] = [];
+    const papers: Paper[] = [];
+    const sparkColors = ["#ffd54a", "#ff4d4d", "#4dd2ff", "#7dff6b", "#ff7ad9", "#ffffff", "#ffb300"];
+    const paperColors = ["#ffd54a", "#ffc83d", "#ffe27a", "#fff3b0", "#e0a010", "#b8860b", "#fff6c9"];
 
-    const burst = () => {
-      const cx = W * (0.15 + Math.random() * 0.7);
-      const cy = H * (0.12 + Math.random() * 0.4);
-      const color = colors[Math.floor(Math.random() * colors.length)];
-      const n = 70 + Math.floor(Math.random() * 40);
-      for (let i = 0; i < n; i++) {
+    // วงระเบิด: n ประกายพุ่งออกรอบทิศ (power = ความแรง px/เฟรม) / ไม่ระบุสี = สุ่มสีทีละประกาย
+    const burst = (cx: number, cy: number, n: number, power: number, color?: string) => {
+      const count = Math.min(n, SPARK_MAX - sparks.length);
+      for (let i = 0; i < count; i++) {
         const a = Math.random() * Math.PI * 2;
-        const sp = 1.5 + Math.random() * 4.5;
-        ps.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, color });
+        const sp = power * (0.35 + Math.random() * 0.65);
+        sparks.push({
+          x: cx,
+          y: cy,
+          vx: Math.cos(a) * sp,
+          vy: Math.sin(a) * sp,
+          life: 1,
+          decay: 0.011 + Math.random() * 0.012,
+          color: color ?? sparkColors[Math.floor(Math.random() * sparkColors.length)],
+          w: 1.6 + Math.random() * 1.4,
+        });
       }
     };
-
-    const frame = (t: number) => {
-      // ค่อย ๆ จางของเดิมให้เกิดรอยหาง
-      ctx.globalCompositeOperation = "destination-out";
-      ctx.fillStyle = "rgba(0,0,0,0.22)";
-      ctx.fillRect(0, 0, W, H);
-      ctx.globalCompositeOperation = "lighter";
-
-      if (fwActive.current && t >= nextBurst) {
-        burst();
-        nextBurst = t + 280 + Math.random() * 350;
-      }
-      for (let i = ps.length - 1; i >= 0; i--) {
-        const p = ps[i];
-        p.x += p.vx;
-        p.y += p.vy;
-        p.vy += 0.045;
-        p.vx *= 0.99;
-        p.life -= 0.011;
-        if (p.life <= 0) {
-          ps.splice(i, 1);
-          continue;
-        }
-        ctx.globalAlpha = p.life;
-        ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 2.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-
-      if (fwActive.current || ps.length > 0) fwRaf.current = requestAnimationFrame(frame);
-      else {
-        ctx.globalCompositeOperation = "source-over";
-        ctx.clearRect(0, 0, W, H);
-      }
-    };
-    fwRaf.current = requestAnimationFrame(frame);
-  }, []);
-
-  /* ---------- พลุกระดาษสีทอง ---------- */
-  // ยิงจากมุมล่างซ้าย/ขวา + กลางจอ แล้วโปรยจากด้านบนต่อเรื่อย ๆ จนกว่าจะปิดการ์ดผู้ถูกรางวัล (fwActive = false)
-  const confetti = useCallback(() => {
-    const cv = confettiRef.current;
-    if (!cv) return;
-    const ctx = cv.getContext("2d");
-    if (!ctx) return;
-    cancelAnimationFrame(cfRaf.current);
-
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const W = window.innerWidth;
-    const H = window.innerHeight;
-    cv.width = W * dpr;
-    cv.height = H * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    type C = { x: number; y: number; vx: number; vy: number; w: number; h: number; rot: number; vr: number; ph: number; color: string };
-    const ps: C[] = [];
-    const colors = ["#ffd54a", "#ffc83d", "#ffe27a", "#fff3b0", "#e0a010", "#b8860b", "#fff6c9"];
-    const spawn = (x: number, y: number, vx: number, vy: number) =>
-      ps.push({
+    const paper = (x: number, y: number, vx: number, vy: number) => {
+      if (papers.length >= PAPER_MAX) return;
+      papers.push({
         x,
         y,
         vx,
         vy,
-        w: 6 + Math.random() * 8,
-        h: 10 + Math.random() * 10,
+        w: 6 + Math.random() * 7,
+        h: 10 + Math.random() * 9,
         rot: Math.random() * Math.PI * 2,
         vr: (Math.random() - 0.5) * 0.35,
         ph: Math.random() * Math.PI * 2,
-        color: colors[Math.floor(Math.random() * colors.length)],
+        color: paperColors[Math.floor(Math.random() * paperColors.length)],
       });
+    };
 
-    for (let i = 0; i < 90; i++) {
-      spawn(W * 0.02, H * 0.95, 6 + Math.random() * 9, -(12 + Math.random() * 12));
-      spawn(W * 0.98, H * 0.95, -(6 + Math.random() * 9), -(12 + Math.random() * 12));
-    }
-    for (let i = 0; i < 60; i++) spawn(W * 0.5, H * 0.3, (Math.random() - 0.5) * 16, -(4 + Math.random() * 10));
+    // จังหวะระเบิดช่วงแรก (ms นับจากเริ่ม)
+    const timeline: { at: number; fn: () => void }[] = [
+      {
+        at: 0,
+        fn: () => {
+          burst(W * 0.5, H * 0.52, 170, 14);
+          burst(W * 0.5, H * 0.52, 90, 8, "#ffd54a");
+          for (let i = 0; i < 55; i++) {
+            paper(W * 0.02, H * 0.95, 6 + Math.random() * 9, -(12 + Math.random() * 12));
+            paper(W * 0.98, H * 0.95, -(6 + Math.random() * 9), -(12 + Math.random() * 12));
+          }
+          for (let i = 0; i < 40; i++) paper(W * 0.5, H * 0.45, (Math.random() - 0.5) * 16, -(5 + Math.random() * 11));
+        },
+      },
+      {
+        at: 160,
+        fn: () => {
+          burst(W * 0.22, H * 0.32, 70, 8);
+          burst(W * 0.78, H * 0.3, 70, 8);
+        },
+      },
+      { at: 340, fn: () => burst(W * 0.5, H * 0.2, 80, 9) },
+    ];
 
+    let start = -1;
+    let last = 0;
+    let ti = 0;
+    let nextShow = 800;
     let nextRain = 0;
+
     const frame = (t: number) => {
-      ctx.clearRect(0, 0, W, H);
-      if (fwActive.current && t >= nextRain) {
-        for (let k = 0; k < 4; k++) spawn(Math.random() * W, -20, (Math.random() - 0.5) * 2, 1 + Math.random() * 2);
-        nextRain = t + 60;
+      if (start < 0) {
+        start = t;
+        last = t;
       }
-      for (let i = ps.length - 1; i >= 0; i--) {
-        const c = ps[i];
-        c.vx *= 0.992;
-        c.vy = Math.min(c.vy + 0.22, 5);
-        c.x += c.vx + Math.sin(c.ph) * 0.6;
-        c.y += c.vy;
-        c.rot += c.vr;
-        c.ph += 0.08;
-        if (c.y > H + 30) {
-          ps.splice(i, 1);
+      const el = t - start;
+      const f = Math.min(3, Math.max(0.3, (t - last) / 16.667)); // ชดเชยเฟรมตก ให้ความเร็วเท่ากันทุกเครื่อง
+      last = t;
+
+      while (ti < timeline.length && el >= timeline[ti].at) timeline[ti++].fn();
+      if (fwActive.current) {
+        if (el >= nextShow) {
+          burst(
+            W * (0.15 + Math.random() * 0.7),
+            H * (0.12 + Math.random() * 0.38),
+            45 + Math.floor(Math.random() * 25),
+            7,
+            sparkColors[Math.floor(Math.random() * sparkColors.length)],
+          );
+          nextShow = el + 420 + Math.random() * 420;
+        }
+        if (el >= nextRain) {
+          for (let k = 0; k < 2; k++) paper(Math.random() * W, -20, (Math.random() - 0.5) * 2, 1 + Math.random() * 2);
+          nextRain = el + 90;
+        }
+      }
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, cv.width, cv.height);
+
+      // ประกายพร้อมหางสั้น (เส้น) เรืองแสงแบบ additive
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineCap = "round";
+      const drag = Math.pow(0.97, f);
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        const s = sparks[i];
+        s.life -= s.decay * f;
+        if (s.life <= 0) {
+          sparks[i] = sparks[sparks.length - 1];
+          sparks.pop();
           continue;
         }
-        ctx.save();
-        ctx.translate(c.x, c.y);
-        ctx.rotate(c.rot);
-        ctx.scale(1, Math.cos(c.ph * 1.3)); // พลิกวูบวาบเหมือนกระดาษ
+        s.vx *= drag;
+        s.vy = s.vy * drag + 0.09 * f;
+        s.x += s.vx * f;
+        s.y += s.vy * f;
+        ctx.globalAlpha = Math.min(1, s.life * 1.4);
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = s.w;
+        ctx.beginPath();
+        ctx.moveTo(s.x - s.vx * 1.6, s.y - s.vy * 1.6);
+        ctx.lineTo(s.x, s.y);
+        ctx.stroke();
+      }
+
+      // กระดาษทองพลิกวูบวาบ
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
+      const pdrag = Math.pow(0.992, f);
+      for (let i = papers.length - 1; i >= 0; i--) {
+        const c = papers[i];
+        c.vx *= pdrag;
+        c.vy = Math.min(c.vy + 0.22 * f, 5);
+        c.x += (c.vx + Math.sin(c.ph) * 0.6) * f;
+        c.y += c.vy * f;
+        c.rot += c.vr * f;
+        c.ph += 0.08 * f;
+        if (c.y > H + 30) {
+          papers[i] = papers[papers.length - 1];
+          papers.pop();
+          continue;
+        }
+        const flip = Math.cos(c.ph * 1.3);
+        const cs = Math.cos(c.rot);
+        const sn = Math.sin(c.rot);
+        ctx.setTransform(cs * dpr, sn * dpr, -sn * flip * dpr, cs * flip * dpr, c.x * dpr, c.y * dpr);
         ctx.fillStyle = c.color;
         ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
-        ctx.restore();
       }
-      if (fwActive.current || ps.length > 0) cfRaf.current = requestAnimationFrame(frame);
-      else ctx.clearRect(0, 0, W, H);
+
+      if (fwActive.current || sparks.length > 0 || papers.length > 0 || ti < timeline.length) {
+        fwRaf.current = requestAnimationFrame(frame);
+      } else {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, cv.width, cv.height);
+      }
     };
-    cfRaf.current = requestAnimationFrame(frame);
+    fwRaf.current = requestAnimationFrame(frame);
   }, []);
 
   /* ---------- สุ่ม ---------- */
@@ -665,11 +696,11 @@ export default function SpinPage() {
     setTotal(remaining);
     setWinners((prev) => [...[...ws].reverse(), ...prev]); // รายชื่อเรียงใหม่สุดก่อน (คนที่สุ่มได้ทีหลังอยู่บน)
     setWinnerClosing(false);
-    fireworks(); // พลุ + หน้าจอทองค้างอยู่จนกว่าจะกดปิดการ์ด (closeWinner)
-    confetti(); // กระดาษสีทอง
+    celebrate(); // ระเบิด + พลุ + กระดาษทอง ค้างอยู่จนกว่าจะกดปิดการ์ด (closeWinner)
     playVictory(); // เสียงประกาศผู้ถูกรางวัล (victory.mp3)
+    sfx.hit(); // เสียงตู้มตอนผลออก
     setShake(true); // ผลออกปุ๊บ จอสั่น
-    timersRef.current.push(setTimeout(() => setShake(false), 1300));
+    timersRef.current.push(setTimeout(() => setShake(false), 1000));
     setGoldFlash(true);
   }
 
@@ -720,8 +751,6 @@ export default function SpinPage() {
     setShake(false);
     setShowSettings(false);
     cancelAnimationFrame(fwRaf.current);
-    cancelAnimationFrame(cfRaf.current);
-    confettiRef.current?.getContext("2d")?.clearRect(0, 0, confettiRef.current.width, confettiRef.current.height);
     canvasRef.current?.getContext("2d")?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
     setNote("");
@@ -802,7 +831,6 @@ export default function SpinPage() {
       });
       timersRef.current.push(
         setTimeout(() => {
-          sfx.hit();
           sfx.zap(EMP_LEN);
           playNumber();
           kickMachine(EMP_LEN); // สั่นแวบเดียวตอนตู้ม
@@ -984,17 +1012,11 @@ export default function SpinPage() {
           60% { transform: scale(0.92); }
           100% { transform: scale(1); }
         }
-        @keyframes pdGold {
-          0% { background-position: 0% 50%; }
-          100% { background-position: 200% 50%; }
-        }
-        @keyframes pdGlow {
-          0%, 100% { box-shadow: 0 0 18px 2px rgba(255, 200, 40, 0.55), 0 0 40px 6px rgba(255, 170, 0, 0.3); }
-          50% { box-shadow: 0 0 30px 6px rgba(255, 225, 90, 0.95), 0 0 70px 14px rgba(255, 190, 0, 0.55); }
-        }
+        /* ขึ้นจากล่างจอแล้วเด้งเกินนิดหน่อย (ใช้ transform/opacity อย่างเดียว ลื่นและเบา) */
         @keyframes pdSlideUp {
-          0% { transform: translateY(140%); opacity: 0; }
-          100% { transform: translateY(0); opacity: 1; }
+          0% { transform: translateY(140%) scale(0.9); opacity: 0; }
+          60% { transform: translateY(-3%) scale(1.03); opacity: 1; }
+          100% { transform: translateY(0) scale(1); opacity: 1; }
         }
         @keyframes pdLive {
           0%, 100% { opacity: 1; }
@@ -1248,6 +1270,17 @@ export default function SpinPage() {
           76% { transform: translate(-5px, 4px); }
           90% { transform: translate(2px, -2px); }
         }
+        /* จอสั่นตอนผลออก: แรงสุดตอนแรกแล้วค่อย ๆ เบาลง */
+        @keyframes pdBoomShake {
+          0%, 100% { transform: translate(0, 0) rotate(0deg); }
+          6% { transform: translate(-18px, 10px) rotate(-1.2deg); }
+          14% { transform: translate(16px, -12px) rotate(1deg); }
+          24% { transform: translate(-12px, -8px) rotate(-0.7deg); }
+          36% { transform: translate(10px, 8px) rotate(0.5deg); }
+          50% { transform: translate(-6px, 4px); }
+          66% { transform: translate(4px, -3px); }
+          82% { transform: translate(-2px, 1px); }
+        }
         .pd-hammer {
           position: absolute;
           left: 50%;
@@ -1329,7 +1362,7 @@ export default function SpinPage() {
           animation: pdShard 0.8s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
         }
         .pd-quake { animation: pdQuake 0.85s ease-out 1; }
-        .pd-quake-win { animation: pdQuake 1.2s ease-out 1; }
+        .pd-quake-win { animation: pdBoomShake 0.9s ease-out 1; will-change: transform; }
         .pd-key { box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.5), 0 3px 0 rgba(0, 0, 0, 0.45); }
         /* แผ่นแสดงผู้ถูกรางวัลล่าสุด */
         .pd-count-plate {
@@ -1351,15 +1384,6 @@ export default function SpinPage() {
         .pd-jar {
           background: rgba(255, 255, 255, 0.06);
           box-shadow: 0 8px 0 rgba(255, 255, 255, 0.14);
-        }
-        /* โลโก้แปะเป็นเทป (ขอบหยักซ้าย/ขวา เหมือนเทปกระดาษ) */
-        .pd-tape {
-          filter: drop-shadow(0 3px 2px rgba(0, 0, 0, 0.45));
-        }
-        .pd-tape-in {
-          padding: 5px 16px;
-          background: linear-gradient(180deg, rgba(255, 251, 232, 0.94), rgba(240, 228, 190, 0.92));
-          clip-path: polygon(0 0, 4% 12%, 0 25%, 4% 38%, 0 50%, 4% 62%, 0 75%, 4% 88%, 0 100%, 100% 100%, 96% 88%, 100% 75%, 96% 62%, 100% 50%, 96% 38%, 100% 25%, 96% 12%, 100% 0);
         }
         /* ไฟกลมใต้หน้าต่างเลข */
         .pd-lamp {
@@ -1408,22 +1432,19 @@ export default function SpinPage() {
           from { opacity: 0.1; }
           to { opacity: 1; }
         }
+        /* ฟิล์มทองทั้งจอ: พื้นนิ่ง animate แค่ opacity (ไม่ต้องวาดใหม่ทุกเฟรม) */
         .pd-wash {
           position: fixed;
           inset: 0;
           z-index: 45;
           pointer-events: none;
-          background: linear-gradient(115deg, rgba(255, 196, 40, 0.5), rgba(255, 244, 170, 0.7), rgba(255, 190, 30, 0.5), rgba(255, 236, 150, 0.7), rgba(255, 196, 40, 0.5));
-          background-size: 300% 100%;
-          animation: pdGold 2.2s linear infinite, pdWash 0.6s ease-out forwards;
+          background: radial-gradient(ellipse at 50% 60%, rgba(255, 244, 170, 0.55) 0%, rgba(255, 205, 60, 0.42) 55%, rgba(255, 170, 0, 0.5) 100%);
+          animation: pdWash 0.5s ease-out forwards;
         }
-        .pd-wash::before,
-        .pd-wash::after {
+        .pd-wash::before {
           content: "";
           position: absolute;
           inset: 0;
-        }
-        .pd-wash::before {
           background-image:
             radial-gradient(circle at 20% 30%, #fff 0 2px, transparent 3px),
             radial-gradient(circle at 70% 60%, #fff8c9 0 2px, transparent 3px),
@@ -1431,14 +1452,37 @@ export default function SpinPage() {
           background-size: 90px 90px, 130px 130px, 70px 70px;
           animation: pdTwinkle 0.7s ease-in-out infinite alternate;
         }
-        .pd-wash::after {
-          background-image:
-            radial-gradient(circle at 30% 70%, #fff 0 2px, transparent 3px),
-            radial-gradient(circle at 80% 25%, #fffbe0 0 1.5px, transparent 2.5px),
-            radial-gradient(circle at 55% 45%, #fff 0 2px, transparent 3px);
-          background-size: 110px 110px, 80px 80px, 150px 150px;
-          background-position: 30px 40px, 10px 60px, 70px 20px;
-          animation: pdTwinkle 0.5s ease-in-out 0.3s infinite alternate;
+        .pd-wash-out { animation: pdWashOut 0.6s ease-in forwards; }
+
+        /* ===== ระเบิดตอนผลออก: แสงวาบ + วงคลื่นกระแทก (ใช้ transform/opacity อย่างเดียว) ===== */
+        @keyframes pdBoomFlash {
+          0% { opacity: 0.95; transform: scale(0.3); }
+          100% { opacity: 0; transform: scale(2.2); }
+        }
+        @keyframes pdBoomRing {
+          0% { opacity: 0.9; transform: scale(0.1); }
+          100% { opacity: 0; transform: scale(1); }
+        }
+        .pd-boom {
+          position: fixed;
+          left: 50%;
+          top: 55%;
+          width: 140vmin;
+          height: 140vmin;
+          margin: -70vmin 0 0 -70vmin;
+          border-radius: 50%;
+          z-index: 47;
+          pointer-events: none;
+          will-change: transform, opacity;
+        }
+        .pd-boom-flash {
+          background: radial-gradient(circle, #fffbe0 0%, rgba(255, 213, 74, 0.7) 30%, rgba(255, 180, 0, 0) 68%);
+          animation: pdBoomFlash 0.8s ease-out both;
+        }
+        .pd-boom-ring {
+          border: 6px solid #fff3b0;
+          box-shadow: 0 0 40px 10px rgba(255, 200, 40, 0.8), inset 0 0 40px rgba(255, 200, 40, 0.6);
+          animation: pdBoomRing 0.9s cubic-bezier(0.1, 0.7, 0.3, 1) 0.1s both;
         }
         .pd-noscroll { scrollbar-width: none; -ms-overflow-style: none; }
         .pd-noscroll::-webkit-scrollbar { display: none; }
@@ -1506,38 +1550,42 @@ export default function SpinPage() {
         .pd-bulb { animation: pdBulb 1s steps(1) infinite; }
         .pd-bulb-fast { animation-duration: 0.28s; }
         .pd-jackpot { animation: pdJackpot 0.5s ease-in-out 6; }
+        /* กรอบทองการ์ดผู้ถูกรางวัล: พื้นนิ่ง + แสงเรืองด้วย opacity (เบากว่า animate box-shadow / background) */
+        @keyframes pdGlowOp {
+          from { opacity: 0.35; }
+          to { opacity: 1; }
+        }
         .pd-gold-frame {
           background: linear-gradient(110deg, #b8860b, #ffe27a, #fff6c9, #ffd54a, #b8860b, #ffe27a, #b8860b);
-          background-size: 200% 100%;
-          animation: pdGold 2.2s linear infinite, pdGlow 1.4s ease-in-out infinite,
-            pdSlideUp 0.8s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+          animation: pdSlideUp 0.8s cubic-bezier(0.22, 0.9, 0.3, 1) both;
         }
-        .pd-wash-out { animation: pdGold 2.2s linear infinite, pdWashOut 0.6s ease-in forwards; }
-        /* การ์ดผู้ถูกรางวัล: พื้นทองวิบวับ + เลื่อนลงตอนปิด */
+        .pd-gold-frame::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          pointer-events: none;
+          box-shadow: 0 0 30px 6px rgba(255, 225, 90, 0.95), 0 0 70px 14px rgba(255, 190, 0, 0.55);
+          animation: pdGlowOp 1.4s ease-in-out infinite alternate;
+        }
+        .pd-gold-frame.pd-card-out { animation: pdCardFly 0.95s ease-in-out forwards; }
+        /* การ์ดผู้ถูกรางวัล: พื้นทองนิ่ง (ไม่ animate พื้นหลัง ลดภาระการวาด) */
         .pd-row-pop { animation: pdRowPop 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
         .pd-gold-card {
-          background: linear-gradient(110deg, #ffc83d, #fff3b0, #ffe27a, #ffd54a, #fff6c9, #ffc83d, #ffe27a);
-          background-size: 250% 100%;
-          animation: pdGold 2.4s linear infinite;
+          background: linear-gradient(110deg, #ffc83d, #fff3b0 30%, #ffe27a 55%, #ffd54a 75%, #fff6c9);
         }
         /* รายชื่อผู้ถูกรางวัล: พื้นทองเข้ม ตัวหนังสือสีทอง */
         .pd-gold-list {
-          background: linear-gradient(110deg, #5e3a00, #8a5a00, #6b4200, #9a6700, #5e3a00, #8a5a00, #6b4200);
-          background-size: 250% 100%;
-          animation: pdGold 3.2s linear infinite;
+          background: linear-gradient(110deg, #5e3a00, #8a5a00 30%, #6b4200 55%, #9a6700 78%, #5e3a00);
         }
         .pd-gold-text { color: #ffe27a; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55); }
         .pd-gold-text-sub { color: #ffd54a; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55); }
-        .pd-gold-frame.pd-card-out {
-          animation: pdGold 2.2s linear infinite, pdGlow 1.4s ease-in-out infinite,
-            pdCardFly 0.95s ease-in-out forwards;
-        }
         @media (prefers-reduced-motion: reduce) {
-          .pd-gold-card, .pd-gold-list, .pd-row-pop { animation: none; }
-          .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-rumble, .pd-kick-a, .pd-kick-b, .pd-batch-wrap, .pd-zap, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-wash::after, .pd-quake, .pd-quake-win, .pd-bokeh-dot { animation: none; }
+          .pd-row-pop { animation: none; }
+          .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-rumble, .pd-kick-a, .pd-kick-b, .pd-batch-wrap, .pd-zap, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-quake, .pd-quake-win, .pd-bokeh-dot, .pd-gold-frame::before { animation: none; }
           .pd-half-l { animation: none; transform: translate(-6px, 12px) rotate(13deg); }
           .pd-half-r { animation: none; transform: translate(6px, 12px) rotate(-13deg); }
-          .pd-hammer, .pd-shard { display: none; }
+          .pd-hammer, .pd-shard, .pd-boom { display: none; }
           .pd-btn-red:hover:not(:disabled), .pd-btn-red:active:not(:disabled) { transform: none; }
         }
       `}</style>
@@ -1563,8 +1611,15 @@ export default function SpinPage() {
 
       {goldFlash && <div aria-hidden className={`pd-wash ${winnerClosing ? "pd-wash-out" : ""}`} />}
 
+      {/* แสงวาบ + วงคลื่นระเบิดตอนผลออก (เล่นครั้งเดียวตอนขึ้น) */}
+      {goldFlash && !winnerClosing && (
+        <>
+          <div aria-hidden className="pd-boom pd-boom-flash" />
+          <div aria-hidden className="pd-boom pd-boom-ring" />
+        </>
+      )}
+
       <canvas ref={canvasRef} aria-hidden className="pointer-events-none fixed inset-0 z-50 h-full w-full" />
-      <canvas ref={confettiRef} aria-hidden className="pointer-events-none fixed inset-0 z-50 h-full w-full" />
 
       <main
         className={`relative z-10 mx-auto flex w-full max-w-[1800px] flex-1 flex-col px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-5 lg:min-h-0 lg:pb-4 ${
@@ -1581,7 +1636,7 @@ export default function SpinPage() {
 
         <div className="mt-3 grid flex-1 gap-5 lg:min-h-0 lg:grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] lg:gap-6">
           {/* ===== คอลัมน์ซ้าย: ตู้ slot ทรงสูง + คันโยกข้าง (ไม่เลื่อน) ===== */}
-          <div className="pd-noscroll relative z-20 flex min-w-0 flex-col pb-10 pl-16 pt-10 sm:pl-16 lg:min-h-0 lg:overflow-visible lg:pb-16 lg:pl-28 lg:pr-2 lg:pt-20">
+          <div className="pd-noscroll relative z-20 flex min-w-0 flex-col pb-10 pl-16 pt-10 sm:pl-16 sm:pt-16 lg:min-h-0 lg:overflow-visible lg:pb-16 lg:pl-28 lg:pr-2 lg:pt-24">
             <div
               ref={rowRef}
               className="mx-auto flex w-full max-w-[58rem] items-center justify-center md:pr-1"
@@ -1649,6 +1704,11 @@ export default function SpinPage() {
                     ))}
                   </div>
                 )}
+                {/* โลโก้ใหญ่บนหัวตู้ (กึ่งกลาง ลดระดับลงมาซ้อนหัวตู้มากขึ้น) */}
+                <Logo
+                  className="left-1/2 -top-[1.5rem] -translate-x-1/2 sm:-top-[3.5rem] lg:-top-[5.5rem]"
+                  imgClassName="h-20 sm:h-28 lg:h-36"
+                />
                 {/* ===== หัวตู้: ป้ายโค้ง + หลอดไฟ ===== */}
                 <div className="pd-gold pd-crown rounded-b-xl rounded-t-[2.8rem] p-1.5">
                   <div className="pd-marquee relative rounded-b-lg rounded-t-[2.4rem] px-3 pb-3 pt-3 text-center">
@@ -1667,9 +1727,6 @@ export default function SpinPage() {
                     <div className="pd-plate-green mx-auto mt-2 w-fit rounded-full border-2 border-[#ffd54a] px-6 py-0.5 text-xs font-extrabold tracking-[0.3em] text-[#fff6c9] sm:text-sm">
                       ลุ้นของรางวัล
                     </div>
-
-                    {/* โลโก้แปะเป็นเทปที่มุมป้าย */}
-                    <LogoTape className="-right-2 top-7 rotate-[9deg] sm:-right-3 sm:top-9" imgClassName="h-7 sm:h-9 lg:h-11" />
                   </div>
                 </div>
 
@@ -2053,8 +2110,8 @@ export default function SpinPage() {
                   </div>
                 </div>
 
-                {/* โลโก้แปะเป็นเทปที่มุมโหลตั๋ว (อยู่นอก overflow-hidden ของโหล จะได้ไม่โดนตัด) */}
-                <LogoTape className="-right-3 top-3 rotate-[10deg]" imgClassName="h-8 sm:h-10" />
+                {/* โลโก้มุมโหลตั๋ว (อยู่นอก overflow-hidden ของโหล จะได้ไม่โดนตัด) */}
+                <Logo className="-right-4 -top-3 rotate-[12deg]" imgClassName="h-16 sm:h-20 lg:h-24" />
               </div>
             </section>
 

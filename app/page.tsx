@@ -33,6 +33,9 @@ const RECEIVER = { th: "คอมเซเว่น เพื่อการก�
 const PAYCARD_IMG = "/img/paycard.jpg";
 const PAYCARD2_IMG = "/img/paycard2.jpg"; // พื้นหลังหน้าซื้อตั๋ว
 
+// โลโก้แถบเมนูบนคอมพิวเตอร์ (ไฟล์ใน public/img/) 
+const LOGO_IMG = "/img/com7logo.png";
+
 // สัดส่วนกรอบรูปตั๋ว = สัดส่วนรูปจริง (p1/p2 ประมาณ 715×349) ทุกใบใช้ค่าเดียวกัน จึงเท่ากัน
 // ถ้าเปลี่ยนรูปใหม่ ให้แก้เป็น aspect-[กว้าง/สูง] ของรูปนั้น
 const TICKET_IMG_ASPECT = "aspect-[715/349]";
@@ -279,12 +282,6 @@ const IconBack = ({ className }: IconProps) => (
 const IconArrow = ({ className }: IconProps) => (
   <Icon className={className}>
     <path d="M5 12h14M13 6l6 6-6 6" />
-  </Icon>
-);
-const IconPin = ({ className }: IconProps) => (
-  <Icon className={className}>
-    <path d="M12 21s7-6.2 7-11a7 7 0 0 0-14 0c0 4.8 7 11 7 11z" />
-    <circle cx="12" cy="10" r="2.5" />
   </Icon>
 );
 const IconShield = ({ className }: IconProps) => (
@@ -1135,11 +1132,10 @@ function TopNav({
           aria-label="ไปหน้าหลัก"
           className="flex items-center gap-3 text-left"
         >
-          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#e50914] text-white">
-            <IconTicket />
-          </span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={LOGO_IMG} alt="" aria-hidden className="block h-10 w-auto shrink-0 object-contain" />
           <span>
-            <span className="block text-xl font-bold lowercase leading-none">{EVENT.name}</span>
+            <span className="block text-xl font-bold lowercase leading-none">payday</span>
             <span className="mt-1 block text-[11px] text-white/60">{EVENT.tagline}</span>
           </span>
         </button>
@@ -2156,8 +2152,6 @@ export default function Home() {
   const inputCls =
     "mt-1 w-full rounded-xl border border-white/15 bg-[#2a2a2a] px-4 py-3 text-base text-white outline-none focus:border-white/60 focus:ring-2 focus:ring-white/20";
 
-  const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(EVENT.place)}`;
-
   const sheetDef = sheet ? defOf(sheet) : null;
   // ตั๋วทั้งหมดของประเภทนี้ (ทั้งที่ยังไม่ใช้และใช้แล้ว): ยังไม่ใช้ขึ้นก่อน (ถูกรางวัลก่อน) ตั๋วที่ใช้แล้วอยู่ท้าย ค้างอยู่ในหน้าต่างนี้ถาวร
   const sheetOrders = sheet
@@ -2470,21 +2464,6 @@ export default function Home() {
                 />
               </div>
             </section>
-
-            <div className="mt-3 flex items-center justify-between px-1 text-sm md:mt-4 md:text-base">
-              <span className="flex items-center gap-2">
-                <IconPin className="h-4 w-4 text-[#2f8f5b]" />
-                {EVENT.place}
-              </span>
-              <a
-                href={mapUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs font-semibold underline-offset-2 hover:underline md:text-sm"
-              >
-                ดูแผนที่ ↗
-              </a>
-            </div>
 
             <section aria-label="เลือกประเภทตั๋ว" className="mt-8 md:mt-12">
               <h2 className="text-xl font-bold md:text-2xl">วันนี้อยากสนุกแบบไหน?</h2>
