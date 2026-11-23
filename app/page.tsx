@@ -3251,6 +3251,9 @@ export default function Home() {
                       </button>
                     )}
                   </div>
+                  <p className="mt-5 border-t border-white/10 pt-4 text-center text-xs text-white/60">
+                    หากพบปัญหา โปรดติดต่อ HR ชั้น 2
+                  </p>
                 </div>
 
                 <button
