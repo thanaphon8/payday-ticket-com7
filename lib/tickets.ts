@@ -2,11 +2,16 @@ import { randomBytes } from "crypto";
 import { ObjectId, type Db, type WithId, type Document } from "mongodb";
 
 // ราคาฝั่งเซิร์ฟเวอร์ (ต้องตรงกับ price ใน TICKETS ของ app/page.tsx)
-// ตั๋วเข้าซุ้ม 100 บาท (1 ชุด = ตั๋วซุ้ม 2 ใบ ใบละ 50 + ตั๋วรับตั๋วกระดาษ 1 ใบ ไม่มีมูลค่า) / ตั๋ว Lucky Draw 1 บาท
+// ตั๋วเข้าซุ้ม 100 บาท / ชุด (1 ชุด = ตั๋วซุ้ม 2 ใบ ใบละ 50 + ตั๋วรับตั๋วกระดาษ 1 ใบ ไม่มีมูลค่า) / ตั๋ว Lucky Draw 50 บาท
 // ถ้าจะเปลี่ยนราคา ให้แก้ที่นี่ และที่ price ใน TICKETS ของ app/page.tsx ให้ตรงกัน
-export const TICKET_PRICES = { booth: 100, lucky: 1 } as const;
+export const TICKET_PRICES = { booth: 100, lucky: 50 } as const;
 export type TicketId = keyof typeof TICKET_PRICES;
 export const MAX_QTY = 20;
+
+// จำนวนสูงสุดต่อตั๋ว 1 ประเภท ต่อการสั่งซื้อ 1 ครั้ง (ตั๋วเข้าซุ้ม: 1 ชุดต่อบัญชี ตรวจซ้ำที่ POST /api/orders)
+// ต้องตรงกับ maxOf ใน app/page.tsx
+export const MAX_QTY_BY_TICKET: Record<TicketId, number> = { booth: 1, lucky: MAX_QTY };
+export const BOOTH_MAX_SETS_PER_USER = 1;
 
 // ตั๋วเข้าซุ้ม 1 ชุด แตกเป็น 3 ใบ (แต่ละใบมีบาร์โค้ดของตัวเอง) ผลรวมราคาต้องเท่ากับ TICKET_PRICES.booth
 // booth = ตั๋วเล่นซุ้ม (มีมูลค่า) / paper = ตั๋วให้ staff ยิงเพื่อรับตั๋วกระดาษ (ไม่มีมูลค่า)
@@ -30,7 +35,7 @@ export const PAYMENT_TTL_MINUTES = 60;
 export const MAX_SLIPS_PER_PAYMENT = 5; // ส่งสลีปได้กี่ครั้งต่อรายการ (กันรัวส่ง)
 
 export type PaymentStatus = "awaiting_slip" | "reviewing" | "approved" | "rejected" | "expired";
-// สถานะที่ยังค้างอยู่ (แสดงในหน้า "ตั๋วของฉัน")
+// สถานะที่ยังค้างอยู่ (หน้า "ตั๋วของฉัน": awaiting_slip/reviewing อยู่แท็บ "สถานะ" / rejected อยู่แท็บ "ปฏิเสธ")
 export const OPEN_STATUSES: PaymentStatus[] = ["awaiting_slip", "reviewing", "rejected"];
 
 export const isTicketId = (x: unknown): x is TicketId =>

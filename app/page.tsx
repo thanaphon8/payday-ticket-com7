@@ -46,6 +46,7 @@ type TicketDef = {
   id: TicketId;
   title: string;
   sub: string; // ชื่ออังกฤษตัวเล็ก
+  unit: string; // หน่วยนับตอนซื้อ: ตั๋วเข้าซุ้ม = ชุด / Lucky Draw = ใบ
   homeNote: string; // ข้อความในการ์ดหน้าหลัก
   homeImage?: string; // ถ้าใส่: หน้าหลัก/หน้าซื้อตั๋ว/หน้าตั๋วของฉัน แสดงรูปนี้เป็นส่วนบนของตั๋ว (ไฟล์ใน public/) ชื่อตั๋วจะอยู่เหนือกรอบ
   blurb: string; // คำอธิบายในหน้าเลือกตั๋ว
@@ -68,6 +69,7 @@ const TICKETS: TicketDef[] = [
     id: "booth",
     title: "ตั๋วเข้าซุ้ม",
     sub: "BOOTH PASS",
+    unit: "ชุด",
     homeNote: "เล่นเกมให้เต็มที่",
     homeImage: "/img/p1.png",
     blurb: "1 ชุด = ตั๋วเล่นซุ้ม 2 ใบ (ใบละ ฿50) + ตั๋วรับตั๋วกระดาษ 1 ใบ", // TODO: แก้ให้ตรงสิทธิ์จริง
@@ -88,11 +90,12 @@ const TICKETS: TicketDef[] = [
     id: "lucky",
     title: "Lucky Draw",
     sub: "LUCKY DRAW TICKET",
+    unit: "ใบ",
     homeNote: "ลุ้นรางวัลสุดเซอร์ไพรส์",
     homeImage: "/img/p2.png",
     blurb: "1 ใบ = 1 สิทธิ์สุ่มของรางวัล ภายในงาน", // TODO: แก้ให้ตรงสิทธิ์จริง
-    // ราคา 1 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
-    price: 1,
+    // ราคา 50 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
+    price: 50,
     layout: "compact",
     groupNote: "ลุ้นของรางวัล • 1 สิทธิ์",
     chips: ["รอสุ่มภายในงาน", "ยังไม่ได้ใช้สิทธิ์"],
@@ -145,11 +148,13 @@ type Payment = {
 type PayPoll = Payment & { orders?: Order[] };
 
 const MAX_QTY = 20; // จำนวนสูงสุดต่อตั๋ว 1 ประเภท ต่อการซื้อ 1 ครั้ง (กันกดพลาด)
+// จำนวนสูงสุดต่อประเภท: ตั๋วเข้าซุ้มซื้อได้ 1 ชุดต่อบัญชี (ต้องตรงกับ MAX_QTY_BY_TICKET ใน lib/tickets.ts)
+const MAX_BOOTH_SETS = 1;
 const CART_KEY = "payday-cart-v1";
 const SLIP_POLL_MS = 5000; // เช็กสถานะรายการโอนทุกกี่มิลลิวินาที
 const seenKey = (userId: string) => `payday-won-seen-v1-${userId}`; // รหัสตั๋วที่ถูกรางวัลและผู้ใช้เห็นแล้ว
 
-// ป้ายสถานะรายการโอนเงิน (ข้อความ + สี) ที่แสดงบนการ์ดในแท็บ "สถานะ"
+// ป้ายสถานะรายการโอนเงิน (ข้อความ + สี) ที่แสดงบนการ์ดในแท็บ "สถานะ" / "ปฏิเสธ"
 const PAY_BADGE: Record<PayStatus, { label: string; cls: string }> = {
   awaiting_slip: { label: "รอส่งสลีป", cls: "bg-amber-100 text-amber-800" },
   reviewing: { label: "รออนุมัติ", cls: "bg-sky-100 text-sky-800" },
@@ -658,6 +663,30 @@ function TicketImage({ src, alt }: { src: string; alt: string }) {
   );
 }
 
+/* ---------- ตราประทับ "ซื้อแล้ว" ทับตั๋ว (หน้าหลัก / หน้าซื้อตั๋ว) ----------
+   ใช้คู่กับตัวห่อ relative + ตั๋วที่ใส่ class pd-scanned (ขาวดำ)
+   compact = ย่อให้เล็กลงเฉพาะมือถือ (md ขึ้นไปขนาดเดิม) ใช้ในหน้าหลัก */
+function BoughtStamp({ compact = false }: { compact?: boolean }) {
+  return (
+    <>
+      <div aria-hidden className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+        <span
+          className={
+            compact
+              ? "pd-stamp rounded-xl border-2 border-red-500 bg-black/40 px-3 py-0.5 text-lg font-extrabold tracking-wider text-red-500 shadow-[0_4px_20px_rgba(0,0,0,0.5)] md:rounded-2xl md:border-4 md:px-6 md:py-2 md:text-4xl md:tracking-widest"
+              : "pd-stamp rounded-2xl border-4 border-red-500 bg-black/40 px-6 py-2 text-4xl font-extrabold tracking-widest text-red-500 shadow-[0_4px_20px_rgba(0,0,0,0.5)]"
+          }
+        >
+          ซื้อแล้ว
+        </span>
+      </div>
+      <span role="status" className="sr-only">
+        ซื้อแล้ว
+      </span>
+    </>
+  );
+}
+
 // ตำแหน่งประกายบนกรอบทอง (ตั๋วที่ถูกรางวัล)
 const SPARKLES: { top: string; left: string; size: string; delay: string }[] = [
   { top: "2%", left: "6%", size: "h-4 w-4", delay: "0s" },
@@ -877,7 +906,7 @@ function BarcodeFullscreen({
       aria-modal="true"
       aria-label="บาร์โค้ดตั๋ว"
       onClick={onClose}
-      className={`${leaving ? "pd-fade-out" : "pd-fade"} fixed inset-0 z-[60] border-[14px] text-black ${
+      className={`${leaving ? "pd-fade-out" : "pd-fade"} fixed inset-0 z-[60] overscroll-none border-[14px] text-black ${
         isPaper ? "border-[#b45309] bg-[#fff1c2]" : "border-[#0f1b4d] bg-white"
       }`}
     >
@@ -1619,8 +1648,8 @@ export default function Home() {
   const [avatarDraft, setAvatarDraft] = useState<File | null>(null); // รูปที่เลือกแล้ว รอผู้ใช้ปรับตำแหน่งและกดบันทึก
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
-  // ตั๋วของฉัน (แท็บ "ready" = ตั๋วทั้งหมดที่ได้รับ ทั้งที่ยังไม่ใช้และใช้แล้ว / "status" = รายการโอนเงินที่ค้างอยู่)
-  const [tab, setTab] = useState<"ready" | "status">("ready");
+  // ตั๋วของฉัน (แท็บ "ready" = ตั๋วทั้งหมดที่ได้รับ ทั้งที่ยังไม่ใช้และใช้แล้ว / "status" = รายการโอนเงินที่รอส่งสลีป/รออนุมัติ / "rejected" = รายการที่ถูกปฏิเสธ)
+  const [tab, setTab] = useState<"ready" | "status" | "rejected">("ready");
   const [sheet, setSheet] = useState<TicketId | null>(null);
   const [sheetClosing, setSheetClosing] = useState(false); // กำลังเล่นแอนิเมชันปิดหน้าต่างแสดงตั๋ว
   const closingRef = useRef(false);
@@ -1640,7 +1669,7 @@ export default function Home() {
     const clean: Cart = {};
     for (const t of TICKETS) {
       const n = Math.floor(Number(c[t.id]));
-      if (n > 0) clean[t.id] = Math.min(MAX_QTY, n);
+      if (n > 0) clean[t.id] = Math.min(t.id === "booth" ? MAX_BOOTH_SETS : MAX_QTY, n);
     }
     setCart(clean);
 
@@ -1698,6 +1727,35 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheet, barcodeCode]);
 
+  // เปิดหน้าต่างแสดงตั๋วอยู่: ล็อกหน้า page ด้านหลังไม่ให้เลื่อน (เลื่อนได้เฉพาะตั๋วในหน้าต่าง)
+  // ตรึง body ด้วย position:fixed เพื่อกันเลื่อนบน iOS Safari ด้วย แล้วคืนตำแหน่งเลื่อนเดิมตอนปิด
+  useEffect(() => {
+    if (!sheet) return;
+    const scrollY = window.scrollY;
+    const body = document.body;
+    const html = document.documentElement;
+    const prev = {
+      bodyPosition: body.style.position,
+      bodyTop: body.style.top,
+      bodyWidth: body.style.width,
+      bodyOverflow: body.style.overflow,
+      htmlOverflow: html.style.overflow,
+    };
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.width = "100%";
+    return () => {
+      html.style.overflow = prev.htmlOverflow;
+      body.style.overflow = prev.bodyOverflow;
+      body.style.position = prev.bodyPosition;
+      body.style.top = prev.bodyTop;
+      body.style.width = prev.bodyWidth;
+      window.scrollTo(0, scrollY);
+    };
+  }, [sheet]);
+
   // กด Esc ปิด popup ยืนยันการยกเลิกรายการ
   useEffect(() => {
     if (!cancelTarget) return;
@@ -1735,15 +1793,27 @@ export default function Home() {
   }, [view, user, sheet, barcodeCode]);
 
   const defOf = (id: TicketId) => TICKETS.find((t) => t.id === id)!;
+
+  // บัญชีนี้มีตั๋วเข้าซุ้มแล้ว (อนุมัติแล้ว) = ซื้อซ้ำไม่ได้ (1 ชุดต่อบัญชี)
+  const ownsBooth = orders.some((o) => o.ticket === "booth");
+  // จำนวนสูงสุดต่อประเภท (ตั๋วเข้าซุ้ม: 1 ชุดต่อบัญชี) ต้องตรงกับ MAX_QTY_BY_TICKET ใน lib/tickets.ts
+  const maxOf = (id: TicketId) => (id === "booth" ? (ownsBooth ? 0 : MAX_BOOTH_SETS) : MAX_QTY);
+
   const cartLines = TICKETS.flatMap((t) => {
-    const q = cart[t.id] ?? 0;
+    const q = Math.min(cart[t.id] ?? 0, maxOf(t.id));
     return q > 0 ? [{ def: t, qty: q }] : [];
   });
   const cartCount = cartLines.reduce((s, l) => s + l.qty, 0);
   const cartTotal = cartLines.reduce((s, l) => s + l.qty * l.def.price, 0);
   const cartHasLucky = cartLines.some((l) => l.def.id === "lucky");
+  // ข้อความจำนวนในตะกร้า แยกหน่วยตามประเภท เช่น "1 ชุด · 2 ใบ"
+  const cartText = cartLines.map((l) => `${l.qty} ${l.def.unit}`).join(" · ");
 
   const readyOrders = orders.filter((o) => !o.used);
+
+  // รายการโอนเงินที่ค้างอยู่ แยก: แท็บ "สถานะ" = รอส่งสลีป/รออนุมัติ / แท็บ "ปฏิเสธ" = สลีปถูกปฏิเสธ
+  const pendingActive = pending.filter((p) => p.status !== "rejected");
+  const pendingRejected = pending.filter((p) => p.status === "rejected");
 
   // มีตั๋วถูกรางวัลที่ผู้ใช้ยังไม่เคยเปิดดู
   const hasNewWin = orders.some((o) => o.won && !seenWon.includes(o.code));
@@ -1834,7 +1904,7 @@ export default function Home() {
   }
 
   function setQty(id: TicketId, n: number) {
-    const q = Math.max(0, Math.min(MAX_QTY, n));
+    const q = Math.max(0, Math.min(maxOf(id), n));
     const next = { ...cart };
     if (q === 0) delete next[id];
     else next[id] = q;
@@ -2187,6 +2257,23 @@ export default function Home() {
             ? "pb-10 md:pb-16"
             : "pb-64 md:pb-16";
 
+  // รายการโอนเงินที่ต้องแสดงในแท็บปัจจุบัน ("status" หรือ "rejected")
+  const payList = tab === "rejected" ? pendingRejected : pendingActive;
+
+  // สรุปจำนวนตั๋วที่ได้รับ (หน้า "ได้รับตั๋วแล้ว"): ตั๋วเข้าซุ้มนับเป็นชุด (1 ชุด = 1 ใบรับตั๋วกระดาษ) / Lucky Draw นับเป็นใบ
+  const boughtText = justBought
+    ? [
+        justBought.filter((o) => o.ticket === "booth" && o.part === "paper").length > 0
+          ? `${justBought.filter((o) => o.ticket === "booth" && o.part === "paper").length} ชุด`
+          : "",
+        justBought.filter((o) => o.ticket === "lucky").length > 0
+          ? `${justBought.filter((o) => o.ticket === "lucky").length} ใบ`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+
   return (
     <div
       style={{ touchAction: "pan-x pan-y" }}
@@ -2403,51 +2490,63 @@ export default function Home() {
               <h2 className="text-xl font-bold md:text-2xl">วันนี้อยากสนุกแบบไหน?</h2>
               <p className="mt-1 text-sm text-white/60 md:text-base">เลือกตั๋วที่ใช่ แล้วไปสนุกกันเลย</p>
               <div className="mt-4 grid grid-cols-2 gap-3 md:mt-6 md:gap-6">
-                {TICKETS.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={pick}
-                    aria-label={`${t.title} ${baht(t.price)} ต่อใบ`}
-                    className="pd-rise block text-left transition duration-300 active:scale-[0.97] md:hover:scale-[1.03]"
-                  >
-                    {/* ชื่อตั๋ว (ตั๋วที่มีรูป): อยู่เหนือกรอบ */}
-                    {t.homeImage && (
-                      <p className="px-1 pb-2 text-lg font-bold text-white md:pb-3 md:text-2xl">{t.title}</p>
-                    )}
-                    <Perforated
-                      bg={t.shimmer}
-                      text={t.fg}
-                      dash={t.dash}
-                      top={
-                        t.homeImage ? (
-                          <TicketImage src={t.homeImage} alt={`${t.title} ${baht(t.price)} ต่อใบ`} />
-                        ) : (
-                          <div className="px-4 pb-3 pt-4 md:px-6 md:pb-4 md:pt-6">
-                            {iconOf(t.id, "h-6 w-6 md:h-8 md:w-8")}
-                            <p className="mt-2 text-lg font-bold leading-tight md:text-2xl">{t.title}</p>
-                            <p className="mt-1 text-xs md:text-sm">{t.homeNote}</p>
-                          </div>
-                        )
+                {TICKETS.map((t) => {
+                  // ตั๋วเข้าซุ้มที่ซื้อแล้ว (อนุมัติแล้ว): ตั๋วเป็นขาวดำ + ตราประทับ "ซื้อแล้ว"
+                  const bought = t.id === "booth" && ownsBooth;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={pick}
+                      aria-label={
+                        bought
+                          ? `${t.title} ซื้อแล้ว`
+                          : `${t.title} ${baht(t.price)} ต่อ${t.unit}`
                       }
-                      bottom={
-                        <div className="flex w-full items-end justify-between px-4 pb-4 pt-3 md:px-6 md:pb-6 md:pt-4">
-                          <p className="text-xl font-extrabold md:text-4xl">
-                            {baht(t.price)}
-                            <span className="text-xs font-medium"> / ใบ</span>
-                          </p>
-                          <span
-                            className={`hidden h-9 w-9 items-center justify-center rounded-full md:flex md:h-11 md:w-11 ${
-                              t.homeImage ? "bg-white text-black" : "bg-[#e50914] text-white"
-                            }`}
-                          >
-                            <IconArrow className="h-5 w-5" />
-                          </span>
-                        </div>
-                      }
-                    />
-                  </button>
-                ))}
+                      className="pd-rise block text-left transition duration-300 active:scale-[0.97] md:hover:scale-[1.03]"
+                    >
+                      {/* ชื่อตั๋ว (ตั๋วที่มีรูป): อยู่เหนือกรอบ */}
+                      {t.homeImage && (
+                        <p className="px-1 pb-2 text-lg font-bold text-white md:pb-3 md:text-2xl">{t.title}</p>
+                      )}
+                      <div className="relative">
+                        <Perforated
+                          className={bought ? "pd-scanned" : ""}
+                          bg={t.shimmer}
+                          text={t.fg}
+                          dash={t.dash}
+                          top={
+                            t.homeImage ? (
+                              <TicketImage src={t.homeImage} alt={`${t.title} ${baht(t.price)} ต่อ${t.unit}`} />
+                            ) : (
+                              <div className="px-4 pb-3 pt-4 md:px-6 md:pb-4 md:pt-6">
+                                {iconOf(t.id, "h-6 w-6 md:h-8 md:w-8")}
+                                <p className="mt-2 text-lg font-bold leading-tight md:text-2xl">{t.title}</p>
+                                <p className="mt-1 text-xs md:text-sm">{t.homeNote}</p>
+                              </div>
+                            )
+                          }
+                          bottom={
+                            <div className="flex w-full items-end justify-between px-4 pb-4 pt-3 md:px-6 md:pb-6 md:pt-4">
+                              <p className="text-xl font-extrabold md:text-4xl">
+                                {baht(t.price)}
+                                <span className="text-xs font-medium"> / {t.unit}</span>
+                              </p>
+                              <span
+                                className={`hidden h-9 w-9 items-center justify-center rounded-full md:flex md:h-11 md:w-11 ${
+                                  t.homeImage ? "bg-white text-black" : "bg-[#e50914] text-white"
+                                }`}
+                              >
+                                <IconArrow className="h-5 w-5" />
+                              </span>
+                            </div>
+                          }
+                        />
+                        {bought && <BoughtStamp compact />}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
 
               {/* จำนวนตั๋วที่ขายแล้ว: ตั๋วเข้าซุ้มนับเป็นชุด / Lucky Draw นับเป็นใบ */}
@@ -2459,9 +2558,7 @@ export default function Home() {
                     </p>
                     <p className="mt-1 text-2xl font-extrabold tabular-nums md:text-3xl">
                       {sold ? sold[t.id].toLocaleString("th-TH") : "–"}
-                      <span className="text-xs font-medium text-white/60">
-                        {t.id === "booth" ? " ชุด" : " ใบ"}
-                      </span>
+                      <span className="text-xs font-medium text-white/60"> {t.unit}</span>
                     </p>
                   </div>
                 ))}
@@ -2486,55 +2583,70 @@ export default function Home() {
               <Steps current={1} />
             </div>
 
-            {/* มือถือ: เรียงลง / คอมพิวเตอร์: 2 ตั๋วเรียงซ้ายขวา */}
+            {/* มือถือ: เรียงลง (ถ้าซื้อตั๋วเข้าซุ้มแล้ว ย้าย Lucky Draw ขึ้นบนสุด) / คอมพิวเตอร์: 2 ตั๋วเรียงซ้ายขวา ลำดับเดิม */}
             <div className="mt-8 flex flex-col gap-4 md:mt-10 md:grid md:grid-cols-2 md:items-start md:gap-6">
               {TICKETS.map((t) => {
-                const q = cart[t.id] ?? 0;
+                const q = Math.min(cart[t.id] ?? 0, maxOf(t.id));
+                // ตั๋วเข้าซุ้มที่ซื้อแล้ว (อนุมัติแล้ว): ตั๋วเป็นขาวดำ + ตราประทับ "ซื้อแล้ว"
+                const bought = t.id === "booth" && ownsBooth;
+                // มือถือ: ซื้อตั๋วเข้าซุ้มแล้ว → Lucky Draw ขึ้นบนสุด (md ขึ้นไปคืนลำดับเดิม)
+                const moveFirst = ownsBooth && t.id === "lucky";
 
                 // ส่วนบน: ตั๋วที่มีรูปใช้รูปเดียวกับหน้าหลัก (ชื่อตั๋วอยู่เหนือกรอบ) / ตั๋วอื่นใช้การ์ดข้อความ
                 // ส่วนล่าง (หลังรอยประ): ราคา + ปุ่ม + - แยกจากตัวตั๋วเหมือนกันทุกใบ
                 // กดที่ตัวตั๋วไม่เปิดหน้าแสดงตั๋ว (หน้าแสดงตั๋วอยู่เฉพาะหน้า "ตั๋วของฉัน")
                 return (
-                  <div key={t.id} className="pd-rise">
+                  <div key={t.id} className={`pd-rise ${moveFirst ? "order-first md:order-none" : ""}`}>
                     {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-white">{t.title}</p>}
-                    <Perforated
-                      bg={t.shimmer}
-                      text={t.fg}
-                      dash={t.dash}
-                      top={
-                        t.homeImage ? (
-                          <TicketImage src={t.homeImage} alt={t.title} />
-                        ) : (
-                          <div className="p-4">
-                            <div className="flex items-center gap-3">
-                              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
-                                {iconOf(t.id, "h-6 w-6")}
-                              </span>
-                              <div>
-                                <p className="text-lg font-bold leading-tight">{t.title}</p>
-                                <p className="text-[10px] font-semibold tracking-widest opacity-70">{t.sub}</p>
+                    <div className="relative">
+                      <Perforated
+                        className={bought ? "pd-scanned" : ""}
+                        bg={t.shimmer}
+                        text={t.fg}
+                        dash={t.dash}
+                        top={
+                          t.homeImage ? (
+                            <TicketImage src={t.homeImage} alt={t.title} />
+                          ) : (
+                            <div className="p-4">
+                              <div className="flex items-center gap-3">
+                                <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/50">
+                                  {iconOf(t.id, "h-6 w-6")}
+                                </span>
+                                <div>
+                                  <p className="text-lg font-bold leading-tight">{t.title}</p>
+                                  <p className="text-[10px] font-semibold tracking-widest opacity-70">{t.sub}</p>
+                                </div>
                               </div>
+                              <p className="mt-4 text-sm opacity-80">{t.blurb}</p>
                             </div>
-                            <p className="mt-4 text-sm opacity-80">{t.blurb}</p>
+                          )
+                        }
+                        bottom={
+                          <div className="flex items-center justify-between gap-2 px-4 pb-4 pt-3">
+                            <div>
+                              <p className="text-3xl font-extrabold">
+                                {baht(t.price)}
+                                <span className="text-xs font-medium opacity-70"> / {t.unit}</span>
+                              </p>
+                              {t.id === "booth" && (
+                                <p className="mt-0.5 text-[11px] font-semibold opacity-80">
+                                  {ownsBooth ? "คุณซื้อตั๋วเข้าซุ้มแล้ว" : `ซื้อได้ ${MAX_BOOTH_SETS} ชุดต่อบัญชี`}
+                                </p>
+                              )}
+                            </div>
+                            <Stepper
+                              value={q}
+                              max={maxOf(t.id)}
+                              name={t.title}
+                              onChange={(n) => setQty(t.id, n)}
+                              onDark={!!t.homeImage}
+                            />
                           </div>
-                        )
-                      }
-                      bottom={
-                        <div className="flex items-center justify-between gap-2 px-4 pb-4 pt-3">
-                          <p className="text-3xl font-extrabold">
-                            {baht(t.price)}
-                            <span className="text-xs font-medium opacity-70"> / ใบ</span>
-                          </p>
-                          <Stepper
-                            value={q}
-                            max={MAX_QTY}
-                            name={t.title}
-                            onChange={(n) => setQty(t.id, n)}
-                            onDark={!!t.homeImage}
-                          />
-                        </div>
-                      }
-                    />
+                        }
+                      />
+                      {bought && <BoughtStamp />}
+                    </div>
                   </div>
                 );
               })}
@@ -2543,7 +2655,7 @@ export default function Home() {
                 <InfoBox
                   icon={<IconShield className="h-5 w-5" />}
                   title="ตั๋วแต่ละประเภทใช้แทนกันไม่ได้"
-                  text="ตั๋วเข้าซุ้ม 1 ใบ = ตั๋วเล่นซุ้ม 2 ใบ (ใบละ ฿50) + ตั๋วรับตั๋วกระดาษ 1 ใบ ใช้ได้เฉพาะวันงานที่ระบุเท่านั้น"
+                  text="ตั๋วเข้าซุ้ม 1 ชุด = ตั๋วเล่นซุ้ม 2 ใบ (ใบละ ฿50) + ตั๋วรับตั๋วกระดาษ 1 ใบ ซื้อได้ 1 ชุดต่อบัญชี ใช้ได้เฉพาะวันงานที่ระบุเท่านั้น"
                 />
               </div>
             </div>
@@ -2553,7 +2665,7 @@ export default function Home() {
               <div className="md:flex md:items-center md:justify-between md:gap-8">
                 <div className="flex items-end justify-between md:items-center md:gap-8">
                   <div>
-                    <p className="text-xs text-white/70">ทั้งหมด {cartCount} ใบ</p>
+                    <p className="text-xs text-white/70">ทั้งหมด {cartText || "0 ใบ"}</p>
                     <p className="text-sm font-bold">ยอดรวม</p>
                   </div>
                   <p className="text-4xl font-extrabold">
@@ -2610,7 +2722,7 @@ export default function Home() {
                       <div>
                         <p className="text-sm font-bold">{def.title}</p>
                         <p className="text-xs text-white/50">
-                          {baht(def.price)} × {q}
+                          {baht(def.price)} × {q} {def.unit}
                         </p>
                       </div>
                     </div>
@@ -2649,7 +2761,7 @@ export default function Home() {
               <div className="md:flex md:items-center md:justify-between md:gap-8">
                 <div className="flex items-end justify-between md:items-center md:gap-8">
                   <div>
-                    <p className="text-xs text-white/50">ทั้งหมด {cartCount} ใบ</p>
+                    <p className="text-xs text-white/50">ทั้งหมด {cartText || "0 ใบ"}</p>
                     <p className="text-sm font-bold">ยอดรวม</p>
                   </div>
                   <p className="text-4xl font-extrabold">{baht(cartTotal)}</p>
@@ -2691,7 +2803,7 @@ export default function Home() {
               </span>
               <h1 className="mt-4 text-2xl font-bold md:text-3xl">ได้รับตั๋วแล้ว!</h1>
               <p className="mt-1 text-sm text-white/60 md:text-base">
-                {justBought.length} ใบ · รวม {baht(justBought.reduce((s, o) => s + o.price, 0))}
+                {boughtText} · รวม {baht(justBought.reduce((s, o) => s + o.price, 0))}
               </p>
             </div>
 
@@ -2738,12 +2850,13 @@ export default function Home() {
             <div
               role="tablist"
               aria-label="สถานะตั๋ว"
-              className="mt-5 grid grid-cols-2 rounded-full border border-white/10 bg-[#1f1f1f] p-1 md:max-w-md"
+              className="mt-5 grid grid-cols-3 rounded-full border border-white/10 bg-[#1f1f1f] p-1 md:max-w-xl"
             >
               {(
                 [
                   ["ready", `ตั๋ว (${orders.length})`],
-                  ["status", `สถานะ (${pending.length})`],
+                  ["status", `สถานะ (${pendingActive.length})`],
+                  ["rejected", `ปฏิเสธ (${pendingRejected.length})`],
                 ] as const
               ).map(([id, label]) => (
                 <button
@@ -2761,22 +2874,24 @@ export default function Home() {
               ))}
             </div>
 
-            {user && tab === "status" && (
+            {user && (tab === "status" || tab === "rejected") && (
               <>
-                {pending.length === 0 ? (
+                {payList.length === 0 ? (
                   <div className="mt-6 rounded-3xl border border-dashed border-white/20 bg-white/5 p-8 text-center">
-                    <p className="text-white/60">ไม่มีรายการที่รอดำเนินการ</p>
+                    <p className="text-white/60">
+                      {tab === "rejected" ? "ไม่มีรายการที่ถูกปฏิเสธ" : "ไม่มีรายการที่รอดำเนินการ"}
+                    </p>
                   </div>
                 ) : (
                   <div className="mt-5 flex flex-col gap-3 md:grid md:grid-cols-2 md:items-start md:gap-4">
-                    {pending.map((p) => {
+                    {payList.map((p) => {
                       const badge = PAY_BADGE[p.status];
                       const openPayment = () => {
                         setPaymentId(p.id);
                         go("qr");
                       };
 
-                      // กดที่การ์ด = เปิดหน้าโอนเงิน/ส่งสลีป/ดูสถานะ (หน้าเดียวกับเดิม)
+                      // กดที่การ์ด = เปิดหน้าโอนเงิน/ส่งสลีป/ดูสถานะ (หน้าเดียวกับเดิม) รายการที่ถูกปฏิเสธส่งสลีปใหม่ได้จากหน้านี้
                       return (
                         <div
                           key={p.id}
@@ -2793,7 +2908,7 @@ export default function Home() {
                           }}
                           className="pd-rise cursor-pointer rounded-2xl border border-dashed border-white/25 bg-[#1f1f1f] p-4 transition duration-300 active:scale-[0.98] md:hover:border-white/40"
                         >
-                          {/* ตั๋วที่ซื้อในรายการนี้: รูป + ชื่อ + จำนวนใบ */}
+                          {/* ตั๋วที่ซื้อในรายการนี้: รูป + ชื่อ + จำนวน (ชุด/ใบ) */}
                           {p.items && p.items.length > 0 && (
                             <ul className="mb-3 flex flex-col gap-2 border-b border-white/10 pb-3">
                               {p.items.map((it) => {
@@ -2816,7 +2931,9 @@ export default function Home() {
                                     )}
                                     <div className="min-w-0">
                                       <p className="text-sm font-bold">{d.title}</p>
-                                      <p className="text-xs text-white/50">{it.qty} ใบ</p>
+                                      <p className="text-xs text-white/50">
+                                        {it.qty} {d.unit}
+                                      </p>
                                     </div>
                                   </li>
                                 );
@@ -2835,6 +2952,11 @@ export default function Home() {
                               </span>
                               {p.status === "rejected" && p.rejectReason && (
                                 <p className="mt-1 text-xs text-red-600">{p.rejectReason}</p>
+                              )}
+                              {p.status === "rejected" && (
+                                <p className="mt-1 text-xs text-white/50">
+                                  แตะเพื่อส่งสลีปใหม่ ภายใน {fmtTime(p.expiresAt)}
+                                </p>
                               )}
                             </div>
                             <div className="flex shrink-0 items-center gap-2">
@@ -2898,10 +3020,12 @@ export default function Home() {
                       const count = mine.filter((o) => !o.used).length; // ใบที่ยังไม่ใช้
                       const usedCount = mine.length - count; // ใบที่ใช้แล้ว
                       const wonCount = mine.filter((o) => !o.used && o.won).length;
+                      // ตั๋วเข้าซุ้มแสดงเป็นชุด (1 ชุด = 3 ใบ) / Lucky Draw แสดงเป็นใบ
+                      const shownCount = t.id === "booth" ? Math.ceil(count / 3) : count;
                       // มีตั๋วถูกรางวัล: กรอบทอง + ออร่า + ประกาย + พื้นการ์ดสีทองวิบวับ / ไม่มี: พื้นวิบวับตามสีตั๋ว (ไม่มีกรอบ ไม่มีออร่า)
                       const goldWin = wonCount > 0;
 
-                      // หน้าตาเหมือนหน้า "ซื้อตั๋ว" แต่ไม่มีราคา: ส่วนล่างเป็นจำนวนใบที่เหลือ (+ ใช้แล้วกี่ใบ) + ปุ่มแสดงตั๋ว
+                      // หน้าตาเหมือนหน้า "ซื้อตั๋ว" แต่ไม่มีราคา: ส่วนล่างเป็นจำนวนที่เหลือ (+ ใช้แล้วกี่ใบ) + ปุ่มแสดงตั๋ว
                       const card = (
                         <Perforated
                           bg={goldWin ? "pd-gold-card" : t.shimmer}
@@ -2929,8 +3053,8 @@ export default function Home() {
                             <div className="flex items-center justify-between gap-3 px-4 pb-4 pt-3">
                               <div>
                                 <p className="text-3xl font-extrabold">
-                                  {count}
-                                  <span className="text-xs font-medium opacity-70"> ใบ</span>
+                                  {shownCount}
+                                  <span className="text-xs font-medium opacity-70"> {t.unit}</span>
                                 </p>
                                 {usedCount > 0 && (
                                   <p className="text-xs font-semibold opacity-70">ใช้แล้ว {usedCount} ใบ</p>
@@ -3245,20 +3369,23 @@ export default function Home() {
       )}
 
       {/* ===== หน้าต่างแสดงตั๋ว (มือถือ: เลื่อนขึ้นจากด้านล่าง / คอมพิวเตอร์: กลางจอ) ===== */}
+      {/* หน้า page ด้านหลังถูกล็อกไม่ให้เลื่อน (ดู effect ล็อก body ด้านบน) เลื่อนได้เฉพาะตั๋วในกล่องนี้ */}
       {sheet && sheetDef && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="sheet-title"
-          className={`fixed inset-0 z-50 flex items-end justify-center bg-black/40 md:items-center md:p-6 ${
+          className={`fixed inset-0 z-50 flex items-end justify-center overscroll-none bg-black/40 md:items-center md:p-6 ${
             sheetClosing ? "pd-fade-out" : "pd-fade"
           }`}
+          style={{ touchAction: "none" }}
           onClick={closeSheet}
         >
           <div
-            className={`relative max-h-[88vh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-[#1f1f1f] p-5 pb-8 text-white md:max-w-3xl md:rounded-3xl md:p-8 ${
+            className={`relative max-h-[88vh] w-full max-w-md overflow-y-auto overscroll-contain rounded-t-3xl bg-[#1f1f1f] p-5 pb-8 text-white md:max-w-3xl md:rounded-3xl md:p-8 ${
               sheetClosing ? "pd-sheet-out" : "pd-sheet"
             }`}
+            style={{ touchAction: "pan-y", WebkitOverflowScrolling: "touch" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">

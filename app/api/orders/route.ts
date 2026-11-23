@@ -3,7 +3,8 @@ import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/mongodb";
 import { banMessage, getSessionUser, validPhone } from "@/lib/auth";
 import {
-  MAX_QTY,
+  BOOTH_MAX_SETS_PER_USER,
+  MAX_QTY_BY_TICKET,
   OPEN_STATUSES,
   PAYMENT_TTL_MINUTES,
   buildPaymentLines,
@@ -43,6 +44,7 @@ export async function GET() {
 // เริ่มซื้อ: body = { items: [{ ticket, qty }], name, phone }
 // รหัสพนักงานดึงจากบัญชีผู้ใช้ (ตั้งตอนสมัคร / ในโปรไฟล์) ไม่รับจากหน้าเว็บ
 // ซื้อ Lucky Draw แล้วบัญชียังไม่มีรหัสพนักงาน = ปฏิเสธ
+// ตั๋วเข้าซุ้มซื้อได้ 1 ชุดต่อบัญชี (นับเฉพาะรายการที่อนุมัติแล้ว = มีตั๋วในบัญชีแล้ว)
 // ผู้ใช้ที่ถูกแบน (สลีปไม่ผ่านการตรวจอัตโนมัติ) สร้างรายการไม่ได้จนกว่าจะหมดเวลาแบนหรือ admin ปลดแบน
 // ยังไม่ออกตั๋ว สร้างรายการรอโอน + QR พร้อมเพย์ (ยอด + Ref1 ฝังใน QR)
 // ตั๋วถูกออกเมื่อ admin อนุมัติสลีปเท่านั้น (ดู /api/admin/payments/[id])
@@ -62,12 +64,29 @@ export async function POST(req: Request) {
   if (!Array.isArray(items) || items.length === 0)
     return NextResponse.json({ error: "ยังไม่ได้เลือกตั๋ว" }, { status: 400 });
 
-  const wanted: { ticket: TicketId; qty: number }[] = [];
+  // รวมจำนวนต่อประเภท (กันส่งประเภทเดียวกันซ้ำหลายรายการเพื่อเลี่ยงเพดานจำนวน)
+  const qtyByTicket = new Map<TicketId, number>();
   for (const it of items) {
     const qty = Math.floor(Number(it?.qty));
-    if (!isTicketId(it?.ticket) || !(qty >= 1 && qty <= MAX_QTY))
+    if (!isTicketId(it?.ticket) || !(qty >= 1))
       return NextResponse.json({ error: "รายการตั๋วไม่ถูกต้อง" }, { status: 400 });
-    wanted.push({ ticket: it.ticket, qty });
+    qtyByTicket.set(it.ticket, (qtyByTicket.get(it.ticket) ?? 0) + qty);
+  }
+
+  const wanted: { ticket: TicketId; qty: number }[] = [];
+  for (const [ticket, qty] of qtyByTicket) {
+    if (qty > MAX_QTY_BY_TICKET[ticket]) {
+      return NextResponse.json(
+        {
+          error:
+            ticket === "booth"
+              ? `ตั๋วเข้าซุ้มซื้อได้ ${BOOTH_MAX_SETS_PER_USER} ชุดต่อบัญชี`
+              : "รายการตั๋วไม่ถูกต้อง",
+        },
+        { status: 400 },
+      );
+    }
+    wanted.push({ ticket, qty });
   }
 
   // ซื้อ Lucky Draw ต้องมีรหัสพนักงานในบัญชี
@@ -83,6 +102,16 @@ export async function POST(req: Request) {
   const payments = db.collection("payments");
   const userId = new ObjectId(user.id);
   await expireStale(db, userId);
+
+  // ตั๋วเข้าซุ้ม: ซื้อได้ 1 ชุดต่อบัญชี มีตั๋วเข้าซุ้ม (อนุมัติแล้ว) อยู่ในบัญชี = ซื้อซ้ำไม่ได้
+  if (wanted.some((w) => w.ticket === "booth")) {
+    const ownedBooth = await db.collection("orders").countDocuments({ userId, ticket: "booth", part: "paper" });
+    if (ownedBooth >= BOOTH_MAX_SETS_PER_USER)
+      return NextResponse.json(
+        { error: `ตั๋วเข้าซุ้มซื้อได้ ${BOOTH_MAX_SETS_PER_USER} ชุดต่อบัญชี คุณซื้อไปแล้ว` },
+        { status: 400 },
+      );
+  }
 
   const openCount = await payments.countDocuments({ userId, status: { $in: OPEN_STATUSES } });
   if (openCount >= MAX_OPEN)

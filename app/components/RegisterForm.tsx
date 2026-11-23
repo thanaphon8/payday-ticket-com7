@@ -185,7 +185,8 @@ function PickList({
 export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormProps) {
   const [step, setStep] = useState(0);
 
-  const [name, setName] = useState("");
+  const [firstName, setFirstName] = useState(""); // ชื่อจริง (บังคับ)
+  const [lastName, setLastName] = useState(""); // นามสกุล (ไม่บังคับ)
   const [phone, setPhone] = useState("");
   const [empCode, setEmpCode] = useState("");
   const [companyId, setCompanyId] = useState("");
@@ -203,6 +204,9 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
   const [errors, setErrors] = useState<AuthErrors>({});
   const [busy, setBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+
+  // ชื่อเต็มที่ส่งให้เซิร์ฟเวอร์ = ชื่อ + นามสกุล (ถ้ามี) คั่นด้วยช่องว่าง
+  const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
 
   // เปลี่ยนขั้น = ล้างแถวที่ไฮไลต์
   useEffect(() => {
@@ -366,7 +370,8 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
   const validate = (s: number): AuthErrors => {
     const err: AuthErrors = {};
     if (s === 0) {
-      if (name.trim().length < 2) err.name = "กรอกชื่อ-นามสกุลให้ครบ";
+      // ชื่อจริงบังคับ / นามสกุลไม่บังคับ
+      if (firstName.trim().length < 2) err.name = "กรอกชื่อจริงให้ครบ";
       if (!validPhone(digitsOnly(phone)))
         err.phone = "เบอร์โทรต้องมี 10 หลัก ขึ้นต้นด้วย 0";
       if (!validEmp(digitsOnly(empCode)))
@@ -409,7 +414,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
     const r = await postAuth("/api/auth/register", {
       username: username.trim(),
       password,
-      name: name.trim(),
+      name: fullName,
       phone: digitsOnly(phone),
       empCode: digitsOnly(empCode),
       companyId: Number(companyId),
@@ -548,16 +553,28 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
             <h1 className="mt-6 text-3xl font-bold leading-tight">{heading.t}</h1>
             <p className="mt-1 text-sm text-white/60">{heading.s}</p>
 
-            {/* ขั้น 1: ชื่อ เบอร์โทร รหัสพนักงาน */}
+            {/* ขั้น 1: ชื่อ นามสกุล เบอร์โทร รหัสพนักงาน */}
             {step === 0 && (
               <div className="mt-6 space-y-4">
+                <p className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm leading-relaxed text-white/80">
+                  กรอกชื่อและนามสกุลจริงเป็นภาษาไทย
+                  ข้อมูลนี้มีผลต่อการตรวจสอบสิทธิ์ของคุณ
+                </p>
                 <Field
-                  label="ชื่อ-นามสกุล"
-                  value={name}
-                  onChange={edit("name", setName)}
-                  autoComplete="name"
+                  label="ชื่อ"
+                  value={firstName}
+                  onChange={edit("name", setFirstName)}
+                  autoComplete="given-name"
+                  placeholder="ชื่อจริงภาษาไทย"
                   error={errors.name}
                   autoFocus
+                />
+                <Field
+                  label="นามสกุล (ไม่บังคับ)"
+                  value={lastName}
+                  onChange={edit("name", setLastName)}
+                  autoComplete="family-name"
+                  placeholder="นามสกุลภาษาไทย (ถ้ามี)"
                 />
                 <Field
                   label="เบอร์โทร"
