@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { Prompt } from "next/font/google";
 
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
@@ -116,6 +124,8 @@ type SpinWinner = {
 type BanDuration = "1h" | "24h" | "7d" | "permanent";
 // จำนวนรายการ "อัตโนมัติ" / "ถูกแบน" ที่ admin เปิดดูล่าสุด (เก็บในเบราว์เซอร์) ใช้ทำจุดแดง
 type Seen = { auto: number; bans: number };
+// แอนิเมชันตอนอนุมัติ: green = การ์ดเป็นสีเขียวมีติกถูก / fly = การ์ดลอยเข้าเมนู "อนุมัติแล้ว" / collapse = ช่องว่างในรายการยุบลง
+type Anim = { id: string; phase: "green" | "fly" | "collapse"; dx: number; dy: number; h: number };
 
 const POLL_MS = 10_000;
 const SEEN_KEY = "payday-admin-seen-v1";
@@ -152,6 +162,23 @@ const SCAN_LABEL: Record<string, { label: string; cls: string }> = {
   invalid: { label: "ไม่พบตั๋ว", cls: "bg-red-600 text-white" },
 };
 
+// เอฟเฟกต์ทั้งหมดของหน้า admin (เลื่อนเข้า / เปิดรายละเอียด / ติกถูก / เมนูกระพริบตอนการ์ดลอยมาถึง) ปิดเองถ้าเครื่องตั้งลดการเคลื่อนไหว
+const FX_CSS = `
+@keyframes adminCardIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes adminFadeDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+@keyframes adminPopIn{0%{opacity:0;transform:scale(.3)}60%{opacity:1;transform:scale(1.18)}100%{opacity:1;transform:scale(1)}}
+@keyframes adminDrawCheck{from{stroke-dasharray:30;stroke-dashoffset:30}to{stroke-dasharray:30;stroke-dashoffset:0}}
+@keyframes adminNavPulse{0%{box-shadow:0 0 0 0 rgba(22,163,74,.75);transform:scale(1)}40%{transform:scale(1.07)}100%{box-shadow:0 0 0 16px rgba(22,163,74,0);transform:scale(1)}}
+.admin-card-in{animation:adminCardIn .35s ease backwards}
+.admin-fade-down{animation:adminFadeDown .25s ease backwards}
+.admin-pop-in{animation:adminPopIn .45s cubic-bezier(.2,.9,.3,1.2) both}
+.admin-check-draw{animation:adminDrawCheck .4s .25s ease both}
+.admin-nav-pulse{animation:adminNavPulse .8s ease-out}
+@media (prefers-reduced-motion: reduce){
+  .admin-card-in,.admin-fade-down,.admin-pop-in,.admin-check-draw,.admin-nav-pulse{animation:none}
+}
+`;
+
 const baht = (n: number) => `฿${n.toLocaleString("th-TH")}`;
 const num = (n: number) => n.toLocaleString("th-TH");
 const fmt = (iso: string | null) =>
@@ -183,6 +210,30 @@ function matches(query: string, fields: (string | null | undefined)[]) {
 // บรรทัดข้อมูลองค์กรใต้ชื่อ: รหัสพนักงาน · บริษัท · แผนก/สาขา
 const orgText = (x: { empCode: string | null; company: string | null; department: string | null }) =>
   [x.empCode ? `รหัส ${x.empCode}` : null, x.company, x.department].filter(Boolean).join(" · ");
+
+// จุดปลายทางที่การ์ดลอยเข้าไป: เมนู "อนุมัติแล้ว" ที่เห็นอยู่ (คอมพิวเตอร์) / ปุ่ม 3 ขีด (มือถือ)
+function flyTarget(): HTMLElement | null {
+  const cands = Array.from(document.querySelectorAll<HTMLElement>("[data-nav-id='approved']"));
+  const vis = cands.find((c) => c.getBoundingClientRect().width > 0);
+  return vis ?? document.querySelector<HTMLElement>("[data-menu-btn]");
+}
+
+// สไตล์การ์ดตอนลอย / ยุบ (ตอนเป็นสีเขียวยังไม่ขยับ)
+function cardStyle(a: Anim | null): CSSProperties | undefined {
+  if (!a || a.phase === "green") return undefined;
+  const collapsed = a.phase === "collapse";
+  return {
+    transform: `translate(${a.dx}px, ${a.dy}px) scale(0.12)`,
+    transformOrigin: "center",
+    opacity: 0,
+    height: collapsed ? 0 : a.h,
+    marginTop: collapsed ? 0 : undefined,
+    zIndex: 30,
+    pointerEvents: "none",
+    transition:
+      "transform 600ms cubic-bezier(.55,0,.75,.35), opacity 450ms ease-in 150ms, height 350ms ease, margin-top 350ms ease",
+  };
+}
 
 function beep() {
   try {
@@ -282,7 +333,7 @@ function Stat({
         : "bg-white text-[#14402c] border-[#e3ecd6]";
   const subCls = tone === "dark" ? "text-white/80" : "text-[#4d6652]";
   return (
-    <div className={`min-w-0 rounded-3xl border p-4 sm:p-5 ${cls}`}>
+    <div className={`admin-card-in min-w-0 rounded-3xl border p-4 sm:p-5 ${cls}`}>
       <p className={`text-xs font-semibold sm:text-sm ${subCls}`}>{title}</p>
       <p className="mt-1 text-2xl font-extrabold sm:text-3xl">{value}</p>
       {sub && <p className={`mt-1 text-xs sm:text-sm ${subCls}`}>{sub}</p>}
@@ -317,14 +368,22 @@ export default function AdminPage() {
   const [pw, setPw] = useState("");
   const [pwErr, setPwErr] = useState("");
   const [pwBusy, setPwBusy] = useState(false);
+  const [anim, setAnim] = useState<Anim | null>(null); // รายการที่กำลังเล่นแอนิเมชันอนุมัติ
+  const [pulse, setPulse] = useState(false); // เมนู "อนุมัติแล้ว" กระพริบตอนการ์ดลอยมาถึง
 
   const prevReviewing = useRef<number | null>(null);
   const soundRef = useRef(true);
   const tabRef = useRef<Tab>("reviewing");
   const boothRef = useRef("");
+  const animRef = useRef<Anim | null>(null);
   soundRef.current = sound;
   tabRef.current = tab;
   boothRef.current = boothFilter;
+
+  function updateAnim(next: Anim | null) {
+    animRef.current = next;
+    setAnim(next);
+  }
 
   const load = useCallback(async () => {
     try {
@@ -357,7 +416,18 @@ export default function AdminPage() {
       const data = (await res.json()) as { counts: Counts; payments: Item[] };
       setGate("ok");
       setNote("");
-      if (!special) setItems(data.payments);
+      if (!special) {
+        // รายการที่กำลังเล่นแอนิเมชันอนุมัติ ต้องค้างอยู่จนแอนิเมชันจบ แม้เซิร์ฟเวอร์ย้ายออกจากรายการนี้แล้ว
+        const a = animRef.current;
+        setItems((prev) => {
+          if (!a || data.payments.some((x) => x.id === a.id)) return data.payments;
+          const at = prev.findIndex((x) => x.id === a.id);
+          if (at < 0) return data.payments;
+          const next = [...data.payments];
+          next.splice(Math.min(at, next.length), 0, prev[at]);
+          return next;
+        });
+      }
       setCounts(data.counts);
       if (prevReviewing.current !== null && data.counts.reviewing > prevReviewing.current && soundRef.current) beep();
       prevReviewing.current = data.counts.reviewing;
@@ -493,13 +563,58 @@ export default function AdminPage() {
     setBanId(null);
     setMenuOpen(false);
     setZoom(null);
+    updateAnim(null);
     prevReviewing.current = null;
     setGate("locked");
+  }
+
+  // แอนิเมชันอนุมัติ: การ์ดเป็นสีเขียว + ติกถูก → ลอยเข้าเมนู "อนุมัติแล้ว" → ช่องว่างยุบลง → เอาออกจากรายการ
+  function playApprove(id: string) {
+    const reduce = typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    updateAnim({ id, phase: "green", dx: 0, dy: 0, h: 0 });
+    const finish = () => {
+      updateAnim(null);
+      setItems((prev) => prev.filter((x) => x.id !== id));
+      load();
+    };
+    if (reduce) {
+      setTimeout(finish, 900);
+      return;
+    }
+    setTimeout(() => {
+      const el = document.getElementById(`card-${id}`);
+      if (!el) {
+        finish();
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      let dx = 0;
+      let dy = -r.height;
+      const t = flyTarget();
+      if (t) {
+        const tr = t.getBoundingClientRect();
+        dx = tr.left + tr.width / 2 - (r.left + r.width / 2);
+        // ปุ่มเมนูบนมือถืออาจเลื่อนพ้นจอไปแล้ว ให้ลอยไปชิดขอบบนของจอแทน
+        const ty = Math.max(tr.top + tr.height / 2, 24);
+        dy = ty - (r.top + r.height / 2);
+      }
+      updateAnim({ id, phase: "fly", dx, dy, h: r.height });
+      setTimeout(() => {
+        setPulse(true);
+        setTimeout(() => setPulse(false), 900);
+      }, 480);
+      setTimeout(() => {
+        const cur = animRef.current;
+        if (cur && cur.id === id) updateAnim({ ...cur, phase: "collapse" });
+      }, 380);
+      setTimeout(finish, 800);
+    }, 850);
   }
 
   async function act(id: string, body: { action: "approve" } | { action: "reject"; reason: string }) {
     setBusyId(id);
     setNote("");
+    let ok = false;
     try {
       const res = await fetch(`/api/admin/payments/${id}`, {
         method: "POST",
@@ -508,6 +623,7 @@ export default function AdminPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) setNote(data.error ?? "ทำรายการไม่สำเร็จ");
+      else ok = true;
     } catch {
       setNote("เชื่อมต่อเซิร์ฟเวอร์ไม่ได้");
     }
@@ -515,6 +631,10 @@ export default function AdminPage() {
     setConfirmId(null);
     setRejectId(null);
     setReason("");
+    if (ok && body.action === "approve") {
+      playApprove(id);
+      return;
+    }
     load();
   }
 
@@ -562,7 +682,8 @@ export default function AdminPage() {
   if (gate === "locked") {
     return (
       <div className={shell}>
-        <main className="mx-auto max-w-md px-4 py-16 text-center sm:px-5">
+        <style>{FX_CSS}</style>
+        <main className="admin-fade-down mx-auto max-w-md px-4 py-16 text-center sm:px-5">
           <h1 className="text-2xl font-bold">หน้าเจ้าหน้าที่</h1>
           <p className="mt-3 text-sm text-[#4d6652]">กรอกรหัสผ่าน admin เพื่อเข้าใช้งาน</p>
           <form onSubmit={unlock} className="mt-5">
@@ -574,17 +695,17 @@ export default function AdminPage() {
               autoComplete="current-password"
               autoFocus
               maxLength={200}
-              className="min-h-12 w-full rounded-xl border border-[#cfdcc0] bg-white px-4 py-3 text-base outline-none focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a] sm:text-sm"
+              className="min-h-12 w-full rounded-xl border border-[#cfdcc0] bg-white px-4 py-3 text-base outline-none transition focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a] sm:text-sm"
             />
             {pwErr && (
-              <p role="alert" className="mt-3 text-sm font-medium text-red-600">
+              <p role="alert" className="admin-fade-down mt-3 text-sm font-medium text-red-600">
                 {pwErr}
               </p>
             )}
             <button
               type="submit"
               disabled={pwBusy || pw.length === 0}
-              className="mt-4 min-h-12 w-full rounded-2xl bg-[#14402c] py-3 text-sm font-bold text-white disabled:opacity-60"
+              className="mt-4 min-h-12 w-full rounded-2xl bg-[#14402c] py-3 text-sm font-bold text-white transition active:scale-[0.97] disabled:opacity-60"
             >
               {pwBusy ? "กำลังตรวจสอบ..." : "เข้าสู่หน้า admin"}
             </button>
@@ -681,10 +802,13 @@ export default function AdminPage() {
         type="button"
         role="tab"
         aria-selected={active}
+        data-nav-id={id}
         onClick={() => selectTab(id)}
-        className={`flex w-full items-center justify-between gap-3 rounded-2xl px-4 text-left font-bold transition ${
+        className={`flex w-full items-center justify-between gap-3 rounded-2xl px-4 text-left font-bold transition active:scale-[0.98] ${
           big ? "min-h-14 text-base" : "min-h-11 text-sm"
-        } ${active ? "bg-[#14402c] text-white" : "text-[#4d6652] hover:bg-[#e3ecd6]"}`}
+        } ${active ? "bg-[#14402c] text-white" : "text-[#4d6652] hover:bg-[#e3ecd6]"} ${
+          pulse && id === "approved" ? "admin-nav-pulse" : ""
+        }`}
       >
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate">{label}</span>
@@ -694,7 +818,7 @@ export default function AdminPage() {
         </span>
         {count !== null && (
           <span
-            className={`min-w-7 shrink-0 rounded-full px-2 py-0.5 text-center text-xs ${
+            className={`min-w-7 shrink-0 rounded-full px-2 py-0.5 text-center text-xs transition-colors ${
               active ? "bg-white/20" : "bg-[#e3ecd6]"
             }`}
           >
@@ -711,7 +835,7 @@ export default function AdminPage() {
         type="button"
         onClick={() => setSound((s) => !s)}
         aria-pressed={sound}
-        className={`min-h-11 rounded-full px-5 py-2.5 text-xs font-bold sm:text-sm ${
+        className={`min-h-11 rounded-full px-5 py-2.5 text-xs font-bold transition active:scale-95 sm:text-sm ${
           sound ? "bg-[#d9f27a]" : "border border-[#cfdcc0] bg-white text-[#6b7f6f]"
         }`}
       >
@@ -720,7 +844,7 @@ export default function AdminPage() {
       <button
         type="button"
         onClick={lock}
-        className="min-h-11 rounded-full border border-[#14402c] px-5 py-2.5 text-xs font-bold sm:text-sm"
+        className="min-h-11 rounded-full border border-[#14402c] px-5 py-2.5 text-xs font-bold transition active:scale-95 sm:text-sm"
       >
         ล็อก
       </button>
@@ -751,14 +875,14 @@ export default function AdminPage() {
           aria-label="ค้นหารายชื่อ"
           autoComplete="off"
           maxLength={100}
-          className="min-h-12 w-full rounded-full border border-[#cfdcc0] bg-white pl-12 pr-12 text-base outline-none focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a] sm:text-sm"
+          className="min-h-12 w-full rounded-full border border-[#cfdcc0] bg-white pl-12 pr-12 text-base outline-none transition focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a] sm:text-sm"
         />
         {query && (
           <button
             type="button"
             onClick={() => setQuery("")}
             aria-label="ล้างคำค้นหา"
-            className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-lg font-bold text-[#6b7f6f] hover:bg-[#e3ecd6]"
+            className="absolute right-2 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-lg font-bold text-[#6b7f6f] transition hover:bg-[#e3ecd6] active:scale-90"
           >
             ×
           </button>
@@ -767,8 +891,18 @@ export default function AdminPage() {
     );
 
   const noMatch = (
-    <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+    <div className="admin-fade-down mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
       ไม่พบรายการที่ตรงกับ “{q}”
+    </div>
+  );
+
+  // ส่วนท้ายการ์ดตอนอนุมัติสำเร็จ (แทนปุ่มต่าง ๆ ระหว่างเล่นแอนิเมชัน)
+  const approvedFooter = (p: Item) => (
+    <div className="admin-fade-down flex items-center justify-center gap-2 border-t border-green-700 bg-green-600 p-3 text-sm font-bold text-white sm:p-4">
+      <span aria-hidden="true">✓</span>
+      <span>
+        อนุมัติแล้ว {baht(p.amount)} · ออกตั๋วแล้ว
+      </span>
     </div>
   );
 
@@ -776,14 +910,14 @@ export default function AdminPage() {
   const renderActions = (p: Item, passed: boolean) => (
     <div className="border-t border-[#e3ecd6] bg-[#f8fbf3] p-3 sm:p-4">
       {rejectId === p.id ? (
-        <div>
+        <div className="admin-fade-down">
           <div className="flex flex-wrap gap-2">
             {REASONS.map((r) => (
               <button
                 key={r}
                 type="button"
                 onClick={() => setReason(r)}
-                className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold sm:text-sm ${reason === r ? "bg-[#14402c] text-white" : "bg-white"}`}
+                className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold transition active:scale-95 sm:text-sm ${reason === r ? "bg-[#14402c] text-white" : "bg-white"}`}
               >
                 {r}
               </button>
@@ -794,7 +928,7 @@ export default function AdminPage() {
             onChange={(e) => setReason(e.target.value)}
             placeholder="เหตุผล (ผู้ซื้อจะเห็นข้อความนี้)"
             maxLength={200}
-            className="mt-3 min-h-12 w-full rounded-xl border border-[#cfdcc0] bg-white px-4 py-3 text-base outline-none focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a] sm:text-sm"
+            className="mt-3 min-h-12 w-full rounded-xl border border-[#cfdcc0] bg-white px-4 py-3 text-base outline-none transition focus:border-[#14402c] focus:ring-2 focus:ring-[#d9f27a] sm:text-sm"
           />
           <div className="mt-3 flex gap-2">
             <button
@@ -803,7 +937,7 @@ export default function AdminPage() {
                 setRejectId(null);
                 setReason("");
               }}
-              className="min-h-12 flex-1 rounded-2xl border border-[#14402c] py-3 text-sm font-semibold"
+              className="min-h-12 flex-1 rounded-2xl border border-[#14402c] py-3 text-sm font-semibold transition active:scale-[0.97]"
             >
               ยกเลิก
             </button>
@@ -811,14 +945,14 @@ export default function AdminPage() {
               type="button"
               disabled={busyId === p.id || reason.trim().length < 2}
               onClick={() => act(p.id, { action: "reject", reason })}
-              className="min-h-12 flex-1 rounded-2xl bg-red-600 py-3 text-sm font-bold text-white disabled:opacity-50"
+              className="min-h-12 flex-1 rounded-2xl bg-red-600 py-3 text-sm font-bold text-white transition active:scale-[0.97] disabled:opacity-50"
             >
               ปฏิเสธสลีป
             </button>
           </div>
         </div>
       ) : banId === p.id ? (
-        <div>
+        <div className="admin-fade-down">
           <p className="text-xs font-semibold text-red-600 sm:text-sm">
             แบน {p.name} ({p.phone}) ไม่ให้สร้างรายการและส่งสลีป รายการนี้ยังค้างรอตรวจตามเดิม
           </p>
@@ -829,7 +963,7 @@ export default function AdminPage() {
                 type="button"
                 onClick={() => setBanDur(d)}
                 aria-pressed={banDur === d}
-                className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold sm:text-sm ${banDur === d ? "bg-[#14402c] text-white" : "bg-white"}`}
+                className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold transition active:scale-95 sm:text-sm ${banDur === d ? "bg-[#14402c] text-white" : "bg-white"}`}
               >
                 {label}
               </button>
@@ -839,7 +973,7 @@ export default function AdminPage() {
             <button
               type="button"
               onClick={() => setBanId(null)}
-              className="min-h-12 flex-1 rounded-2xl border border-[#14402c] py-3 text-sm font-semibold"
+              className="min-h-12 flex-1 rounded-2xl border border-[#14402c] py-3 text-sm font-semibold transition active:scale-[0.97]"
             >
               ยกเลิก
             </button>
@@ -847,14 +981,14 @@ export default function AdminPage() {
               type="button"
               disabled={busyId === p.id}
               onClick={() => banBuyer(p.id, banDur)}
-              className="min-h-12 flex-1 rounded-2xl bg-red-600 py-3 text-sm font-bold text-white disabled:opacity-60"
+              className="min-h-12 flex-1 rounded-2xl bg-red-600 py-3 text-sm font-bold text-white transition active:scale-[0.97] disabled:opacity-60"
             >
               {busyId === p.id ? "กำลังแบน..." : "ยืนยันแบน"}
             </button>
           </div>
         </div>
       ) : confirmId === p.id ? (
-        <div>
+        <div className="admin-fade-down">
           {!passed && (
             <p className="mb-2 text-xs font-semibold text-yellow-700 sm:text-sm">
               ! ระบบยังไม่ยืนยันสลีปนี้ ตรวจกับรายการเข้าบัญชีแล้วใช่ไหม
@@ -864,15 +998,15 @@ export default function AdminPage() {
             <button
               type="button"
               onClick={() => setConfirmId(null)}
-              className="min-h-12 flex-1 rounded-2xl border border-[#14402c] py-3 text-sm font-semibold"
+              className="min-h-12 flex-1 rounded-2xl border border-[#14402c] py-3 text-sm font-semibold transition active:scale-[0.97]"
             >
               ยกเลิก
             </button>
             <button
               type="button"
-              disabled={busyId === p.id}
+              disabled={busyId === p.id || anim !== null}
               onClick={() => act(p.id, { action: "approve" })}
-              className="min-h-12 flex-[1.4] rounded-2xl bg-[#14402c] px-2 py-3 text-sm font-bold text-white disabled:opacity-60"
+              className="min-h-12 flex-[1.4] rounded-2xl bg-[#14402c] px-2 py-3 text-sm font-bold text-white transition active:scale-[0.97] disabled:opacity-60"
             >
               {busyId === p.id ? "กำลังออกตั๋ว..." : `ยืนยัน อนุมัติ ${baht(p.amount)}`}
             </button>
@@ -887,7 +1021,7 @@ export default function AdminPage() {
               setConfirmId(null);
               setBanId(null);
             }}
-            className="min-h-12 flex-1 rounded-2xl border border-red-300 py-3 text-sm font-semibold text-red-600"
+            className="min-h-12 flex-1 rounded-2xl border border-red-300 py-3 text-sm font-semibold text-red-600 transition active:scale-[0.97]"
           >
             ปฏิเสธ
           </button>
@@ -898,7 +1032,7 @@ export default function AdminPage() {
               setRejectId(null);
               setConfirmId(null);
             }}
-            className="min-h-12 flex-1 rounded-2xl border border-red-600 bg-red-50 py-3 text-sm font-bold text-red-700"
+            className="min-h-12 flex-1 rounded-2xl border border-red-600 bg-red-50 py-3 text-sm font-bold text-red-700 transition active:scale-[0.97]"
           >
             แบน
           </button>
@@ -909,7 +1043,7 @@ export default function AdminPage() {
               setRejectId(null);
               setBanId(null);
             }}
-            className="min-h-12 flex-1 rounded-2xl bg-[#14402c] py-3 text-sm font-bold text-white"
+            className="min-h-12 flex-1 rounded-2xl bg-[#14402c] py-3 text-sm font-bold text-white transition active:scale-[0.97]"
           >
             อนุมัติ
           </button>
@@ -943,7 +1077,7 @@ export default function AdminPage() {
         type="button"
         disabled={busyId === b.id}
         onClick={() => unban(b.id)}
-        className="min-h-11 shrink-0 rounded-2xl bg-[#14402c] px-5 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+        className="min-h-11 shrink-0 rounded-2xl bg-[#14402c] px-5 py-2.5 text-sm font-bold text-white transition active:scale-95 disabled:opacity-60"
       >
         {busyId === b.id ? "กำลังปลด..." : "ปลดแบน"}
       </button>
@@ -956,14 +1090,22 @@ export default function AdminPage() {
     const passed = check?.ok === true;
     const open = detailId === p.id;
     const toggle = () => p.slip && setDetailId(open ? null : p.id);
+    const a = anim && anim.id === p.id ? anim : null;
     return (
-      <li key={p.id} className="min-w-0 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+      <li
+        key={p.id}
+        id={`card-${p.id}`}
+        style={cardStyle(a)}
+        className={`admin-card-in relative min-w-0 overflow-hidden rounded-3xl border transition-colors duration-300 ${
+          a ? "border-green-500 bg-green-100" : "border-[#e3ecd6] bg-white"
+        }`}
+      >
         <div className="flex gap-3 p-3 sm:gap-4 sm:p-4">
           <button
             type="button"
             onClick={() => setZoom(p.id)}
             aria-label="ดูสลีปขนาดใหญ่"
-            className="h-32 w-20 shrink-0 overflow-hidden rounded-xl bg-[#e3ecd6] sm:h-44 sm:w-32"
+            className="h-32 w-20 shrink-0 overflow-hidden rounded-xl bg-[#e3ecd6] transition active:scale-95 sm:h-44 sm:w-32"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -1055,7 +1197,7 @@ export default function AdminPage() {
         </div>
 
         {open && p.slip && (
-          <div className="border-t border-[#e3ecd6] bg-[#fffbe6] px-3 py-3 sm:px-4">
+          <div className="admin-fade-down border-t border-[#e3ecd6] bg-[#fffbe6] px-3 py-3 sm:px-4">
             {check ? (
               <ul className="space-y-2">
                 <Row
@@ -1114,13 +1256,36 @@ export default function AdminPage() {
           </div>
         )}
 
-        {footer}
+        {a ? approvedFooter(p) : footer}
+
+        {/* ติกถูกใหญ่กลางการ์ดตอนอนุมัติสำเร็จ */}
+        {a && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-green-500/20"
+          >
+            <span className="admin-pop-in flex h-24 w-24 items-center justify-center rounded-full bg-green-600 shadow-xl ring-4 ring-white">
+              <svg
+                viewBox="0 0 24 24"
+                className="h-14 w-14"
+                fill="none"
+                stroke="white"
+                strokeWidth="3.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path className="admin-check-draw" d="M5 12.5l4.5 4.5L19 7.5" />
+              </svg>
+            </span>
+          </div>
+        )}
       </li>
     );
   };
 
   return (
     <div className={shell}>
+      <style>{FX_CSS}</style>
       <div className="md:flex md:items-start">
         {/* แถบรายการด้านข้าง (คอมพิวเตอร์) ชิดซ้ายเต็มความสูงหน้าจอ */}
         <aside className="hidden md:sticky md:top-0 md:block md:h-screen md:w-64 md:shrink-0 md:overflow-y-auto md:border-r md:border-[#e3ecd6] md:bg-white md:p-4">
@@ -1139,11 +1304,14 @@ export default function AdminPage() {
                   {/* ปุ่ม 3 ขีด เปิดเมนูรายการเต็มจอ (มือถือ) */}
                   <button
                     type="button"
+                    data-menu-btn
                     onClick={() => setMenuOpen(true)}
                     aria-label={anyDot ? "เปิดเมนูรายการ (มีรายการใหม่)" : "เปิดเมนูรายการ"}
                     aria-haspopup="dialog"
                     aria-expanded={menuOpen}
-                    className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#14402c] bg-white md:hidden"
+                    className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-[#14402c] bg-white transition active:scale-95 md:hidden ${
+                      pulse ? "admin-nav-pulse" : ""
+                    }`}
                   >
                     <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
                       <path d="M4 7h16M4 12h16M4 17h16" />
@@ -1172,7 +1340,7 @@ export default function AdminPage() {
               </header>
 
               {note && (
-                <p role="alert" className="mt-3 text-sm font-medium text-red-600">
+                <p role="alert" className="admin-fade-down mt-3 text-sm font-medium text-red-600">
                   {note}
                 </p>
               )}
@@ -1225,13 +1393,13 @@ export default function AdminPage() {
                       <Stat title="ถูกปฏิเสธ" value={`${num(summary.rejected)} รายการ`} />
                     </div>
 
-                    <div className="mt-5 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+                    <div className="admin-card-in mt-5 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
                       <div className="flex items-center justify-between gap-3 p-4">
                         <h2 className="text-base font-bold sm:text-lg">ยอดขายรายวัน</h2>
                         <a
                           href="/api/admin/summary/csv"
                           download
-                          className="min-h-10 shrink-0 rounded-full bg-[#14402c] px-4 py-2.5 text-xs font-bold text-white sm:text-sm"
+                          className="min-h-10 shrink-0 rounded-full bg-[#14402c] px-4 py-2.5 text-xs font-bold text-white transition active:scale-95 sm:text-sm"
                         >
                           ส่งออก CSV
                         </a>
@@ -1252,7 +1420,7 @@ export default function AdminPage() {
                             </thead>
                             <tbody>
                               {summary.daily.map((d) => (
-                                <tr key={d.date} className="border-t border-[#e3ecd6]">
+                                <tr key={d.date} className="border-t border-[#e3ecd6] transition-colors hover:bg-[#f8fbf3]">
                                   <td className="px-4 py-2.5 font-semibold">{fmtDay(d.date)}</td>
                                   <td className="px-2 py-2.5 text-right">{num(d.orders)}</td>
                                   <td className="px-2 py-2.5 text-right">{num(d.booth)}</td>
@@ -1277,7 +1445,7 @@ export default function AdminPage() {
                     กำลังโหลดรายชื่อผู้ถูกรางวัล...
                   </div>
                 ) : spinList && spinList.length === 0 ? (
-                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                  <div className="admin-fade-down mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
                     ยังไม่มีผู้ถูกรางวัลจากตู้สุ่ม
                   </div>
                 ) : spinRows.length === 0 ? (
@@ -1290,7 +1458,7 @@ export default function AdminPage() {
                     </p>
                     <ul className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
                       {spinRows.map((w) => (
-                        <li key={w.id} className="min-w-0 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+                        <li key={w.id} className="admin-card-in min-w-0 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
                           <div className="flex items-center justify-between gap-3 bg-[#14402c] px-4 py-2.5 text-white">
                             <span className="rounded-full bg-[#d9f27a] px-3 py-0.5 text-sm font-extrabold text-[#14402c]">
                               อันดับ {num(w.rank)}
@@ -1349,7 +1517,7 @@ export default function AdminPage() {
                     <h2 className="mt-6 text-base font-bold sm:text-lg">สรุปรายซุ้ม</h2>
                     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
                       {scanData.booths.map((b) => (
-                        <div key={b.id} className="min-w-0 rounded-3xl border border-[#e3ecd6] bg-white p-4 sm:p-5">
+                        <div key={b.id} className="admin-card-in min-w-0 rounded-3xl border border-[#e3ecd6] bg-white p-4 sm:p-5">
                           <div className="flex items-start justify-between gap-3">
                             <p className="min-w-0 truncate text-base font-bold sm:text-lg">{b.name}</p>
                             {b.kind === "paper" && (
@@ -1385,7 +1553,7 @@ export default function AdminPage() {
                               type="button"
                               onClick={() => setBoothFilter(c.id)}
                               aria-pressed={boothFilter === c.id}
-                              className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold sm:text-sm ${
+                              className={`min-h-10 rounded-full px-3.5 py-2 text-xs font-semibold transition active:scale-95 sm:text-sm ${
                                 boothFilter === c.id ? "bg-[#14402c] text-white" : "bg-[#e3ecd6] text-[#4d6652]"
                               }`}
                             >
@@ -1417,7 +1585,7 @@ export default function AdminPage() {
                               {scanRows.map((s) => {
                                 const r = SCAN_LABEL[s.result] ?? { label: s.result, cls: "bg-[#e3ecd6] text-[#14402c]" };
                                 return (
-                                  <tr key={s.id} className="border-t border-[#e3ecd6] align-top">
+                                  <tr key={s.id} className="border-t border-[#e3ecd6] align-top transition-colors hover:bg-[#f8fbf3]">
                                     <td className="whitespace-nowrap px-4 py-2.5 font-semibold">{fmtSec(s.at)}</td>
                                     <td className="px-2 py-2.5 font-semibold">{s.boothName ?? "-"}</td>
                                     <td className="px-2 py-2.5">
@@ -1457,7 +1625,7 @@ export default function AdminPage() {
                     กำลังโหลดรายชื่อผู้ถูกแบน...
                   </div>
                 ) : banList && banList.length === 0 ? (
-                  <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                  <div className="admin-fade-down mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
                     ไม่มีผู้ใช้ที่ถูกแบนอยู่ตอนนี้
                   </div>
                 ) : banRows.length === 0 ? (
@@ -1468,7 +1636,7 @@ export default function AdminPage() {
                       b.payment ? (
                         renderPayment(b.payment, banFooter(b))
                       ) : (
-                        <li key={b.id} className="min-w-0 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
+                        <li key={b.id} className="admin-card-in min-w-0 overflow-hidden rounded-3xl border border-[#e3ecd6] bg-white">
                           <div className="flex items-center gap-2.5 p-4">
                             <Avatar key={b.avatarUrl ?? "none"} src={b.avatarUrl} name={b.name || b.username} />
                             <p className="min-w-0 text-sm text-[#4d6652]">
@@ -1482,7 +1650,7 @@ export default function AdminPage() {
                   </ul>
                 )
               ) : items.length === 0 ? (
-                <div className="mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
+                <div className="admin-fade-down mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
                   {tab === "reviewing" ? "ไม่มีสลีปรอตรวจ" : "ยังไม่มีรายการ"}
                 </div>
               ) : itemRows.length === 0 ? (
@@ -1505,7 +1673,7 @@ export default function AdminPage() {
           role="dialog"
           aria-modal="true"
           aria-label="เมนูรายการ"
-          className="fixed inset-0 z-40 overflow-y-auto bg-[#f1f7e9] md:hidden"
+          className="admin-fade-down fixed inset-0 z-40 overflow-y-auto bg-[#f1f7e9] md:hidden"
         >
           <div className="mx-auto w-full max-w-lg px-4 pb-10 pt-5 sm:max-w-3xl sm:px-6">
             <div className="flex items-center justify-between gap-3">
@@ -1514,7 +1682,7 @@ export default function AdminPage() {
                 type="button"
                 onClick={() => setMenuOpen(false)}
                 aria-label="ปิดเมนู"
-                className="flex h-11 w-11 items-center justify-center rounded-full border border-[#14402c] bg-white text-xl font-bold"
+                className="flex h-11 w-11 items-center justify-center rounded-full border border-[#14402c] bg-white text-xl font-bold transition active:scale-90"
               >
                 ×
               </button>
@@ -1532,14 +1700,14 @@ export default function AdminPage() {
           role="dialog"
           aria-modal="true"
           aria-label="สลีปขนาดใหญ่"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-6"
+          className="admin-fade-down fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-6"
           onClick={() => setZoom(null)}
         >
           <button
             type="button"
             onClick={() => setZoom(null)}
             aria-label="ปิด"
-            className="absolute right-3 top-3 flex h-11 w-11 items-center justify-center rounded-full bg-white text-xl font-bold text-[#14402c] shadow sm:right-6 sm:top-6"
+            className="absolute right-3 top-3 flex h-11 w-11 items-center justify-center rounded-full bg-white text-xl font-bold text-[#14402c] shadow transition active:scale-90 sm:right-6 sm:top-6"
           >
             ×
           </button>
