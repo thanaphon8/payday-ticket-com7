@@ -51,7 +51,7 @@ type TicketDef = {
   sub: string; // ชื่ออังกฤษตัวเล็ก
   unit: string; // หน่วยนับตอนซื้อ: ตั๋วเข้าซุ้ม = ชุด / Lucky Draw = ใบ
   homeNote: string; // ข้อความในการ์ดหน้าหลัก
-  homeImage?: string; // ถ้าใส่: หน้าหลัก/หน้าซื้อตั๋ว/หน้าตั๋วของฉัน แสดงรูปนี้เป็นส่วนบนของตั๋ว (ไฟล์ใน public/) ชื่อตั๋วจะอยู่เหนือกรอบ
+  homeImage?: string; // ถ้าใส่: หน้าหลัก/หน้าซื้อตั๋ว/หน้าตั๋วของฉัน แสดงรูปนี้เป็นส่วนบนของตั๋ว (ไฟล์ใน public/)
   blurb: string; // คำอธิบายในหน้าเลือกตั๋ว
   price: number;
   layout: "banner" | "compact"; // รูปแบบการ์ดในหน้า "ตั๋วของฉัน"
@@ -2484,10 +2484,6 @@ export default function Home() {
                       }
                       className="pd-rise block text-left transition duration-300 active:scale-[0.97] md:hover:scale-[1.03]"
                     >
-                      {/* ชื่อตั๋ว (ตั๋วที่มีรูป): อยู่เหนือกรอบ */}
-                      {t.homeImage && (
-                        <p className="px-1 pb-2 text-lg font-bold text-white md:pb-3 md:text-2xl">{t.title}</p>
-                      )}
                       <div className="relative">
                         <Perforated
                           className={bought ? "pd-scanned" : ""}
@@ -2571,12 +2567,11 @@ export default function Home() {
                 // มือถือ: ซื้อตั๋วเข้าซุ้มแล้ว → Lucky Draw ขึ้นบนสุด (md ขึ้นไปคืนลำดับเดิม)
                 const moveFirst = ownsBooth && t.id === "lucky";
 
-                // ส่วนบน: ตั๋วที่มีรูปใช้รูปเดียวกับหน้าหลัก (ชื่อตั๋วอยู่เหนือกรอบ) / ตั๋วอื่นใช้การ์ดข้อความ
+                // ส่วนบน: ตั๋วที่มีรูปใช้รูปเดียวกับหน้าหลัก / ตั๋วอื่นใช้การ์ดข้อความ
                 // ส่วนล่าง (หลังรอยประ): ราคา + ปุ่ม + - แยกจากตัวตั๋วเหมือนกันทุกใบ
                 // กดที่ตัวตั๋วไม่เปิดหน้าแสดงตั๋ว (หน้าแสดงตั๋วอยู่เฉพาะหน้า "ตั๋วของฉัน")
                 return (
                   <div key={t.id} className={`pd-rise ${moveFirst ? "order-first md:order-none" : ""}`}>
-                    {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-white">{t.title}</p>}
                     <div className="relative">
                       <Perforated
                         className={bought ? "pd-scanned" : ""}
@@ -3067,7 +3062,6 @@ export default function Home() {
 
                       return (
                         <div key={t.id} className="pd-rise">
-                          {t.homeImage && <p className="px-1 pb-2 text-lg font-bold text-white">{t.title}</p>}
                           {goldWin ? <GoldFrame>{card}</GoldFrame> : card}
                         </div>
                       );
