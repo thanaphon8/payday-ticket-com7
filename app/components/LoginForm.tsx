@@ -11,14 +11,12 @@ import {
   postAuth,
   primaryBtn,
 } from "./auth-shared";
-import type { AuthErrors, AuthFormProps } from "./auth-shared";
+import type { AuthErrors, AuthFormProps, AuthMode } from "./auth-shared";
+import ForgotForm from "./ForgotForm";
 
-export default function LoginForm({
-  onAuthed,
-  onSwitch,
-  onBack,
-  subtitle,
-}: AuthFormProps) {
+export default function LoginForm(props: AuthFormProps) {
+  const { onAuthed, onSwitch, onBack, subtitle } = props;
+  const [view, setView] = useState<"login" | "forgot">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
@@ -56,6 +54,18 @@ export default function LoginForm({
     onAuthed(r.user);
   };
 
+  if (view === "forgot") {
+    return (
+      <ForgotForm
+        {...props}
+        onBack={() => setView("login")}
+        onSwitch={(mode: AuthMode) =>
+          mode === "login" ? setView("login") : onSwitch(mode)
+        }
+      />
+    );
+  }
+
   return (
     <AuthShell onBack={onBack}>
       <AuthHero
@@ -88,6 +98,16 @@ export default function LoginForm({
           error={errors.password}
           trailing={<EyeButton show={show} onToggle={() => setShow((v) => !v)} />}
         />
+
+        <div className="-mt-1 px-4 text-right">
+          <button
+            type="button"
+            onClick={() => setView("forgot")}
+            className="text-sm font-semibold text-white/70 underline-offset-2 transition hover:text-white hover:underline"
+          >
+            ลืมรหัสผ่าน?
+          </button>
+        </div>
 
         {errors.form && (
           <p role="alert" className="px-4 text-sm font-medium text-red-400">
