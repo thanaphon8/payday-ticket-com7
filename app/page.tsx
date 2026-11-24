@@ -97,8 +97,8 @@ const TICKETS: TicketDef[] = [
     homeNote: "ลุ้นรางวัลสุดเซอร์ไพรส์",
     homeImage: "/img/p2.png",
     blurb: "1 ใบ = 1 สิทธิ์สุ่มของรางวัล ภายในงาน", // TODO: แก้ให้ตรงสิทธิ์จริง
-    // ราคา 50 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
-    price: 50,
+    // ราคา 1 บาท ถ้าจะเปลี่ยนให้แก้ให้ตรงกับ TICKET_PRICES ใน lib/tickets.ts
+    price: 1,
     layout: "compact",
     groupNote: "ลุ้นของรางวัล • 1 สิทธิ์",
     chips: ["รอสุ่มภายในงาน", "ยังไม่ได้ใช้สิทธิ์"],

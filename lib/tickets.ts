@@ -2,9 +2,9 @@ import { randomBytes } from "crypto";
 import { ObjectId, type Db, type WithId, type Document } from "mongodb";
 
 // ราคาฝั่งเซิร์ฟเวอร์ (ต้องตรงกับ price ใน TICKETS ของ app/page.tsx)
-// ตั๋วเข้าซุ้ม 100 บาท / ชุด (1 ชุด = ตั๋วซุ้ม 2 ใบ ใบละ 50 + ตั๋วรับตั๋วกระดาษ 1 ใบ ไม่มีมูลค่า) / ตั๋ว Lucky Draw 50 บาท
+// ตั๋วเข้าซุ้ม 100 บาท / ชุด (1 ชุด = ตั๋วซุ้ม 2 ใบ ใบละ 50 + ตั๋วรับตั๋วกระดาษ 1 ใบ ไม่มีมูลค่า) / ตั๋ว Lucky Draw 1 บาท
 // ถ้าจะเปลี่ยนราคา ให้แก้ที่นี่ และที่ price ใน TICKETS ของ app/page.tsx ให้ตรงกัน
-export const TICKET_PRICES = { booth: 100, lucky: 50 } as const;
+export const TICKET_PRICES = { booth: 100, lucky: 1 } as const;
 export type TicketId = keyof typeof TICKET_PRICES;
 export const MAX_QTY = 20;
 
