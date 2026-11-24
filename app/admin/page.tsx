@@ -93,7 +93,7 @@ type BoothStat = {
   lastAt: string | null;
 };
 type ScanData = { total: number; rejected: number; booths: BoothStat[]; scans: ScanRow[] };
-// ผู้ใช้ที่ถูกแบนอยู่ (อัตโนมัติจากสลีปไม่ผ่าน หรือ admin แบนเอง) payment = รายการ + สลีปที่ทำให้ถูกแบน
+// ผู้ใช้ที่ถูกแบนอยู่ (อัตโนมัติจากสลิปไม่ผ่าน หรือ admin แบนเอง) payment = รายการ + สลิปที่ทำให้ถูกแบน
 type BanRow = {
   id: string;
   username: string;
@@ -130,7 +130,7 @@ type Anim = { id: string; phase: "green" | "fly" | "collapse"; dx: number; dy: n
 const POLL_MS = 10_000;
 const SEEN_KEY = "payday-admin-seen-v1";
 const RECEIVER_LABEL = "คอมเซเว่น เพื่อการกุศล";
-const REASONS = ["ยอดเงินไม่ตรง", "ไม่พบรายการเข้าบัญชี", "สลีปไม่ชัด/อ่านไม่ได้", "สลีปไม่ใช่ของรายการนี้"];
+const REASONS = ["ยอดเงินไม่ตรง", "ไม่พบรายการเข้าบัญชี", "สลิปไม่ชัด/อ่านไม่ได้", "สลิปไม่ใช่ของรายการนี้"];
 const BAN_OPTIONS: [BanDuration, string][] = [
   ["1h", "1 ชั่วโมง"],
   ["24h", "24 ชั่วโมง"],
@@ -138,7 +138,7 @@ const BAN_OPTIONS: [BanDuration, string][] = [
   ["permanent", "ถาวร"],
 ];
 const STATUS_LABEL: Record<string, string> = {
-  awaiting_slip: "รอส่งสลีป",
+  awaiting_slip: "รอส่งสลิป",
   reviewing: "รอตรวจ",
   approved: "อนุมัติแล้ว",
   rejected: "ปฏิเสธ",
@@ -297,7 +297,7 @@ function Row({ ok, label, value }: { ok: boolean; label: string; value: string }
   );
 }
 
-// เครื่องหมายย่อด้านขวาของรายการ: ok = ✓ เขียว (ผ่านการอ่านสลีปจริงเทียบออเดอร์) / false = ! เหลือง / null = ยังไม่ได้ตรวจ (เทา)
+// เครื่องหมายย่อด้านขวาของรายการ: ok = ✓ เขียว (ผ่านการอ่านสลิปจริงเทียบออเดอร์) / false = ! เหลือง / null = ยังไม่ได้ตรวจ (เทา)
 function Mark({ ok, label }: { ok: boolean | null; label: string }) {
   const cls =
     ok === null ? "bg-[#e3ecd6] text-[#6b7f6f]" : ok ? "bg-green-600 text-white" : "bg-yellow-400 text-[#14402c]";
@@ -475,7 +475,7 @@ export default function AdminPage() {
   }, [load, tab, boothFilter]);
 
   useEffect(() => {
-    document.title = counts.reviewing > 0 ? `(${counts.reviewing}) รอตรวจสลีป · Admin` : "Admin · Payday Park";
+    document.title = counts.reviewing > 0 ? `(${counts.reviewing}) รอตรวจสลิป · Admin` : "Admin · Payday Park";
   }, [counts.reviewing]);
 
   // โหลดจำนวนที่เคยเปิดดูแล้ว (ของเมนูอัตโนมัติ / ถูกแบน) จากเบราว์เซอร์
@@ -510,7 +510,7 @@ export default function AdminPage() {
     });
   }, [counts, tab, gate]);
 
-  // กด Esc ปิดรูปสลีปขนาดใหญ่ / เมนูเต็มจอ (คอมพิวเตอร์)
+  // กด Esc ปิดรูปสลิปขนาดใหญ่ / เมนูเต็มจอ (คอมพิวเตอร์)
   useEffect(() => {
     if (!zoom && !menuOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -751,7 +751,7 @@ export default function AdminPage() {
             ? "ผู้ถูกรางวัล Spin"
             : tab === "auto"
               ? "อนุมัติอัตโนมัติ"
-              : "ตรวจสลีป";
+              : "ตรวจสลิป";
 
   // เงินรวมที่ทุกซุ้มยิงได้ (ไม่นับจุดรับตั๋วกระดาษ เพราะไม่มีมูลค่า)
   const boothTotal = scanData ? scanData.booths.reduce((s, b) => s + b.amount, 0) : 0;
@@ -947,14 +947,14 @@ export default function AdminPage() {
               onClick={() => act(p.id, { action: "reject", reason })}
               className="min-h-12 flex-1 rounded-2xl bg-red-600 py-3 text-sm font-bold text-white transition active:scale-[0.97] disabled:opacity-50"
             >
-              ปฏิเสธสลีป
+              ปฏิเสธสลิป
             </button>
           </div>
         </div>
       ) : banId === p.id ? (
         <div className="admin-fade-down">
           <p className="text-xs font-semibold text-red-600 sm:text-sm">
-            แบน {p.name} ({p.phone}) ไม่ให้สร้างรายการและส่งสลีป รายการนี้ยังค้างรอตรวจตามเดิม
+            แบน {p.name} ({p.phone}) ไม่ให้สร้างรายการและส่งสลิป รายการนี้ยังค้างรอตรวจตามเดิม
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
             {BAN_OPTIONS.map(([d, label]) => (
@@ -991,7 +991,7 @@ export default function AdminPage() {
         <div className="admin-fade-down">
           {!passed && (
             <p className="mb-2 text-xs font-semibold text-yellow-700 sm:text-sm">
-              ! ระบบยังไม่ยืนยันสลีปนี้ ตรวจกับรายการเข้าบัญชีแล้วใช่ไหม
+              ! ระบบยังไม่ยืนยันสลิปนี้ ตรวจกับรายการเข้าบัญชีแล้วใช่ไหม
             </p>
           )}
           <div className="flex gap-2">
@@ -1104,13 +1104,13 @@ export default function AdminPage() {
           <button
             type="button"
             onClick={() => setZoom(p.id)}
-            aria-label="ดูสลีปขนาดใหญ่"
+            aria-label="ดูสลิปขนาดใหญ่"
             className="h-32 w-20 shrink-0 overflow-hidden rounded-xl bg-[#e3ecd6] transition active:scale-95 sm:h-44 sm:w-32"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={`/api/admin/payments/${p.id}/slip-image`}
-              alt={`สลีป ${p.ref}`}
+              alt={`สลิป ${p.ref}`}
               loading="lazy"
               className="h-full w-full object-cover object-top"
             />
@@ -1121,7 +1121,7 @@ export default function AdminPage() {
             role={p.slip ? "button" : undefined}
             tabIndex={p.slip ? 0 : undefined}
             aria-expanded={p.slip ? open : undefined}
-            aria-label={p.slip ? (passed ? "ระบบตรวจสลีปผ่าน กดดูรายละเอียด" : "ต้องตรวจสลีปเอง กดดูรายละเอียด") : undefined}
+            aria-label={p.slip ? (passed ? "ระบบตรวจสลิปผ่าน กดดูรายละเอียด" : "ต้องตรวจสลิปเอง กดดูรายละเอียด") : undefined}
             onClick={toggle}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
@@ -1170,14 +1170,14 @@ export default function AdminPage() {
                 เข้าซุ้ม {p.booth} · Lucky Draw {p.lucky}
               </p>
               <p className="mt-1 text-xs text-[#6b7f6f] sm:text-sm">
-                ส่งสลีป {fmt(p.slipAt)}
+                ส่งสลิป {fmt(p.slipAt)}
                 {p.slip && ` · ${BANKS[p.slip.sendingBank] ?? `ธนาคาร ${p.slip.sendingBank}`}`}
               </p>
               {p.slip && <p className="mt-0.5 break-all font-mono text-[11px] text-[#6b7f6f]">{p.slip.transRef}</p>}
               {p.rejectReason && <p className="mt-2 text-xs font-semibold text-red-600 sm:text-sm">ปฏิเสธ: {p.rejectReason}</p>}
               {p.slip && (
                 <p className="mt-2 text-[11px] font-semibold text-[#4d6652] sm:text-xs">
-                  {open ? "▲ ซ่อนรายละเอียด" : "▼ ดูผลตรวจสลีป"}
+                  {open ? "▲ ซ่อนรายละเอียด" : "▼ ดูผลตรวจสลิป"}
                 </p>
               )}
             </div>
@@ -1205,10 +1205,10 @@ export default function AdminPage() {
                   label="ยอดเงิน"
                   value={
                     check.amount === null
-                      ? `อ่านยอดจากสลีปไม่ได้ (ต้องเป็น ${baht(p.amount)})`
+                      ? `อ่านยอดจากสลิปไม่ได้ (ต้องเป็น ${baht(p.amount)})`
                       : check.amountOk
                         ? `${baht(check.amount)} ตรงกับรายการ`
-                        : `สลีป ${baht(check.amount)} ≠ รายการ ${baht(p.amount)}`
+                        : `สลิป ${baht(check.amount)} ≠ รายการ ${baht(p.amount)}`
                   }
                 />
                 <Row
@@ -1225,20 +1225,20 @@ export default function AdminPage() {
                   label="วันเวลาโอน"
                   value={
                     check.transferAt
-                      ? `สลีป ${fmt(check.transferAt)} · ออเดอร์ ${fmt(p.createdAt)}${
+                      ? `สลิป ${fmt(check.transferAt)} · ออเดอร์ ${fmt(p.createdAt)}${
                           check.timeOk ? " (วันเดียวกัน ไม่เกิน 1 ชม.)" : " (ต้องเป็นวันเดียวกับออเดอร์ และโอนหลังสร้างออเดอร์ไม่เกิน 1 ชม.)"
                         }`
-                      : "อ่านวันเวลาจากสลีปไม่ได้"
+                      : "อ่านวันเวลาจากสลิปไม่ได้"
                   }
                 />
-                <Row ok label="เลขอ้างอิง" value="ไม่ซ้ำกับสลีปอื่น" />
+                <Row ok label="เลขอ้างอิง" value="ไม่ซ้ำกับสลิปอื่น" />
               </ul>
             ) : (
-              <p className="text-xs text-[#4d6652] sm:text-sm">สลีปนี้ยังไม่ได้ตรวจอัตโนมัติ กรุณาตรวจเอง</p>
+              <p className="text-xs text-[#4d6652] sm:text-sm">สลิปนี้ยังไม่ได้ตรวจอัตโนมัติ กรุณาตรวจเอง</p>
             )}
             {check?.banned && (
               <p className="mt-3 text-xs font-semibold text-red-600 sm:text-sm">
-                ระบบแบนผู้ซื้อคนนี้ 1 ชั่วโมงแล้ว เพราะสลีปไม่ผ่านการตรวจอัตโนมัติ ถ้าตรวจแล้วว่าสลีปถูกต้อง ไปปลดแบนได้ที่เมนู “ถูกแบน”
+                ระบบแบนผู้ซื้อคนนี้ 1 ชั่วโมงแล้ว เพราะสลิปไม่ผ่านการตรวจอัตโนมัติ ถ้าตรวจแล้วว่าสลิปถูกต้อง ไปปลดแบนได้ที่เมนู “ถูกแบน”
               </p>
             )}
             {check && (check.error || check.rawText !== undefined) && (
@@ -1330,10 +1330,10 @@ export default function AdminPage() {
                       : tab === "spin"
                         ? "รายชื่อผู้ที่ถูกรางวัลจากตู้สุ่ม (หน้า /spin) ทุกรอบ เรียงคนที่ได้ล่าสุดขึ้นก่อน อันดับคือลำดับที่ได้รางวัล (คนแรก = อันดับ 1)"
                         : tab === "bans"
-                          ? "ผู้ซื้อที่ถูกแบนไม่ให้สร้างรายการและส่งสลีป (ระบบแบนเองเมื่ออ่านสลีปได้แต่ไม่ผ่านข้อใดข้อหนึ่ง: ยอดเงิน ผู้รับเงิน วันเวลาโอน หรือ admin แบนเอง) การ์ดแสดงสลีปและผลตรวจของรายการที่ทำให้ถูกแบน กดปลดแบนได้ก่อนครบเวลา ส่วนการอนุมัติ/ปฏิเสธรายการทำที่เมนู “รอตรวจ”"
+                          ? "ผู้ซื้อที่ถูกแบนไม่ให้สร้างรายการและส่งสลิป (ระบบแบนเองเมื่ออ่านสลิปได้แต่ไม่ผ่านข้อใดข้อหนึ่ง: ยอดเงิน ผู้รับเงิน วันเวลาโอน หรือ admin แบนเอง) การ์ดแสดงสลิปและผลตรวจของรายการที่ทำให้ถูกแบน กดปลดแบนได้ก่อนครบเวลา ส่วนการอนุมัติ/ปฏิเสธรายการทำที่เมนู “รอตรวจ”"
                           : tab === "auto"
-                            ? "รายการที่ระบบอนุมัติให้เองเพราะตรวจสลีปผ่านครบทุกข้อ (ยอดเงิน ผู้รับ วันเวลาโอน เลขอ้างอิง) และออกตั๋วแล้ว รายการเหล่านี้อยู่ในเมนู “อนุมัติแล้ว” ด้วย"
-                            : "ระบบอ่านรูปสลีปจริงแล้วเทียบกับออเดอร์ ✓ = ตรงกับรายการ (เวลาโอนต้องเป็นวันเดียวกับออเดอร์และไม่เกิน 1 ชั่วโมงหลังสร้างออเดอร์) / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” กับรายการเข้าบัญชีก่อนกดอนุมัติ (รหัสออเดอร์อยู่ใน QR ช่อง Additional Data)"}
+                            ? "รายการที่ระบบอนุมัติให้เองเพราะตรวจสลิปผ่านครบทุกข้อ (ยอดเงิน ผู้รับ วันเวลาโอน เลขอ้างอิง) และออกตั๋วแล้ว รายการเหล่านี้อยู่ในเมนู “อนุมัติแล้ว” ด้วย"
+                            : "ระบบอ่านรูปสลิปจริงแล้วเทียบกับออเดอร์ ✓ = ตรงกับรายการ (เวลาโอนต้องเป็นวันเดียวกับออเดอร์และไม่เกิน 1 ชั่วโมงหลังสร้างออเดอร์) / ! = ต้องตรวจเอง ดูเครื่องหมายด้านขวาของแต่ละรายการ กดที่รายการเพื่อดูรายละเอียด เทียบ “ยอด” กับรายการเข้าบัญชีก่อนกดอนุมัติ (รหัสออเดอร์อยู่ใน QR ช่อง Additional Data)"}
                 </p>
                 <div className="mt-3 flex gap-2 md:hidden">{controlButtons}</div>
                 {searchBox}
@@ -1640,7 +1640,7 @@ export default function AdminPage() {
                           <div className="flex items-center gap-2.5 p-4">
                             <Avatar key={b.avatarUrl ?? "none"} src={b.avatarUrl} name={b.name || b.username} />
                             <p className="min-w-0 text-sm text-[#4d6652]">
-                              {b.name || b.username} · ไม่พบรายการที่ส่งสลีปของผู้ใช้นี้
+                              {b.name || b.username} · ไม่พบรายการที่ส่งสลิปของผู้ใช้นี้
                             </p>
                           </div>
                           {banFooter(b)}
@@ -1651,7 +1651,7 @@ export default function AdminPage() {
                 )
               ) : items.length === 0 ? (
                 <div className="admin-fade-down mt-6 rounded-3xl border border-dashed border-[#b9cba6] bg-white/60 p-8 text-center text-sm text-[#4d6652] sm:text-base">
-                  {tab === "reviewing" ? "ไม่มีสลีปรอตรวจ" : "ยังไม่มีรายการ"}
+                  {tab === "reviewing" ? "ไม่มีสลิปรอตรวจ" : "ยังไม่มีรายการ"}
                 </div>
               ) : itemRows.length === 0 ? (
                 noMatch
@@ -1699,7 +1699,7 @@ export default function AdminPage() {
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="สลีปขนาดใหญ่"
+          aria-label="สลิปขนาดใหญ่"
           className="admin-fade-down fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-6"
           onClick={() => setZoom(null)}
         >
@@ -1714,7 +1714,7 @@ export default function AdminPage() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={`/api/admin/payments/${zoom}/slip-image`}
-            alt="สลีป"
+            alt="สลิป"
             className="max-h-[92vh] max-w-full rounded-2xl bg-white object-contain"
           />
         </div>

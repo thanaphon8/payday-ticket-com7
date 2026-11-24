@@ -159,7 +159,7 @@ const seenKey = (userId: string) => `payday-won-seen-v1-${userId}`; // รหั
 
 // ป้ายสถานะรายการโอนเงิน (ข้อความ + สี) ที่แสดงบนการ์ดในแท็บ "สถานะ" / "ปฏิเสธ"
 const PAY_BADGE: Record<PayStatus, { label: string; cls: string }> = {
-  awaiting_slip: { label: "รอส่งสลีป", cls: "bg-amber-100 text-amber-800" },
+  awaiting_slip: { label: "รอส่งสลิป", cls: "bg-amber-100 text-amber-800" },
   reviewing: { label: "รออนุมัติ", cls: "bg-sky-100 text-sky-800" },
   rejected: { label: "ถูกปฏิเสธ", cls: "bg-red-100 text-red-700" },
   approved: { label: "อนุมัติแล้ว", cls: "bg-green-100 text-green-800" },
@@ -1241,10 +1241,10 @@ function CheckoutBar({
   );
 }
 
-/* ---------- โอนเงิน + ส่งสลีป ---------- */
+/* ---------- โอนเงิน + ส่งสลิป ---------- */
 
 // ย่อรูปใหญ่ก่อนส่ง (ส่งไวขึ้น + กันไฟล์ใหญ่เกินลิมิตของโฮสต์) รูปเล็กอยู่แล้วส่งตามเดิม
-// 1600px ยังอ่าน QR บนสลีปได้ชัด
+// 1600px ยังอ่าน QR บนสลิปได้ชัด
 async function shrinkImage(file: File): Promise<File> {
   if (file.size <= 1024 * 1024) return file;
   try {
@@ -1307,8 +1307,8 @@ function SlipPay({
   const [shrunk, setShrunk] = useState<File | null>(null); // รูปที่ย่อเตรียมไว้แล้ว (ย่อตั้งแต่เลือกรูป กดส่งแล้วไม่ต้องรอ)
   const [preview, setPreview] = useState("");
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState(0); // ความคืบหน้าตอนส่งสลีป 0–100
-  const [stage, setStage] = useState<"upload" | "verify">("upload"); // upload = กำลังอัปโหลดรูป / verify = รอเซิร์ฟเวอร์ตรวจสลีป
+  const [progress, setProgress] = useState(0); // ความคืบหน้าตอนส่งสลิป 0–100
+  const [stage, setStage] = useState<"upload" | "verify">("upload"); // upload = กำลังอัปโหลดรูป / verify = รอเซิร์ฟเวอร์ตรวจสลิป
   const [err, setErr] = useState("");
   const [qrFailed, setQrFailed] = useState(false);
 
@@ -1379,7 +1379,7 @@ function SlipPay({
     };
   }, [file]);
 
-  // อัปโหลดเสร็จแล้วแต่เซิร์ฟเวอร์ยังตรวจสลีปอยู่: ค่อย ๆ ขยับหลอดไปจนเกือบเต็ม (ไม่ถึง 100 จนกว่าจะตอบกลับ)
+  // อัปโหลดเสร็จแล้วแต่เซิร์ฟเวอร์ยังตรวจสลิปอยู่: ค่อย ๆ ขยับหลอดไปจนเกือบเต็ม (ไม่ถึง 100 จนกว่าจะตอบกลับ)
   useEffect(() => {
     if (!busy || stage !== "verify") return;
     const t = setInterval(() => {
@@ -1398,13 +1398,13 @@ function SlipPay({
     try {
       const fd = new FormData();
       fd.append("slip", shrunk ?? (await shrinkImage(file)));
-      // ช่วงอัปโหลดรูปใช้ 0–70% ที่เหลือเป็นช่วงรอเซิร์ฟเวอร์ตรวจสลีป
+      // ช่วงอัปโหลดรูปใช้ 0–70% ที่เหลือเป็นช่วงรอเซิร์ฟเวอร์ตรวจสลิป
       const { status, data } = await sendForm(`/api/payments/${paymentId}/slip`, fd, (ratio) => {
         setProgress(Math.round(ratio * 70));
         if (ratio >= 1) setStage("verify");
       });
       if (status === 401) return onNeedLogin();
-      if (status < 200 || status >= 300) return setErr(data.error ?? "ส่งสลีปไม่สำเร็จ ลองใหม่อีกครั้ง");
+      if (status < 200 || status >= 300) return setErr(data.error ?? "ส่งสลิปไม่สำเร็จ ลองใหม่อีกครั้ง");
       setProgress(100);
       setFile(null);
       setPay((p) => (p ? { ...p, status: "reviewing", rejectReason: undefined } : p));
@@ -1420,8 +1420,8 @@ function SlipPay({
   const pct = Math.min(100, Math.floor(progress));
 
   return (
-    <section aria-label="โอนเงินและส่งสลีป" className="md:mx-auto md:max-w-4xl">
-      <SubHeader title="โอนเงินและส่งสลีป" onBack={onBack} />
+    <section aria-label="โอนเงินและส่งสลิป" className="md:mx-auto md:max-w-4xl">
+      <SubHeader title="โอนเงินและส่งสลิป" onBack={onBack} />
       <div className="mt-6">
         <Steps current={2} />
       </div>
@@ -1432,23 +1432,23 @@ function SlipPay({
         <div className="md:mt-6 md:grid md:grid-cols-2 md:items-start md:gap-6">
           {pay.status === "rejected" && (
             <div role="alert" className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 md:col-span-2 md:mt-0">
-              <p className="text-sm font-bold text-red-700">สลีปไม่ผ่าน</p>
-              <p className="mt-1 text-sm text-red-700">{pay.rejectReason ?? "กรุณาตรวจสอบแล้วส่งสลีปใหม่"}</p>
+              <p className="text-sm font-bold text-red-700">สลิปไม่ผ่าน</p>
+              <p className="mt-1 text-sm text-red-700">{pay.rejectReason ?? "กรุณาตรวจสอบแล้วส่งสลิปใหม่"}</p>
             </div>
           )}
 
           {busy ? (
-            // ระหว่างส่งสลีป: ซ่อน QR แล้วแสดงหลอดความคืบหน้าแทน
+            // ระหว่างส่งสลิป: ซ่อน QR แล้วแสดงหลอดความคืบหน้าแทน
             <div
               role="status"
               aria-live="polite"
               className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center md:mt-0 md:p-6"
             >
-              <p className="text-xs text-white/50">กำลังส่งสลีป กรุณาอย่าปิดหน้านี้</p>
+              <p className="text-xs text-white/50">กำลังส่งสลิป กรุณาอย่าปิดหน้านี้</p>
               <p className="mt-1 text-5xl font-extrabold tabular-nums">{pct}%</p>
               <div
                 role="progressbar"
-                aria-label="ความคืบหน้าการส่งสลีป"
+                aria-label="ความคืบหน้าการส่งสลิป"
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={pct}
@@ -1460,7 +1460,7 @@ function SlipPay({
                 />
               </div>
               <p className="mt-4 text-sm font-semibold">
-                {stage === "upload" ? "กำลังอัปโหลดรูปสลีป" : "กำลังตรวจสอบสลีป อาจใช้เวลาสักครู่"}
+                {stage === "upload" ? "กำลังอัปโหลดรูปสลิป" : "กำลังตรวจสอบสลิป อาจใช้เวลาสักครู่"}
               </p>
               <p className="mt-1 text-xs text-white/50">
                 ยอด {baht(pay.amount)} · รหัสอ้างอิง <span className="font-mono font-bold text-white">{pay.ref}</span>
@@ -1501,15 +1501,15 @@ function SlipPay({
                 </a>
               )}
               <p className="mt-3 text-sm font-bold">
-                {secsLeft > 0 ? `ส่งสลีปภายใน ${fmtCountdown(secsLeft)}` : "หมดเวลาแล้ว กำลังตรวจสอบ..."}
+                {secsLeft > 0 ? `ส่งสลิปภายใน ${fmtCountdown(secsLeft)}` : "หมดเวลาแล้ว กำลังตรวจสอบ..."}
               </p>
             </div>
           )}
 
           <div className="pd-rise mt-4 rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 md:mt-0 md:p-6" style={stagger(1)}>
-            <h2 className="text-base font-bold">ส่งสลีปโอนเงิน</h2>
+            <h2 className="text-base font-bold">ส่งสลิปโอนเงิน</h2>
             <p className="mt-1 text-xs text-white/50">
-              ใช้สลีปจากแอปธนาคาร ต้องเห็น QR บนสลีปชัด ไม่ครอป ไม่ตัดขอบ สลีป 1 ใบใช้ได้ครั้งเดียว
+              ใช้สลิปจากแอปธนาคาร ต้องเห็น QR บนสลิปชัด ไม่ครอป ไม่ตัดขอบ สลิป 1 ใบใช้ได้ครั้งเดียว
             </p>
 
             <label className="mt-3 flex min-h-40 cursor-pointer items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed border-white/20 bg-[#2a2a2a] p-3 text-center text-sm font-semibold text-white/60 focus-within:ring-2 focus-within:ring-white md:min-h-56">
@@ -1525,9 +1525,9 @@ function SlipPay({
               />
               {preview ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={preview} alt="สลีปที่เลือก" className="max-h-72 rounded-xl object-contain md:max-h-96" />
+                <img src={preview} alt="สลิปที่เลือก" className="max-h-72 rounded-xl object-contain md:max-h-96" />
               ) : (
-                "แตะเพื่อเลือกรูปสลีป"
+                "แตะเพื่อเลือกรูปสลิป"
               )}
             </label>
 
@@ -1544,7 +1544,7 @@ function SlipPay({
               disabled={!file || busy || secsLeft === 0}
               className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#e50914] py-4 text-base font-bold text-white transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {busy ? "กำลังส่งสลีป..." : "ส่งสลีป"}
+              {busy ? "กำลังส่งสลิป..." : "ส่งสลิป"}
               {!busy && <IconArrow className="h-5 w-5 text-white" />}
             </button>
           </div>
@@ -1556,7 +1556,7 @@ function SlipPay({
           <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-white text-black">
             <IconReceipt className="h-7 w-7" />
           </span>
-          <h2 className="mt-4 text-xl font-bold">ส่งสลีปแล้ว รอตรวจสอบ</h2>
+          <h2 className="mt-4 text-xl font-bold">ส่งสลิปแล้ว รอตรวจสอบ</h2>
           <p className="mt-2 text-sm text-white/60">
             {baht(pay.amount)} · รหัส <span className="font-mono font-bold">{pay.ref}</span>
           </p>
@@ -1592,7 +1592,7 @@ function SlipPay({
       <div className="mt-4 md:mx-auto md:mt-6 md:max-w-xl">
         <InfoBox
           icon={<IconInfo className="h-5 w-5" />}
-          title="ส่งสลีปแล้วรอสักครู่"
+          title="ส่งสลิปแล้วรอสักครู่"
           text="ปิดหน้านี้ได้ ตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” เมื่อเจ้าหน้าที่อนุมัติ"
         />
       </div>
@@ -1644,7 +1644,7 @@ export default function Home() {
   const [avatarDraft, setAvatarDraft] = useState<File | null>(null); // รูปที่เลือกแล้ว รอผู้ใช้ปรับตำแหน่งและกดบันทึก
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
-  // ตั๋วของฉัน (แท็บ "ready" = ตั๋วทั้งหมดที่ได้รับ ทั้งที่ยังไม่ใช้และใช้แล้ว / "status" = รายการโอนเงินที่รอส่งสลีป/รออนุมัติ / "rejected" = รายการที่ถูกปฏิเสธ)
+  // ตั๋วของฉัน (แท็บ "ready" = ตั๋วทั้งหมดที่ได้รับ ทั้งที่ยังไม่ใช้และใช้แล้ว / "status" = รายการโอนเงินที่รอส่งสลิป/รออนุมัติ / "rejected" = รายการที่ถูกปฏิเสธ)
   const [tab, setTab] = useState<"ready" | "status" | "rejected">("ready");
   const [sheet, setSheet] = useState<TicketId | null>(null);
   const [sheetClosing, setSheetClosing] = useState(false); // กำลังเล่นแอนิเมชันปิดหน้าต่างแสดงตั๋ว
@@ -1763,7 +1763,7 @@ export default function Home() {
   }, [cancelTarget]);
 
   // โหลดตั๋วใหม่ทุก 10 วิ ตลอดที่ login อยู่ (เข้าหน้า "ตั๋วของฉัน" โหลดทันที)
-  // (ตั๋วถูกออกตอน admin อนุมัติสลีป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง
+  // (ตั๋วถูกออกตอน admin อนุมัติสลิป ผู้ซื้ออาจปิดหน้าโอนเงินไปแล้ว ต้องดึงมาแสดง
   //  และสถานะถูกรางวัลก็มาทางนี้ด้วย ปุ่มเมนูสีทองจะขึ้นแม้อยู่หน้าอื่น)
   // ตอนเปิดหน้าต่างแสดงตั๋วอยู่ = ใกล้ถูกเจ้าหน้าที่ยิงที่หน้างาน: โหลดทุก 3 วิ
   // ตั๋วที่ถูกยิงแล้วจะเป็นสีเทา + ตราประทับ ("ใช้แล้ว" / "รับแล้ว") ค้างอยู่ในหน้าต่างแสดงตั๋วถาวร
@@ -1807,7 +1807,7 @@ export default function Home() {
 
   const readyOrders = orders.filter((o) => !o.used);
 
-  // รายการโอนเงินที่ค้างอยู่ แยก: แท็บ "สถานะ" = รอส่งสลีป/รออนุมัติ / แท็บ "ปฏิเสธ" = สลีปถูกปฏิเสธ
+  // รายการโอนเงินที่ค้างอยู่ แยก: แท็บ "สถานะ" = รอส่งสลิป/รออนุมัติ / แท็บ "ปฏิเสธ" = สลิปถูกปฏิเสธ
   const pendingActive = pending.filter((p) => p.status !== "rejected");
   const pendingRejected = pending.filter((p) => p.status === "rejected");
 
@@ -1933,7 +1933,7 @@ export default function Home() {
     setView("done");
   }
 
-  // กดยืนยัน: ขอ QR จากเซิร์ฟเวอร์ ตั๋วยังไม่ถูกออกจนกว่า admin จะอนุมัติสลีป
+  // กดยืนยัน: ขอ QR จากเซิร์ฟเวอร์ ตั๋วยังไม่ถูกออกจนกว่า admin จะอนุมัติสลิป
   async function confirmPay() {
     if (cartLines.length === 0 || payBusy) return;
     if (!user) return needLogin("pay");
@@ -1950,7 +1950,7 @@ export default function Home() {
     }
 
     // เซิร์ฟเวอร์คิดราคาเอง สร้างรายการรอโอน + QR พร้อมเพย์ (ยอด + รหัสอ้างอิงอยู่ใน QR)
-    // รหัสพนักงานเซิร์ฟเวอร์ดึงจากบัญชีเอง ตั๋วถูกสร้างใน MongoDB หลัง admin อนุมัติสลีปเท่านั้น
+    // รหัสพนักงานเซิร์ฟเวอร์ดึงจากบัญชีเอง ตั๋วถูกสร้างใน MongoDB หลัง admin อนุมัติสลิปเท่านั้น
     setPayBusy(true);
     setPayError("");
     const r = await api<{ payment: Payment }>("/api/orders", "POST", {
@@ -1971,14 +1971,14 @@ export default function Home() {
     setView("qr");
   }
 
-  // ออกจากหน้าโอนเงิน: รายการยังค้างอยู่ ไปดู/ส่งสลีปต่อได้ที่แท็บ "สถานะ" ใน "ตั๋วของฉัน"
+  // ออกจากหน้าโอนเงิน: รายการยังค้างอยู่ ไปดู/ส่งสลิปต่อได้ที่แท็บ "สถานะ" ใน "ตั๋วของฉัน"
   function leaveQr() {
     setPaymentId(null);
     setTab("status");
     go("tickets");
   }
 
-  // กดไอคอนถังขยะแล้วยืนยันใน popup: ยกเลิกรายการที่ยังไม่ส่งสลีป (เซิร์ฟเวอร์ตรวจสถานะซ้ำอีกที)
+  // กดไอคอนถังขยะแล้วยืนยันใน popup: ยกเลิกรายการที่ยังไม่ส่งสลิป (เซิร์ฟเวอร์ตรวจสถานะซ้ำอีกที)
   async function cancelPayment(id: string) {
     if (cancelingId) return;
     setCancelingId(id);
@@ -1991,7 +1991,7 @@ export default function Home() {
     }
     if (r.status === 401) return needLogin("tickets");
     alert(r.error);
-    // สถานะอาจเปลี่ยนไปแล้ว (เช่นส่งสลีปจากเครื่องอื่น) โหลดรายการใหม่
+    // สถานะอาจเปลี่ยนไปแล้ว (เช่นส่งสลิปจากเครื่องอื่น) โหลดรายการใหม่
     const o = await api<{ orders: Order[]; pending?: Payment[] }>("/api/orders");
     if (o.ok) {
       setOrders(o.data.orders);
@@ -2722,7 +2722,7 @@ export default function Home() {
                 </span>
               </div>
               <p className="mt-2 text-xs text-white/50">
-                กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน โอนแล้วส่งสลีปภายใน 60 นาที รอเจ้าหน้าที่ตรวจสอบ
+                กดยืนยันแล้วระบบจะสร้าง QR ให้สแกน โอนแล้วส่งสลิปภายใน 60 นาที รอเจ้าหน้าที่ตรวจสอบ
               </p>
             </div>
 
@@ -2754,7 +2754,7 @@ export default function Home() {
           </section>
         )}
 
-        {/* ===== ชำระเงิน (ขั้นที่ 2): โอน + ส่งสลีป ===== */}
+        {/* ===== ชำระเงิน (ขั้นที่ 2): โอน + ส่งสลิป ===== */}
         {view === "qr" && paymentId && (
           <SlipPay
             paymentId={paymentId}
@@ -2865,7 +2865,7 @@ export default function Home() {
                         go("qr");
                       };
 
-                      // กดที่การ์ด = เปิดหน้าโอนเงิน/ส่งสลีป/ดูสถานะ (หน้าเดียวกับเดิม) รายการที่ถูกปฏิเสธส่งสลีปใหม่ได้จากหน้านี้
+                      // กดที่การ์ด = เปิดหน้าโอนเงิน/ส่งสลิป/ดูสถานะ (หน้าเดียวกับเดิม) รายการที่ถูกปฏิเสธส่งสลิปใหม่ได้จากหน้านี้
                       return (
                         <div
                           key={p.id}
@@ -2929,12 +2929,12 @@ export default function Home() {
                               )}
                               {p.status === "rejected" && (
                                 <p className="mt-1 text-xs text-white/50">
-                                  แตะเพื่อส่งสลีปใหม่ ภายใน {fmtTime(p.expiresAt)}
+                                  แตะเพื่อส่งสลิปใหม่ ภายใน {fmtTime(p.expiresAt)}
                                 </p>
                               )}
                             </div>
                             <div className="flex shrink-0 items-center gap-2">
-                              {/* ยกเลิกได้เฉพาะรายการที่ยังไม่ได้ส่งสลีป */}
+                              {/* ยกเลิกได้เฉพาะรายการที่ยังไม่ได้ส่งสลิป */}
                               {p.status === "awaiting_slip" && (
                                 <button
                                   type="button"
