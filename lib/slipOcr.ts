@@ -29,7 +29,7 @@ export type SlipCheck = {
   timeOk: boolean;
   transferAt: string | null;
   ok: boolean;
-  shouldBan?: boolean; // อ่านสลีปได้ แต่ไม่ผ่านเงื่อนไขอย่างน้อย 1 ข้อ (ยอดเงิน / ผู้รับ / วันเวลาโอน)
+  shouldBan?: boolean; // อ่านสลีปได้ แต่ไม่ผ่านทั้ง 3 ข้อพร้อมกัน (ยอดเงินไม่ตรง + ผู้รับไม่ตรง + วันเวลาโอนไม่ตรง)
   banned?: boolean; // ระบบแบนผู้ซื้อไปแล้วจากสลีปใบนี้
   rawText?: string; // ข้อความดิบที่ OCR อ่านได้ ไว้ตรวจปัญหาช่วงทดสอบ
   error?: string | null;
@@ -173,7 +173,7 @@ const AMOUNT_UNIT_RE = /(?<![\d.,])(\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})? ?(?:�
 
 // คืนยอดที่เป็นไปได้ทั้งหมด ให้ checkSlip เทียบกับยอดออเดอร์
 function parseAmounts(text: string): number[] {
-  const t = text.replace(/[ \t ]+/g, " ");
+  const t = text.replace(/[ \t\u00a0]+/g, " ");
   const found: number[] = [];
   const push = (s: string) => {
     const n = Number(s.replace(/,/g, ""));
@@ -324,6 +324,7 @@ const thaiDay = (ms: number) => new Date(ms + 7 * 3_600_000).toISOString().slice
 // since = เวลาที่สร้างรายการ
 // เวลาโอนผ่านเมื่อ: วันเดียวกับออเดอร์ (เวลาไทย) และโอนหลังสร้างออเดอร์ไม่เกิน MAX_TRANSFER_DELAY_MIN นาที (เผื่อนาฬิกาคลาดก่อนสร้าง 2 นาที)
 // skipTime = โหมดทดสอบ: ไม่เทียบกับเวลาออเดอร์ และไม่แบน
+// แบนอัตโนมัติ: อ่านสลีปได้ และ ยอดเงินไม่ตรง + ผู้รับไม่ตรง + วันเวลาไม่ตรง ครบทั้ง 3 ข้อพร้อมกัน
 export function checkSlip(
   o: SlipOcr,
   expect: { amount: number; since: string; skipTime?: boolean },
@@ -347,7 +348,7 @@ export function checkSlip(
     timeOk,
     transferAt: o.transferAt,
     ok,
-    shouldBan: expect.skipTime !== true && o.readable && !ok,
+    shouldBan: expect.skipTime !== true && o.readable && !amountOk && !o.receiverOk && !timeOk,
     rawText: o.rawText,
     error: o.error,
   };

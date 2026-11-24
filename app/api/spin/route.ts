@@ -60,7 +60,6 @@ export async function GET() {
     orders
       .find({ ticket: "lucky", won: true })
       .sort({ wonAt: -1 })
-      .limit(200)
       .project({ code: 1, empCode: 1, name: 1, wonAt: 1, userId: 1 })
       .toArray(),
   ]);
