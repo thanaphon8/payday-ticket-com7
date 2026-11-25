@@ -4,17 +4,18 @@ import { getDb } from "@/lib/mongodb";
 import { banMessage, getSessionUser, validPhone } from "@/lib/auth";
 import {
   BOOTH_MAX_SETS_PER_USER,
-  MAX_QTY_BY_TICKET,
+  MAX_QTY_BY_ITEM,
   OPEN_STATUSES,
   PAYMENT_TTL_MINUTES,
   buildPaymentLines,
   expireStale,
-  isTicketId,
+  isItemId,
+  luckyPackOpen,
   makeRef,
   toOrder,
   toPaymentInfo,
   validEmpCode,
-  type TicketId,
+  type ItemId,
 } from "@/lib/tickets";
 import { makeQrDataUrl } from "@/lib/billerQr";
 
@@ -41,9 +42,10 @@ export async function GET() {
   return NextResponse.json({ orders: docs.map(toOrder), pending: open.map(toPaymentInfo) });
 }
 
-// เริ่มซื้อ: body = { items: [{ ticket, qty }], name, phone }
+// เริ่มซื้อ: body = { items: [{ ticket, qty }], name, phone }  (ticket = "booth" | "lucky" | "luckypack")
 // รหัสพนักงานดึงจากบัญชีผู้ใช้ (ตั้งตอนสมัคร / ในโปรไฟล์) ไม่รับจากหน้าเว็บ
-// ซื้อ Lucky Draw แล้วบัญชียังไม่มีรหัสพนักงาน = ปฏิเสธ
+// ซื้อ Lucky Draw (รวมแพ็ค Pre-order) แล้วบัญชียังไม่มีรหัสพนักงาน = ปฏิเสธ
+// แพ็ค Pre-order (200 บาท / 7 ใบ) ซื้อได้ไม่จำกัดแพ็ค แต่ปิดขายเมื่อถึงเวลา LUCKY_PACK_DEADLINE
 // ตั๋วเข้าซุ้มซื้อได้ 1 ชุดต่อบัญชี (นับเฉพาะรายการที่อนุมัติแล้ว = มีตั๋วในบัญชีแล้ว)
 // ผู้ใช้ที่ถูกแบน (สลีปไม่ผ่านการตรวจอัตโนมัติ) สร้างรายการไม่ได้จนกว่าจะหมดเวลาแบนหรือ admin ปลดแบน
 // ยังไม่ออกตั๋ว สร้างรายการรอโอน + QR พร้อมเพย์ (ยอด + Ref1 ฝังใน QR)
@@ -65,17 +67,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "ยังไม่ได้เลือกตั๋ว" }, { status: 400 });
 
   // รวมจำนวนต่อประเภท (กันส่งประเภทเดียวกันซ้ำหลายรายการเพื่อเลี่ยงเพดานจำนวน)
-  const qtyByTicket = new Map<TicketId, number>();
+  const qtyByTicket = new Map<ItemId, number>();
   for (const it of items) {
     const qty = Math.floor(Number(it?.qty));
-    if (!isTicketId(it?.ticket) || !(qty >= 1))
+    if (!isItemId(it?.ticket) || !(qty >= 1))
       return NextResponse.json({ error: "รายการตั๋วไม่ถูกต้อง" }, { status: 400 });
     qtyByTicket.set(it.ticket, (qtyByTicket.get(it.ticket) ?? 0) + qty);
   }
 
-  const wanted: { ticket: TicketId; qty: number }[] = [];
+  const wanted: { ticket: ItemId; qty: number }[] = [];
   for (const [ticket, qty] of qtyByTicket) {
-    if (qty > MAX_QTY_BY_TICKET[ticket]) {
+    if (qty > MAX_QTY_BY_ITEM[ticket]) {
       return NextResponse.json(
         {
           error:
@@ -89,8 +91,12 @@ export async function POST(req: Request) {
     wanted.push({ ticket, qty });
   }
 
-  // ซื้อ Lucky Draw ต้องมีรหัสพนักงานในบัญชี
-  const hasLucky = wanted.some((w) => w.ticket === "lucky");
+  // แพ็ค Pre-order ปิดขายเมื่อถึงเวลาที่กำหนด (ตรวจที่เซิร์ฟเวอร์เสมอ ไม่เชื่อเวลาจากหน้าเว็บ)
+  if (wanted.some((w) => w.ticket === "luckypack") && !luckyPackOpen())
+    return NextResponse.json({ error: "แพ็ค Lucky Draw Pre-order ปิดรับแล้ว" }, { status: 400 });
+
+  // ซื้อ Lucky Draw (รวมแพ็ค Pre-order) ต้องมีรหัสพนักงานในบัญชี
+  const hasLucky = wanted.some((w) => w.ticket === "lucky" || w.ticket === "luckypack");
   const empCode = user.empCode ?? "";
   if (hasLucky && !validEmpCode(empCode))
     return NextResponse.json(

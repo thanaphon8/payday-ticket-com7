@@ -43,12 +43,14 @@ const TICKET_IMG_ASPECT = "aspect-[715/349]";
    เขียว #14402c · ไลม์ #d9f27a · เหลือง #ffcf5c · พื้นหลัง #f1f7e9 · กล่องเขียวอ่อน #e3ecd6 · midnight blue #0f1b4d · แดงเลือดหมู #6b1d24 */
 
 type TicketId = "booth" | "lucky";
+// รายการที่ใส่ตะกร้าได้: ตั๋วปกติ + แพ็ค Lucky Draw Pre-order ("luckypack")
+type CartId = TicketId | "luckypack";
 
 type TicketDef = {
-  id: TicketId;
+  id: CartId;
   title: string;
   sub: string; // ชื่ออังกฤษตัวเล็ก
-  unit: string; // หน่วยนับตอนซื้อ: ตั๋วเข้าซุ้ม = ชุด / Lucky Draw = ใบ
+  unit: string; // หน่วยนับตอนซื้อ: ตั๋วเข้าซุ้ม = ชุด / Lucky Draw = ใบ / แพ็ค Pre-order = แพ็ค
   homeNote: string; // ข้อความในการ์ดหน้าหลัก
   homeImage?: string; // ถ้าใส่: หน้าหลัก/หน้าซื้อตั๋ว/หน้าตั๋วของฉัน แสดงรูปนี้เป็นส่วนบนของตั๋ว (ไฟล์ใน public/)
   blurb: string; // คำอธิบายในหน้าเลือกตั๋ว
@@ -66,7 +68,10 @@ type TicketDef = {
   shimmer: string; // class พื้นตั๋ววิบวับตามสีตั๋ว (หน้าหลัก/หน้าซื้อตั๋ว/หน้าตั๋วของฉัน) ไม่มีกรอบ ไม่มีออร่า
 };
 
-const TICKETS: TicketDef[] = [
+// ตั๋วจริง 2 ประเภท (booth / lucky) id เป็น TicketId เสมอ
+type BaseTicketDef = TicketDef & { id: TicketId };
+
+const TICKETS: BaseTicketDef[] = [
   {
     id: "booth",
     title: "ตั๋วเข้าซุ้ม",
@@ -111,6 +116,41 @@ const TICKETS: TicketDef[] = [
   },
 ];
 
+/* ---------- แพ็ค Lucky Draw Pre-order ----------
+   จ่าย 200 บาท ได้ Lucky Draw 7 ใบ (ออกเป็นตั๋ว Lucky Draw ปกติ ลุ้นรวมวงเดียวกัน) ซื้อได้ไม่จำกัดแพ็ค ซื้อหลายแพ็คพร้อมกันได้
+   ปิดขาย 00:00 น. 1 ธ.ค. 2569 (หน้าซื้อกับหน้าหลักซ่อนแพ็คนี้) ตั๋วที่ซื้อไปแล้วยังอยู่ในบัญชีตามปกติ
+   ถ้าจะเปลี่ยน ให้แก้ให้ตรงกับ LUCKY_PACK_* และ MAX_PACKS ใน lib/tickets.ts (ฝั่งเซิร์ฟเวอร์คิดเงินและปิดขายจากตัวนั้น) */
+const PACK_PRICE = 200;
+const PACK_SIZE = 7;
+const PACK_DEADLINE_MS = new Date("2026-12-01T00:00:00+07:00").getTime();
+const PACK_DEADLINE_LABEL = "1 ธันวาคม 2569";
+const MAX_PACKS = 100; // จำนวนแพ็คสูงสุดต่อการซื้อ 1 ครั้ง (กันกดพลาด ต้องตรงกับ MAX_PACKS ใน lib/tickets.ts)
+
+const PACK_DEF: TicketDef = {
+  id: "luckypack",
+  title: "Lucky Draw Pre-order",
+  sub: "PRE-ORDER PACK",
+  unit: "แพ็ค",
+  homeNote: `ซื้อล่วงหน้า ได้ Lucky Draw ${PACK_SIZE} ใบ`,
+  blurb: `1 แพ็ค = Lucky Draw ${PACK_SIZE} ใบ ซื้อได้ไม่จำกัด ซื้อหลายแพ็คพร้อมกันได้ ปิดรับ ${PACK_DEADLINE_LABEL}`,
+  price: PACK_PRICE,
+  layout: "compact",
+  groupNote: `ลุ้นของรางวัล • ${PACK_SIZE} สิทธิ์ต่อแพ็ค`,
+  showLabel: "แสดงตั๋ว Lucky Draw",
+  card: "bg-[#14402c]",
+  fg: "text-white",
+  dash: "border-white/30",
+  button: "bg-[#e50914] text-white",
+  soft: "bg-[#d9f27a]",
+  shimmer: "pd-shimmer-green",
+};
+
+// ทุกรายการที่ซื้อได้ (ตั๋วปกติ + แพ็ค Pre-order)
+const ALL_DEFS: TicketDef[] = [...TICKETS, PACK_DEF];
+
+// ราคาปกติถ้าซื้อ Lucky Draw แยกใบ (ไว้เทียบกับราคาแพ็ค)
+const PACK_NORMAL_PRICE = (TICKETS.find((t) => t.id === "lucky")?.price ?? 50) * PACK_SIZE;
+
 type Order = {
   code: string;
   ticket: TicketId;
@@ -125,9 +165,10 @@ type Order = {
   won?: boolean; // ตั๋วใบนี้ถูกรางวัลแล้ว
   wonAt?: string;
   part?: "booth" | "paper"; // ตั๋วเข้าซุ้ม: booth = ตั๋วเล่นซุ้ม (฿50) / paper = ตั๋วรับตั๋วกระดาษ (ไม่มีมูลค่า)
+  pack?: boolean; // ตั๋ว Lucky Draw ใบนี้มาจากแพ็ค Pre-order
 };
 
-type Cart = Partial<Record<TicketId, number>>;
+type Cart = Partial<Record<CartId, number>>;
 
 // สถานะรายการโอนเงิน (ตรงกับ PaymentStatus ใน lib/tickets.ts)
 type PayStatus = "awaiting_slip" | "reviewing" | "approved" | "rejected" | "expired";
@@ -141,7 +182,7 @@ type Payment = {
   status: PayStatus;
   qrUrl?: string;
   rejectReason?: string;
-  items?: { ticket: TicketId; qty: number }[]; // ตั๋วที่ซื้อในรายการนี้ (ประเภท + จำนวน)
+  items?: { ticket: CartId; qty: number }[]; // ตั๋วที่ซื้อในรายการนี้ (ประเภท + จำนวน)
 };
 
 // ผลจาก GET /api/payments/[id]
@@ -279,8 +320,40 @@ const IconCamera = ({ className }: IconProps) => (
   </Icon>
 );
 
-const iconOf = (id: TicketId, className?: string) =>
+const iconOf = (id: CartId, className?: string) =>
   id === "booth" ? <IconTicket className={className} /> : <IconGift className={className} />;
+
+/* ---------- นับถอยหลังปิดรับแพ็ค Pre-order ----------
+   แยกเป็นคอมโพเนนต์เล็กที่มีตัวนับเวลาของตัวเอง เพื่อไม่ให้ทั้งหน้า render ซ้ำทุกวินาที
+   สีตัวหนังสือสืบทอดจากตั๋วที่ครอบอยู่ */
+function PackCountdown({ className = "" }: { className?: string }) {
+  const [left, setLeft] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setLeft(Math.max(0, PACK_DEADLINE_MS - Date.now()));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const secs = left === null ? 0 : Math.floor(left / 1000);
+  const two = (n: number) => String(n).padStart(2, "0");
+  const parts: [string, string][] = [
+    [left === null ? "--" : two(Math.floor(secs / 86400)), "วัน"],
+    [left === null ? "--" : two(Math.floor((secs % 86400) / 3600)), "ชม."],
+    [left === null ? "--" : two(Math.floor((secs % 3600) / 60)), "นาที"],
+    [left === null ? "--" : two(secs % 60), "วินาที"],
+  ];
+  return (
+    <div role="timer" aria-label="เวลาที่เหลือก่อนปิดรับ Pre-order" className={`flex items-center gap-1.5 ${className}`}>
+      {parts.map(([v, label]) => (
+        <div key={label} className="min-w-12 rounded-xl bg-black/30 px-2 py-1.5 text-center">
+          <p className="text-lg font-extrabold leading-none tabular-nums">{v}</p>
+          <p className="mt-0.5 text-[10px] opacity-80">{label}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /* ---------- ปรับรูปโปรไฟล์ก่อนบันทึก ----------
    เลือกรูปแล้วเปิดหน้าต่างนี้: ลากรูปเพื่อขยับ / เลื่อนแถบหรือหมุนล้อเมาส์เพื่อซูม / กด "บันทึก"
@@ -686,6 +759,9 @@ const TicketPass = memo(function TicketPass({
               <p className="mt-1 text-xs font-semibold text-neutral-600">
                 รหัสพนักงาน <span className="font-mono font-bold text-neutral-900">{order.empCode}</span>
               </p>
+            )}
+            {order.pack && (
+              <p className="mt-1 text-xs font-semibold text-[#2f8f5b]">จากแพ็ค Pre-order</p>
             )}
           </div>
         </div>
@@ -1332,6 +1408,9 @@ export default function Home() {
   const [cart, setCart] = useState<Cart>({});
   const [justBought, setJustBought] = useState<Order[] | null>(null);
 
+  // แพ็ค Pre-order ยังเปิดขายอยู่ไหม (ปิดเมื่อถึง PACK_DEADLINE_MS: ซ่อนการ์ดแพ็ค + ล็อกจำนวนเป็น 0)
+  const [packOpen, setPackOpen] = useState(true);
+
   // จำนวนตั๋วที่ขายแล้วทั้งหมด (แสดงในหน้าหลัก): booth = ชุด / lucky = ใบ
   const [sold, setSold] = useState<Record<TicketId, number> | null>(null);
 
@@ -1389,6 +1468,8 @@ export default function Home() {
       const n = Math.floor(Number(c[t.id]));
       if (n > 0) clean[t.id] = Math.min(t.id === "booth" ? MAX_BOOTH_SETS : MAX_QTY, n);
     }
+    const packN = Math.floor(Number(c.luckypack));
+    if (packN > 0) clean.luckypack = Math.min(MAX_PACKS, packN);
     setCart(clean);
 
     // เช็คว่า login ค้างอยู่ไหม (cookie) แล้วดึงตั๋วจาก MongoDB
@@ -1402,6 +1483,20 @@ export default function Home() {
       setReady(true);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // แพ็ค Pre-order: เช็กเวลาปิดขายทุกวินาที (หยุดเช็กเมื่อปิดแล้ว) ปิดแล้วการ์ดแพ็คหายจากหน้าซื้อ/หน้าหลักทันที
+  useEffect(() => {
+    const check = () => {
+      const o = Date.now() < PACK_DEADLINE_MS;
+      setPackOpen(o);
+      return o;
+    };
+    if (!check()) return;
+    const t = setInterval(() => {
+      if (!check()) clearInterval(t);
+    }, 1000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
@@ -1510,21 +1605,31 @@ export default function Home() {
     };
   }, [view, user, sheet, barcodeCode]);
 
-  const defOf = (id: TicketId) => TICKETS.find((t) => t.id === id)!;
+  const defOf = (id: CartId) => ALL_DEFS.find((t) => t.id === id)!;
 
   // บัญชีนี้มีตั๋วเข้าซุ้มแล้ว (อนุมัติแล้ว) = ซื้อซ้ำไม่ได้ (1 ชุดต่อบัญชี)
   const ownsBooth = orders.some((o) => o.ticket === "booth");
-  // จำนวนสูงสุดต่อประเภท (ตั๋วเข้าซุ้ม: 1 ชุดต่อบัญชี) ต้องตรงกับ MAX_QTY_BY_TICKET ใน lib/tickets.ts
-  const maxOf = (id: TicketId) => (id === "booth" ? (ownsBooth ? 0 : MAX_BOOTH_SETS) : MAX_QTY);
+  // จำนวนสูงสุดต่อประเภท (ตั๋วเข้าซุ้ม: 1 ชุดต่อบัญชี / แพ็ค Pre-order: ปิดขายแล้ว = 0) ต้องตรงกับ MAX_QTY_BY_ITEM ใน lib/tickets.ts
+  const maxOf = (id: CartId) =>
+    id === "booth"
+      ? ownsBooth
+        ? 0
+        : MAX_BOOTH_SETS
+      : id === "luckypack"
+        ? packOpen
+          ? MAX_PACKS
+          : 0
+        : MAX_QTY;
 
-  const cartLines = TICKETS.flatMap((t) => {
+  const cartLines = ALL_DEFS.flatMap((t) => {
     const q = Math.min(cart[t.id] ?? 0, maxOf(t.id));
     return q > 0 ? [{ def: t, qty: q }] : [];
   });
   const cartCount = cartLines.reduce((s, l) => s + l.qty, 0);
   const cartTotal = cartLines.reduce((s, l) => s + l.qty * l.def.price, 0);
-  const cartHasLucky = cartLines.some((l) => l.def.id === "lucky");
-  // ข้อความจำนวนในตะกร้า แยกหน่วยตามประเภท เช่น "1 ชุด · 2 ใบ"
+  // ซื้อ Lucky Draw ปกติหรือแพ็ค Pre-order = ต้องมีรหัสพนักงานในบัญชี
+  const cartHasLucky = cartLines.some((l) => l.def.id === "lucky" || l.def.id === "luckypack");
+  // ข้อความจำนวนในตะกร้า แยกหน่วยตามประเภท เช่น "1 ชุด · 2 ใบ · 3 แพ็ค"
   const cartText = cartLines.map((l) => `${l.qty} ${l.def.unit}`).join(" · ");
 
   const readyOrders = orders.filter((o) => !o.used);
@@ -1621,7 +1726,7 @@ export default function Home() {
     go("home");
   }
 
-  function setQty(id: TicketId, n: number) {
+  function setQty(id: CartId, n: number) {
     const q = Math.max(0, Math.min(maxOf(id), n));
     const next = { ...cart };
     if (q === 0) delete next[id];
@@ -1638,7 +1743,7 @@ export default function Home() {
   function toPay() {
     if (cartCount === 0) return;
     if (!user) return needLogin("pay"); // ซื้อตั๋วต้อง login ก่อน
-    if (cartHasLucky && !user.empCode) return needEmpCode(); // ซื้อ Lucky Draw ต้องมีรหัสพนักงานในบัญชี
+    if (cartHasLucky && !user.empCode) return needEmpCode(); // ซื้อ Lucky Draw (รวมแพ็ค) ต้องมีรหัสพนักงานในบัญชี
     setPayName(user.name);
     setPayPhone(user.phone);
     go("pay");
@@ -2064,6 +2169,11 @@ export default function Home() {
           background-size: 300% 100%;
           animation: pdSheen 3.2s linear infinite;
         }
+        .pd-shimmer-green {
+          background: linear-gradient(110deg, #14402c 0%, #14402c 32%, #2f8f5b 44%, #b9f08a 50%, #2f8f5b 56%, #14402c 68%, #14402c 100%);
+          background-size: 300% 100%;
+          animation: pdSheen 3.2s linear infinite;
+        }
         .pd-twinkle { animation: pdTwinkle 1.6s ease-in-out infinite; }
         .pd-spark { animation: pdTwinkle 1.6s ease-in-out infinite; }
         .pd-twinkle:nth-child(1) { top: 2%; left: 6%; width: 1rem; height: 1rem; animation-delay: 0s; }
@@ -2096,7 +2206,7 @@ export default function Home() {
         .pd-dialog { animation: pdDialogIn 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
         @media (prefers-reduced-motion: reduce) {
           .pd-page, .pd-rise, .pd-pop, .pd-bar, .pd-fade, .pd-sheet, .pd-dialog, .pd-sheet-out, .pd-fade-out { animation: none; }
-          .pd-gold-frame, .pd-gold-card, .pd-shimmer-blue, .pd-shimmer-red, .pd-twinkle, .pd-spark { animation: none; }
+          .pd-gold-frame, .pd-gold-card, .pd-shimmer-blue, .pd-shimmer-red, .pd-shimmer-green, .pd-twinkle, .pd-spark { animation: none; }
           .pd-twinkle, .pd-spark { opacity: 1; }
           .pd-scanned { animation: none; filter: grayscale(1) brightness(0.8); opacity: 0.75; }
           .pd-stamp { animation: none; }
@@ -2247,6 +2357,52 @@ export default function Home() {
                 })}
               </div>
 
+              {/* แพ็ค Lucky Draw Pre-order: 200 บาท ได้ 7 ใบ นับถอยหลังปิดรับ (ซ่อนเมื่อปิดขายแล้ว) */}
+              {packOpen && (
+                <button
+                  type="button"
+                  onClick={pick}
+                  aria-label={`${PACK_DEF.title} ${baht(PACK_PRICE)} ต่อแพ็ค ได้ ${PACK_SIZE} ใบ`}
+                  className="pd-rise mt-3 block w-full text-left transition duration-300 active:scale-[0.98] md:mt-6 md:hover:scale-[1.01]"
+                >
+                  <Perforated
+                    bg={PACK_DEF.shimmer}
+                    text={PACK_DEF.fg}
+                    dash={PACK_DEF.dash}
+                    top={
+                      <div className="px-4 pb-3 pt-4 md:px-6 md:pb-4 md:pt-6">
+                        <div className="flex items-center gap-3">
+                          {iconOf(PACK_DEF.id, "h-6 w-6 shrink-0 md:h-8 md:w-8")}
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-bold tracking-widest opacity-80">{PACK_DEF.sub}</p>
+                            <p className="text-lg font-bold leading-tight md:text-2xl">{PACK_DEF.title}</p>
+                          </div>
+                        </div>
+                        <p className="mt-2 text-xs md:text-sm">{PACK_DEF.homeNote}</p>
+                        <p className="mt-3 text-[11px] font-semibold opacity-80 md:text-xs">
+                          ปิดรับ Pre-order ใน (ถึง {PACK_DEADLINE_LABEL})
+                        </p>
+                        <PackCountdown className="mt-1" />
+                      </div>
+                    }
+                    bottom={
+                      <div className="flex w-full items-end justify-between px-4 pb-4 pt-3 md:px-6 md:pb-6 md:pt-4">
+                        <p className="text-xl font-extrabold md:text-4xl">
+                          {baht(PACK_PRICE)}
+                          <span className="text-xs font-medium">
+                            {" "}
+                            / {PACK_DEF.unit} · ได้ {PACK_SIZE} ใบ
+                          </span>
+                        </p>
+                        <span className="hidden h-9 w-9 items-center justify-center rounded-full bg-[#e50914] text-white md:flex md:h-11 md:w-11">
+                          <IconArrow className="h-5 w-5" />
+                        </span>
+                      </div>
+                    }
+                  />
+                </button>
+              )}
+
               {/* จำนวนตั๋วที่ขายแล้ว: ตั๋วเข้าซุ้มนับเป็นชุด / Lucky Draw นับเป็นใบ */}
               <div className="mt-3 grid grid-cols-2 gap-3 md:mt-6 md:gap-6">
                 {TICKETS.map((t) => (
@@ -2348,6 +2504,55 @@ export default function Home() {
                 );
               })}
 
+              {/* แพ็ค Lucky Draw Pre-order: ซื้อได้ไม่จำกัด ซื้อหลายแพ็คพร้อมกันได้ ปิดรับตามเวลานับถอยหลัง (ซ่อนเมื่อปิดขายแล้ว) */}
+              {packOpen && (
+                <div className="pd-rise md:col-span-2">
+                  <Perforated
+                    bg={PACK_DEF.shimmer}
+                    text={PACK_DEF.fg}
+                    dash={PACK_DEF.dash}
+                    top={
+                      <div className="p-4 md:p-6">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20">
+                            {iconOf(PACK_DEF.id, "h-6 w-6")}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-lg font-bold leading-tight">{PACK_DEF.title}</p>
+                            <p className="text-[10px] font-semibold tracking-widest opacity-70">{PACK_DEF.sub}</p>
+                          </div>
+                        </div>
+                        <p className="mt-4 text-sm opacity-90">{PACK_DEF.blurb}</p>
+                        <p className="mt-4 text-[11px] font-semibold opacity-80 md:text-xs">
+                          ปิดรับ Pre-order ใน (ถึง {PACK_DEADLINE_LABEL})
+                        </p>
+                        <PackCountdown className="mt-1" />
+                      </div>
+                    }
+                    bottom={
+                      <div className="flex items-center justify-between gap-2 px-4 pb-4 pt-3 md:px-6">
+                        <div>
+                          <p className="text-3xl font-extrabold">
+                            {baht(PACK_PRICE)}
+                            <span className="text-xs font-medium opacity-70"> / {PACK_DEF.unit}</span>
+                          </p>
+                          <p className="mt-0.5 text-[11px] font-semibold opacity-80">
+                            ได้ {PACK_SIZE} ใบ · ซื้อแยกใบปกติ {baht(PACK_NORMAL_PRICE)}
+                          </p>
+                        </div>
+                        <Stepper
+                          value={Math.min(cart.luckypack ?? 0, maxOf("luckypack"))}
+                          max={maxOf("luckypack")}
+                          name={PACK_DEF.title}
+                          onChange={(n) => setQty("luckypack", n)}
+                          onDark
+                        />
+                      </div>
+                    }
+                  />
+                </div>
+              )}
+
               <div className="md:col-span-2">
                 <InfoBox
                   icon={<IconShield className="h-5 w-5" />}
@@ -2420,6 +2625,7 @@ export default function Home() {
                         <p className="text-sm font-bold">{def.title}</p>
                         <p className="text-xs text-white/50">
                           {baht(def.price)} × {q} {def.unit}
+                          {def.id === "luckypack" && ` · ได้ ${q * PACK_SIZE} ใบ`}
                         </p>
                       </div>
                     </div>
@@ -2605,7 +2811,7 @@ export default function Home() {
                           }}
                           className="pd-rise cursor-pointer rounded-2xl border border-dashed border-white/25 bg-[#1f1f1f] p-4 transition duration-300 active:scale-[0.98] md:hover:border-white/40"
                         >
-                          {/* ตั๋วที่ซื้อในรายการนี้: รูป + ชื่อ + จำนวน (ชุด/ใบ) */}
+                          {/* ตั๋วที่ซื้อในรายการนี้: รูป + ชื่อ + จำนวน (ชุด/ใบ/แพ็ค) */}
                           {p.items && p.items.length > 0 && (
                             <ul className="mb-3 flex flex-col gap-2 border-b border-white/10 pb-3">
                               {p.items.map((it) => {
@@ -2630,6 +2836,7 @@ export default function Home() {
                                       <p className="text-sm font-bold">{d.title}</p>
                                       <p className="text-xs text-white/50">
                                         {it.qty} {d.unit}
+                                        {it.ticket === "luckypack" && ` · ${it.qty * PACK_SIZE} ใบ`}
                                       </p>
                                     </div>
                                   </li>
