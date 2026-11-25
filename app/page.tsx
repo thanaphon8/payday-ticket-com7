@@ -1274,9 +1274,8 @@ function SlipPay({
 
       {pay?.status === "reviewing" && (
         <div className="pd-rise mt-6 rounded-3xl border border-white/10 bg-[#1f1f1f] p-6 text-center md:mx-auto md:max-w-xl md:p-8">
-          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-white text-black">
-            <IconReceipt className="h-7 w-7" />
-          </span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/img/admin.png" alt="" className="mx-auto block h-44 w-44 object-contain md:h-60 md:w-60" />
           <h2 className="mt-4 text-xl font-bold">ส่งสลิปแล้ว รอตรวจสอบ</h2>
           <p className="mt-2 text-sm text-white/60">
             {baht(pay.amount)} · รหัส <span className="font-mono font-bold">{pay.ref}</span>
@@ -1310,13 +1309,15 @@ function SlipPay({
         </div>
       )}
 
-      <div className="mt-4 md:mx-auto md:mt-6 md:max-w-xl">
-        <InfoBox
-          icon={<IconInfo className="h-5 w-5" />}
-          title="ส่งสลิปแล้วรอสักครู่"
-          text="ปิดหน้านี้ได้ ตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” เมื่อเจ้าหน้าที่อนุมัติ"
-        />
-      </div>
+      {pay?.status !== "reviewing" && (
+        <div className="mt-4 md:mx-auto md:mt-6 md:max-w-xl">
+          <InfoBox
+            icon={<IconInfo className="h-5 w-5" />}
+            title="ส่งสลิปแล้วรอสักครู่"
+            text="ปิดหน้านี้ได้ ตั๋วจะขึ้นที่หน้า “ตั๋วของฉัน” เมื่อเจ้าหน้าที่อนุมัติ"
+          />
+        </div>
+      )}
     </section>
   );
 }
