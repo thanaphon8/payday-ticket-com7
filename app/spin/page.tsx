@@ -7,7 +7,10 @@ const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600
 
 // ต้องตรงกับ EMP_CODE_LENGTH ใน lib/tickets.ts (จำนวนหลักสูงสุด / รหัสสั้นกว่านี้ช่องหน้าแสดง x)
 const EMP_LEN = 7;
-const SHOW_MAX = 60; // จำนวนตั๋วสูงสุดที่วาดหล่นในโหล (ตัวเลข "เหลือ ... ใบ" นับจริงทั้งหมด)
+const SHOW_MAX = 140; // จำนวนตั๋วสูงสุดที่วาดหล่นในโหล (ตัวเลข "เหลือ ... ใบ" นับจริงทั้งหมด)
+const JAR_COLS = 10; // จำนวนตั๋วต่อ 1 ชั้นในโหล (ยิ่งมาก ยิ่งแน่น)
+const JAR_ROW_MAX = 9; // ระยะห่างชั้นสูงสุด (% ของความสูงโหล) ตอนตั๋วน้อย
+const JAR_FILL = 92; // ตอนตั๋วเยอะ กองจะสูงถึงกี่ % ของโหล (ตั๋วสูง ~12% จึงล้นขอบบนเล็กน้อย)
 const FIRST_STOP_MS = 2000; // ตัวเลขสปินกี่ ms (นับจากกดเริ่ม) ก่อนหยุดหลักแรก
 const ZOOM_CENTER_Y = 0.6; // ตอนซูม ตัวเลขอยู่สูงจากบนจอกี่ส่วน (0.5 = กลางจอ / มากกว่า = ตัวตู้ต่ำลง)
 const STEP_MS = 1000; // ระยะห่างระหว่างการหยุดแต่ละหลัก (รอ 1 วิก่อนแสดงเลขถัดไป)
@@ -149,11 +152,20 @@ function hash(s: string) {
 }
 const r01 = (s: string, k: number) => (hash(`${s}:${k}`) % 1000) / 1000;
 
-function ticketStyle(code: string) {
+// ตำแหน่งตั๋วในโหล: แบ่งโหลเป็นช่อง ๆ (ชั้นละ JAR_COLS ใบ) แล้วสุ่มขยับ/หมุนในช่องของตัวเอง
+// = ดูสุ่มไม่เป็นระเบียบ แต่กระจายทั่วโหล ไม่มีช่องว่างโหว่ / ยิ่งตั๋วเยอะ ชั้นยิ่งชิด กองยิ่งสูงจนเต็มและล้นขอบบนเล็กน้อย
+// idx = ลำดับตั๋วในกอง, n = จำนวนตั๋วที่วาดอยู่
+function ticketStyle(code: string, idx: number, n: number) {
+  const rows = Math.max(1, Math.ceil(n / JAR_COLS));
+  const row = Math.floor(idx / JAR_COLS);
+  const inRow = row === rows - 1 ? n - row * JAR_COLS : JAR_COLS; // ชั้นบนสุดมีตั๋วไม่เต็ม ก็กระจายให้ทั่วชั้น
+  const pos = idx - row * JAR_COLS;
+  const rowH = rows > 1 ? Math.min(JAR_ROW_MAX, JAR_FILL / (rows - 1)) : JAR_ROW_MAX;
+  const colW = 89 / inRow;
   return {
-    left: 3 + r01(code, 1) * 80,
-    bottom: r01(code, 2) * 48,
-    rot: -45 + r01(code, 3) * 90,
+    left: Math.min(89, Math.max(0, (pos + 0.5) * colW + (r01(code, 1) - 0.5) * colW * 0.9)),
+    bottom: Math.max(-3, -1 + row * rowH + (r01(code, 2) - 0.5) * rowH * 1.3),
+    rot: -50 + r01(code, 3) * 100,
     delay: r01(code, 4) * 1.6,
     dur: 0.9 + r01(code, 5) * 0.7,
   };
@@ -2066,8 +2078,8 @@ export default function SpinPage() {
               <div className="pd-gold h-4 w-40 rounded-t-xl sm:w-52" />
               <div className="relative w-full max-w-lg">
                 <div className="pd-jar relative h-64 w-full overflow-hidden rounded-b-[3rem] rounded-t-2xl border-4 border-white/30 lg:h-[36vh] lg:min-h-[15rem]">
-                  {shown.map((t) => {
-                    const s = ticketStyle(t.code);
+                  {shown.map((t, idx) => {
+                    const s = ticketStyle(t.code, idx, shown.length);
                     // ตั๋วที่อยู่ตั้งแต่เปิดหน้า: หล่นตามจังหวะสุ่ม / ตั๋วที่เพิ่งเข้าโหล (admin เพิ่งอนุมัติ): หล่นทันที
                     const delay = initialRef.current?.has(t.code) ? s.delay : 0;
                     return (
@@ -2080,6 +2092,8 @@ export default function SpinPage() {
                             bottom: `${s.bottom}%`,
                             "--rot": `${s.rot}deg`,
                             animation: `pdDrop ${s.dur}s cubic-bezier(.3,1.2,.5,1) ${delay}s both`,
+                            // ตั๋วเพิ่ม/ลด ตำแหน่งจะค่อย ๆ เลื่อนจัดกองใหม่อย่างนุ่มนวล
+                            transition: "left 0.6s ease, bottom 0.6s ease",
                           } as CSSProperties
                         }
                       >
