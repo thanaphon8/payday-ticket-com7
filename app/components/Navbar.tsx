@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { User } from "./auth-shared";
 
@@ -146,7 +146,11 @@ const BOTTOM_NAV_CSS = `
 }
 `;
 
-// ย่อแถบเมื่อผู้ใช้เลื่อนหน้าจอขึ้น (เนื้อหาเลื่อนลง/scrollTop เพิ่ม) แล้วคืนขนาดเมื่อหยุดเลื่อน หรือเลื่อนกลับลง
+// ปุ่มคีย์บอร์ดที่ทำให้หน้าเลื่อน
+const SCROLL_KEYS = new Set(["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " ", "Spacebar"]);
+
+// ย่อแถบเมื่อ "ผู้ใช้เลื่อนหน้าจอลงเอง" เท่านั้น (นิ้วลาก / ล้อเมาส์ / ปุ่มคีย์บอร์ด) แล้วคืนขนาดเมื่อหยุดเลื่อน หรือเลื่อนกลับขึ้น
+// การเลื่อนที่โค้ดสั่ง (เปลี่ยนหน้า scrollTo, เปิด/ปิดหน้าต่างแสดงตั๋วที่ตรึง body) ไม่นับ จึงไม่ย่อเอง
 // ฟังแบบ capture เพื่อรองรับทั้ง window และ container ภายในที่เลื่อนเอง
 function useShrinkOnScroll() {
   const [shrunk, setShrunk] = useState(false);
@@ -154,12 +158,46 @@ function useShrinkOnScroll() {
   useEffect(() => {
     const last = new Map<EventTarget, number>();
     let timer: number | undefined;
+    let intent = false; // ผู้ใช้กำลังเลื่อนเองอยู่
+    let intentTimer: number | undefined;
 
     const clear = () => {
       if (timer !== undefined) {
         window.clearTimeout(timer);
         timer = undefined;
       }
+    };
+    const clearIntentTimer = () => {
+      if (intentTimer !== undefined) {
+        window.clearTimeout(intentTimer);
+        intentTimer = undefined;
+      }
+    };
+    // ถือว่าผู้ใช้เลื่อนเองต่อไปอีก ms นี้ (ครอบคลุมแรงเฉื่อยของนิ้ว)
+    const markIntent = (ms: number) => {
+      intent = true;
+      clearIntentTimer();
+      intentTimer = window.setTimeout(() => {
+        intent = false;
+        intentTimer = undefined;
+      }, ms);
+    };
+
+    // แตะเฉย ๆ (ไม่ลาก) ไม่ใช่การเลื่อน: เริ่มนิ้วใหม่ล้างสถานะเดิม
+    const onTouchStart = () => {
+      intent = false;
+      clearIntentTimer();
+    };
+    const onTouchMove = () => {
+      intent = true;
+      clearIntentTimer();
+    };
+    const onTouchEnd = () => {
+      if (intent) markIntent(1000);
+    };
+    const onWheel = () => markIntent(250);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (SCROLL_KEYS.has(e.key)) markIntent(250);
     };
 
     const onScroll = (e: Event) => {
@@ -173,20 +211,43 @@ function useShrinkOnScroll() {
       last.set(t, y);
       const d = y - prev;
 
-      if (d > 1 && y > 8) {
+      // หน้าต่างแสดงตั๋วเปิดอยู่ (body ถูกตรึง): ไม่ย่อ
+      if (document.body.style.position === "fixed") return;
+
+      // กลับขึ้นบนสุด / เลื่อนขึ้น = คืนขนาด (ไม่ว่าใครสั่งเลื่อน)
+      if (d < -1 || y <= 8) {
+        clear();
+        setShrunk(false);
+        return;
+      }
+
+      // เลื่อนลงโดยโค้ด (ไม่ใช่ผู้ใช้) ไม่ย่อ
+      if (!intent) return;
+
+      if (d > 1) {
         setShrunk(true);
         clear();
         timer = window.setTimeout(() => setShrunk(false), 1000);
-      } else if (d < -1 || y <= 8) {
-        clear();
-        setShrunk(false);
       }
     };
 
     window.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    window.addEventListener("touchstart", onTouchStart, { capture: true, passive: true });
+    window.addEventListener("touchmove", onTouchMove, { capture: true, passive: true });
+    window.addEventListener("touchend", onTouchEnd, { capture: true, passive: true });
+    window.addEventListener("touchcancel", onTouchEnd, { capture: true, passive: true });
+    window.addEventListener("wheel", onWheel, { capture: true, passive: true });
+    window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => {
       window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("touchstart", onTouchStart, true);
+      window.removeEventListener("touchmove", onTouchMove, true);
+      window.removeEventListener("touchend", onTouchEnd, true);
+      window.removeEventListener("touchcancel", onTouchEnd, true);
+      window.removeEventListener("wheel", onWheel, true);
+      window.removeEventListener("keydown", onKeyDown, true);
       clear();
+      clearIntentTimer();
     };
   }, []);
 
@@ -209,6 +270,23 @@ export function BottomNav({
   const shrunk = useShrinkOnScroll();
   const activeIndex = NAV.findIndex((n) => n.id === view);
 
+  // ลากนิ้วข้ามแถบเมนูได้แบบ iOS 26: กดค้างแล้วลาก แถบแดงไหลตามนิ้วต่อเนื่อง (ไม่ล็อกช่อง) ปล่อยแล้วสปริงเข้าช่องที่ใกล้สุด
+  // แตะเฉย ๆ (ขยับไม่ถึง 6px) = แถบแดงสปริงไปช่องที่แตะแบบเดิม
+  const listRef = useRef<HTMLUListElement>(null);
+  const downX = useRef<number | null>(null); // ตำแหน่งนิ้วตอนเริ่มแตะ (null = ไม่ได้กดอยู่)
+  const [drag, setDrag] = useState<number | null>(null); // ตำแหน่งนิ้วขณะลาก หน่วยเป็นช่อง (ทศนิยมได้) null = ไม่ได้ลาก
+  const dragging = drag !== null;
+  const pos = drag ?? Math.max(activeIndex, 0);
+  const litIndex = dragging ? Math.round(pos) : activeIndex;
+
+  const indexAt = (clientX: number) => {
+    const el = listRef.current;
+    if (!el) return Math.max(activeIndex, 0);
+    const rect = el.getBoundingClientRect();
+    const ratio = (clientX - rect.left) / Math.max(rect.width, 1);
+    return Math.max(0, Math.min(NAV.length - 1, ratio * NAV.length - 0.5));
+  };
+
   return (
     <nav
       aria-label="เมนูหลัก"
@@ -230,34 +308,72 @@ export function BottomNav({
         {/* แถบสีแดงที่เลื่อนไหลตามเมนูที่เลือก */}
         <div aria-hidden className="pointer-events-none absolute inset-1.5">
           <div
-            className="h-full transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]"
+            className={`h-full ${
+              dragging
+                ? "transition-transform duration-100 ease-out"
+                : "transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]"
+            }`}
             style={{
               width: "calc((100% - 0.75rem) / 4)",
-              transform: `translateX(calc(${Math.max(activeIndex, 0)} * (100% + 0.25rem)))`,
+              transform: `translateX(calc(${pos} * (100% + 0.25rem)))`,
               opacity: activeIndex >= 0 ? 1 : 0,
             }}
           >
-            <div
-              key={activeIndex}
-              className="pd-liquid-pill h-full w-full rounded-full bg-[#e50914] shadow-[0_4px_14px_rgba(229,9,20,0.45),inset_0_1px_0_rgba(255,255,255,0.3)]"
-            />
+            <span
+              className={`block h-full w-full transition-transform duration-[450ms] ease-[cubic-bezier(0.22,1.25,0.36,1)] ${
+                dragging ? "scale-[1.12]" : "scale-100"
+              }`}
+            >
+              <div
+                key={activeIndex}
+                className="pd-liquid-pill h-full w-full rounded-full bg-[#e50914] shadow-[0_4px_14px_rgba(229,9,20,0.45),inset_0_1px_0_rgba(255,255,255,0.3)]"
+              />
+            </span>
           </div>
         </div>
 
-        <ul className="relative mx-auto grid max-w-md grid-cols-4 gap-1 p-1.5">
-          {NAV.map((n) => {
+        <ul
+          ref={listRef}
+          className="relative mx-auto grid max-w-md touch-none select-none grid-cols-4 gap-1 p-1.5"
+          onPointerDown={(e) => {
+            if (e.pointerType === "mouse" && e.button !== 0) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            downX.current = e.clientX; // ยังไม่ setDrag: แตะเฉย ๆ ให้แถบสปริงเอง
+          }}
+          onPointerMove={(e) => {
+            if (downX.current === null) return;
+            if (drag === null && Math.abs(e.clientX - downX.current) < 6) return;
+            setDrag(indexAt(e.clientX));
+          }}
+          onPointerUp={(e) => {
+            if (downX.current === null) return;
+            downX.current = null;
+            const i = Math.round(indexAt(e.clientX));
+            setDrag(null);
+            if (NAV[i].id !== view) onGo(NAV[i].id);
+          }}
+          onPointerCancel={() => {
+            downX.current = null;
+            setDrag(null);
+          }}
+        >
+          {NAV.map((n, i) => {
             const active = view === n.id;
+            const lit = litIndex === i;
             const badge = badges[n.id] ?? 0;
             const gold = golden && n.id === "tickets" && !active;
             return (
               <li key={n.id}>
                 <button
                   type="button"
-                  onClick={() => onGo(n.id)}
+                  onClick={(e) => {
+                    // คีย์บอร์ด (Enter/Space) เท่านั้น การแตะและลากจัดการที่ pointerup แล้ว
+                    if (e.detail === 0) onGo(n.id);
+                  }}
                   aria-label={gold ? `${n.label} (มีตั๋วที่ถูกรางวัล)` : n.label}
                   aria-current={active ? "page" : undefined}
                   className={`relative z-10 flex w-full flex-col items-center gap-0.5 rounded-full px-1 py-2 transition duration-300 active:scale-95 ${
-                    active ? "text-white" : gold ? "pd-gold-frame text-[#5a3b00]" : "text-white/60"
+                    lit ? "text-white" : gold ? "pd-gold-frame text-[#5a3b00]" : "text-white/60"
                   }`}
                 >
                   <span className="relative">
@@ -268,7 +384,7 @@ export function BottomNav({
                       </span>
                     )}
                   </span>
-                  <span className={`text-[11px] ${active || gold ? "font-bold" : "font-medium"}`}>{n.label}</span>
+                  <span className={`text-[11px] ${lit || gold ? "font-bold" : "font-medium"}`}>{n.label}</span>
                   {gold && (
                     <>
                       <IconSpark className="pd-spark pointer-events-none absolute left-1 top-0.5 h-3 w-3 text-white" />
