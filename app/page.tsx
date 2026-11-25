@@ -6,6 +6,7 @@ import { Prompt } from "next/font/google";
 import { code128Bars } from "@/lib/code128";
 import LoginForm from "./components/LoginForm";
 import RegisterForm from "./components/RegisterForm";
+import Popup from "./components/Popup";
 import { EMP_CODE_LENGTH, validEmp, validPhone } from "./components/auth-shared";
 import type { AuthMode, User } from "./components/auth-shared";
 import { departmentsOf, getCompany } from "./components/departments";
@@ -132,6 +133,7 @@ const PACK_DEF: TicketDef = {
   sub: "PRE-ORDER PACK",
   unit: "แพ็ค",
   homeNote: `ซื้อล่วงหน้า ได้ Lucky Draw ${PACK_SIZE} ใบ`,
+  homeImage: "/img/p3.png", // รูปบนตั๋ว Pre-order (ไฟล์ใน public/img/)
   blurb: `1 แพ็ค = Lucky Draw ${PACK_SIZE} ใบ ซื้อได้ไม่จำกัด ซื้อหลายแพ็คพร้อมกันได้ ปิดรับ ${PACK_DEADLINE_LABEL}`,
   price: PACK_PRICE,
   layout: "compact",
@@ -2357,46 +2359,41 @@ export default function Home() {
                 })}
               </div>
 
-              {/* แพ็ค Lucky Draw Pre-order: 200 บาท ได้ 7 ใบ นับถอยหลังปิดรับ (ซ่อนเมื่อปิดขายแล้ว) */}
+              {/* แพ็ค Lucky Draw Pre-order: 200 บาท ได้ 7 ใบ (ซ่อนเมื่อปิดขายแล้ว)
+                  บนรูปมีแค่รูปตั๋ว / ล่างตั๋วมีราคา + จำนวนใบ + นับถอยหลังปิดรับ
+                  มือถือ: เต็มความกว้างเหมือนเดิม / คอมพิวเตอร์: กว้างเท่าตั๋ว Lucky Draw วางกึ่งกลางใต้ 2 ใบ */}
               {packOpen && (
                 <button
                   type="button"
                   onClick={pick}
                   aria-label={`${PACK_DEF.title} ${baht(PACK_PRICE)} ต่อแพ็ค ได้ ${PACK_SIZE} ใบ`}
-                  className="pd-rise mt-3 block w-full text-left transition duration-300 active:scale-[0.98] md:mt-6 md:hover:scale-[1.01]"
+                  className="pd-rise mt-3 block w-full text-left transition duration-300 active:scale-[0.98] md:mx-auto md:mt-6 md:w-[calc(50%-0.75rem)] md:hover:scale-[1.03]"
                 >
                   <Perforated
                     bg={PACK_DEF.shimmer}
                     text={PACK_DEF.fg}
                     dash={PACK_DEF.dash}
-                    top={
-                      <div className="px-4 pb-3 pt-4 md:px-6 md:pb-4 md:pt-6">
-                        <div className="flex items-center gap-3">
-                          {iconOf(PACK_DEF.id, "h-6 w-6 shrink-0 md:h-8 md:w-8")}
-                          <div className="min-w-0">
-                            <p className="text-[10px] font-bold tracking-widest opacity-80">{PACK_DEF.sub}</p>
-                            <p className="text-lg font-bold leading-tight md:text-2xl">{PACK_DEF.title}</p>
+                    top={<TicketImage src={PACK_DEF.homeImage!} alt={PACK_DEF.title} />}
+                    bottom={
+                      <div className="px-4 pb-4 pt-3 md:px-6 md:pb-6 md:pt-4">
+                        <div className="flex w-full items-end justify-between">
+                          <div>
+                            <p className="text-xl font-extrabold md:text-4xl">
+                              {baht(PACK_PRICE)}
+                              <span className="text-xs font-medium"> / {PACK_DEF.unit}</span>
+                            </p>
+                            <p className="mt-0.5 text-xs font-semibold opacity-90 md:text-sm">
+                              ได้ Lucky Draw {PACK_SIZE} ใบ
+                            </p>
                           </div>
+                          <span className="hidden h-9 w-9 items-center justify-center rounded-full bg-white text-black md:flex md:h-11 md:w-11">
+                            <IconArrow className="h-5 w-5" />
+                          </span>
                         </div>
-                        <p className="mt-2 text-xs md:text-sm">{PACK_DEF.homeNote}</p>
                         <p className="mt-3 text-[11px] font-semibold opacity-80 md:text-xs">
                           ปิดรับ Pre-order ใน (ถึง {PACK_DEADLINE_LABEL})
                         </p>
                         <PackCountdown className="mt-1" />
-                      </div>
-                    }
-                    bottom={
-                      <div className="flex w-full items-end justify-between px-4 pb-4 pt-3 md:px-6 md:pb-6 md:pt-4">
-                        <p className="text-xl font-extrabold md:text-4xl">
-                          {baht(PACK_PRICE)}
-                          <span className="text-xs font-medium">
-                            {" "}
-                            / {PACK_DEF.unit} · ได้ {PACK_SIZE} ใบ
-                          </span>
-                        </p>
-                        <span className="hidden h-9 w-9 items-center justify-center rounded-full bg-[#e50914] text-white md:flex md:h-11 md:w-11">
-                          <IconArrow className="h-5 w-5" />
-                        </span>
                       </div>
                     }
                   />
@@ -2504,52 +2501,45 @@ export default function Home() {
                 );
               })}
 
-              {/* แพ็ค Lucky Draw Pre-order: ซื้อได้ไม่จำกัด ซื้อหลายแพ็คพร้อมกันได้ ปิดรับตามเวลานับถอยหลัง (ซ่อนเมื่อปิดขายแล้ว) */}
+              {/* แพ็ค Lucky Draw Pre-order: ซื้อได้ไม่จำกัด ซื้อหลายแพ็คพร้อมกันได้ ปิดรับตามเวลานับถอยหลัง (ซ่อนเมื่อปิดขายแล้ว)
+                  บนรูปมีแค่รูปตั๋ว / ล่างตั๋วมีราคา + จำนวนใบ + ปุ่ม + - + นับถอยหลังปิดรับ
+                  มือถือ: เต็มความกว้างเหมือนเดิม / คอมพิวเตอร์: กว้างเท่าตั๋ว Lucky Draw วางกึ่งกลางใต้ 2 ใบ */}
               {packOpen && (
                 <div className="pd-rise md:col-span-2">
-                  <Perforated
-                    bg={PACK_DEF.shimmer}
-                    text={PACK_DEF.fg}
-                    dash={PACK_DEF.dash}
-                    top={
-                      <div className="p-4 md:p-6">
-                        <div className="flex items-center gap-3">
-                          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/20">
-                            {iconOf(PACK_DEF.id, "h-6 w-6")}
-                          </span>
-                          <div className="min-w-0">
-                            <p className="text-lg font-bold leading-tight">{PACK_DEF.title}</p>
-                            <p className="text-[10px] font-semibold tracking-widest opacity-70">{PACK_DEF.sub}</p>
+                  <div className="w-full md:mx-auto md:w-[calc(50%-0.75rem)]">
+                    <Perforated
+                      bg={PACK_DEF.shimmer}
+                      text={PACK_DEF.fg}
+                      dash={PACK_DEF.dash}
+                      top={<TicketImage src={PACK_DEF.homeImage!} alt={PACK_DEF.title} />}
+                      bottom={
+                        <div className="px-4 pb-4 pt-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-3xl font-extrabold">
+                                {baht(PACK_PRICE)}
+                                <span className="text-xs font-medium opacity-70"> / {PACK_DEF.unit}</span>
+                              </p>
+                              <p className="mt-0.5 text-[11px] font-semibold opacity-90">
+                                ได้ Lucky Draw {PACK_SIZE} ใบ · ซื้อแยกใบปกติ {baht(PACK_NORMAL_PRICE)}
+                              </p>
+                            </div>
+                            <Stepper
+                              value={Math.min(cart.luckypack ?? 0, maxOf("luckypack"))}
+                              max={maxOf("luckypack")}
+                              name={PACK_DEF.title}
+                              onChange={(n) => setQty("luckypack", n)}
+                              onDark
+                            />
                           </div>
-                        </div>
-                        <p className="mt-4 text-sm opacity-90">{PACK_DEF.blurb}</p>
-                        <p className="mt-4 text-[11px] font-semibold opacity-80 md:text-xs">
-                          ปิดรับ Pre-order ใน (ถึง {PACK_DEADLINE_LABEL})
-                        </p>
-                        <PackCountdown className="mt-1" />
-                      </div>
-                    }
-                    bottom={
-                      <div className="flex items-center justify-between gap-2 px-4 pb-4 pt-3 md:px-6">
-                        <div>
-                          <p className="text-3xl font-extrabold">
-                            {baht(PACK_PRICE)}
-                            <span className="text-xs font-medium opacity-70"> / {PACK_DEF.unit}</span>
+                          <p className="mt-3 text-[11px] font-semibold opacity-80">
+                            ปิดรับ Pre-order ใน (ถึง {PACK_DEADLINE_LABEL})
                           </p>
-                          <p className="mt-0.5 text-[11px] font-semibold opacity-80">
-                            ได้ {PACK_SIZE} ใบ · ซื้อแยกใบปกติ {baht(PACK_NORMAL_PRICE)}
-                          </p>
+                          <PackCountdown className="mt-1" />
                         </div>
-                        <Stepper
-                          value={Math.min(cart.luckypack ?? 0, maxOf("luckypack"))}
-                          max={maxOf("luckypack")}
-                          name={PACK_DEF.title}
-                          onChange={(n) => setQty("luckypack", n)}
-                          onDark
-                        />
-                      </div>
-                    }
-                  />
+                      }
+                    />
+                  </div>
                 </div>
               )}
 
@@ -3212,6 +3202,9 @@ export default function Home() {
         ))}
 
       {showNav && <BottomNav view={navView} badges={badges} golden={hasNewWin} onGo={go} />}
+
+      {/* ===== popup ประกาศตอนเข้าเว็บ (แตะการ์ด = ไปหน้าซื้อตั๋ว / แตะข้างว่าง = ปิด) ===== */}
+      <Popup onOpen={() => go("buy")} />
 
       {/* ===== หน้าต่างปรับรูปโปรไฟล์ (ลากขยับ/ซูม แล้วกดบันทึก) ===== */}
       {avatarDraft && (
