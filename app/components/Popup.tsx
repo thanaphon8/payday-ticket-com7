@@ -5,9 +5,13 @@ import { useEffect, useRef, useState } from "react";
 // รูปในการ์ด popup (ไฟล์ใน public/img/) กรอบการ์ดจะพอดีกับสัดส่วนรูปเอง
 const POPUP_IMG = "/img/popup.png";
 const POPUP_ALT = "โปรโมชั่น Payday Park";
-// ถ้าเปลี่ยนรูป/แคมเปญใหม่ ให้เปลี่ยนเลขเวอร์ชัน (v1 → v2) ทุกคนจะเห็น popup อีกครั้ง
+// เก็บ "วันที่" ที่ผู้ใช้กดไม่แสดงวันนี้ (พรุ่งนี้จะแสดงอีกครั้ง)
+// ถ้าเปลี่ยนรูป/แคมเปญใหม่ ให้เปลี่ยนเลขเวอร์ชัน (v1 → v2) ทุกคนจะเห็น popup อีกครั้งทันที
 const HIDE_KEY = "payday-popup-hide-v1";
 const CLOSE_MS = 320; // ระยะเวลาเอฟเฟคตอนปิด (ต้องตรงกับ animation ใน <style> ด้านล่าง)
+
+// วันที่วันนี้ตามเวลาไทย รูปแบบ YYYY-MM-DD (เปลี่ยนวันตอนเที่ยงคืนเวลาไทย)
+const todayTH = () => new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Bangkok" });
 
 export default function Popup({ onOpen }: { onOpen: () => void }) {
   const [open, setOpen] = useState(false);
@@ -15,10 +19,10 @@ export default function Popup({ onOpen }: { onOpen: () => void }) {
   const [dontShow, setDontShow] = useState(false);
   const closingRef = useRef(false);
 
-  // แสดงตอนเข้าเว็บ ยกเว้นผู้ใช้เคยติ๊ก "ไม่ต้องแสดงอีก"
+  // แสดงตอนเข้าเว็บ ยกเว้นวันนี้ผู้ใช้เคยติ๊ก "ไม่แสดงวันนี้" แล้ว
   useEffect(() => {
     try {
-      if (localStorage.getItem(HIDE_KEY) !== "1") setOpen(true);
+      if (localStorage.getItem(HIDE_KEY) !== todayTH()) setOpen(true);
     } catch {
       setOpen(true);
     }
@@ -30,7 +34,7 @@ export default function Popup({ onOpen }: { onOpen: () => void }) {
     closingRef.current = true;
     if (dontShow) {
       try {
-        localStorage.setItem(HIDE_KEY, "1");
+        localStorage.setItem(HIDE_KEY, todayTH());
       } catch {
         /* ignore */
       }
@@ -117,7 +121,7 @@ export default function Popup({ onOpen }: { onOpen: () => void }) {
               className="block h-auto max-h-[calc(100dvh-2.5rem)] w-full select-none bg-[#1f1f1f] object-contain"
             />
 
-            {/* ช่อง "ไม่ต้องแสดงอีก" อยู่ในการ์ด กึ่งกลางด้านล่าง (แตะที่ช่องนี้ไม่ไปหน้าซื้อตั๋ว) */}
+            {/* ช่อง "ไม่แสดงวันนี้" อยู่ในการ์ด กึ่งกลางด้านล่าง (แตะที่ช่องนี้ไม่ไปหน้าซื้อตั๋ว) */}
             <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pb-3 pt-10">
               <label
                 onClick={(e) => e.stopPropagation()}
@@ -129,7 +133,7 @@ export default function Popup({ onOpen }: { onOpen: () => void }) {
                   onChange={(e) => setDontShow(e.target.checked)}
                   className="h-4 w-4 cursor-pointer accent-[#e50914]"
                 />
-                ไม่ต้องแสดงอีก
+                ไม่แสดงวันนี้
               </label>
             </div>
           </div>

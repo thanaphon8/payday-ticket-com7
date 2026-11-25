@@ -119,12 +119,12 @@ const TICKETS: BaseTicketDef[] = [
 
 /* ---------- แพ็ค Lucky Draw Pre-order ----------
    จ่าย 200 บาท ได้ Lucky Draw 7 ใบ (ออกเป็นตั๋ว Lucky Draw ปกติ ลุ้นรวมวงเดียวกัน) ซื้อได้ไม่จำกัดแพ็ค ซื้อหลายแพ็คพร้อมกันได้
-   ปิดขาย 00:00 น. 1 ธ.ค. 2569 (หน้าซื้อกับหน้าหลักซ่อนแพ็คนี้) ตั๋วที่ซื้อไปแล้วยังอยู่ในบัญชีตามปกติ
+   หมดเขตสิ้นวันที่ 30 พ.ย. 2569 (ปิดขายจริง 00:00 น. 1 ธ.ค. 2569) หน้าซื้อกับหน้าหลักซ่อนแพ็คนี้ ตั๋วที่ซื้อไปแล้วยังอยู่ในบัญชีตามปกติ
    ถ้าจะเปลี่ยน ให้แก้ให้ตรงกับ LUCKY_PACK_* และ MAX_PACKS ใน lib/tickets.ts (ฝั่งเซิร์ฟเวอร์คิดเงินและปิดขายจากตัวนั้น) */
 const PACK_PRICE = 200;
 const PACK_SIZE = 7;
 const PACK_DEADLINE_MS = new Date("2026-12-01T00:00:00+07:00").getTime();
-const PACK_DEADLINE_LABEL = "1 ธันวาคม 2569";
+const PACK_DEADLINE_LABEL = "30 พฤศจิกายน 2569";
 const MAX_PACKS = 100; // จำนวนแพ็คสูงสุดต่อการซื้อ 1 ครั้ง (กันกดพลาด ต้องตรงกับ MAX_PACKS ใน lib/tickets.ts)
 
 const PACK_DEF: TicketDef = {
@@ -133,7 +133,7 @@ const PACK_DEF: TicketDef = {
   sub: "PRE-ORDER PACK",
   unit: "แพ็ค",
   homeNote: `ซื้อล่วงหน้า ได้ Lucky Draw ${PACK_SIZE} ใบ`,
-  homeImage: "/img/p3.png", // รูปบนตั๋ว Pre-order (ไฟล์ใน public/img/)
+  homeImage: "/img/pre.png", // รูปบนตั๋ว Pre-order (ไฟล์ใน public/img/)
   blurb: `1 แพ็ค = Lucky Draw ${PACK_SIZE} ใบ ซื้อได้ไม่จำกัด ซื้อหลายแพ็คพร้อมกันได้ ปิดรับ ${PACK_DEADLINE_LABEL}`,
   price: PACK_PRICE,
   layout: "compact",
@@ -144,7 +144,7 @@ const PACK_DEF: TicketDef = {
   dash: "border-white/30",
   button: "bg-[#e50914] text-white",
   soft: "bg-[#d9f27a]",
-  shimmer: "pd-shimmer-green",
+  shimmer: "pd-shimmer-orange",
 };
 
 // ทุกรายการที่ซื้อได้ (ตั๋วปกติ + แพ็ค Pre-order)
@@ -2171,6 +2171,11 @@ export default function Home() {
           background-size: 300% 100%;
           animation: pdSheen 3.2s linear infinite;
         }
+        .pd-shimmer-orange {
+          background: linear-gradient(110deg, #b4231a 0%, #b4231a 32%, #e8542a 44%, #ffb36b 50%, #e8542a 56%, #b4231a 68%, #b4231a 100%);
+          background-size: 300% 100%;
+          animation: pdSheen 3.2s linear infinite;
+        }
         .pd-shimmer-green {
           background: linear-gradient(110deg, #14402c 0%, #14402c 32%, #2f8f5b 44%, #b9f08a 50%, #2f8f5b 56%, #14402c 68%, #14402c 100%);
           background-size: 300% 100%;
@@ -2208,7 +2213,7 @@ export default function Home() {
         .pd-dialog { animation: pdDialogIn 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
         @media (prefers-reduced-motion: reduce) {
           .pd-page, .pd-rise, .pd-pop, .pd-bar, .pd-fade, .pd-sheet, .pd-dialog, .pd-sheet-out, .pd-fade-out { animation: none; }
-          .pd-gold-frame, .pd-gold-card, .pd-shimmer-blue, .pd-shimmer-red, .pd-shimmer-green, .pd-twinkle, .pd-spark { animation: none; }
+          .pd-gold-frame, .pd-gold-card, .pd-shimmer-blue, .pd-shimmer-red, .pd-shimmer-orange, .pd-shimmer-green, .pd-twinkle, .pd-spark { animation: none; }
           .pd-twinkle, .pd-spark { opacity: 1; }
           .pd-scanned { animation: none; filter: grayscale(1) brightness(0.8); opacity: 0.75; }
           .pd-stamp { animation: none; }
@@ -2447,7 +2452,7 @@ export default function Home() {
                 // ส่วนล่าง (หลังรอยประ): ราคา + ปุ่ม + - แยกจากตัวตั๋วเหมือนกันทุกใบ
                 // กดที่ตัวตั๋วไม่เปิดหน้าแสดงตั๋ว (หน้าแสดงตั๋วอยู่เฉพาะหน้า "ตั๋วของฉัน")
                 return (
-                  <div key={t.id} className={`pd-rise ${moveFirst ? "order-first md:order-none" : ""}`}>
+                  <div key={t.id} className={`pd-rise ${moveFirst ? "order-[-1] md:order-none" : ""}`}>
                     <div className="relative">
                       <Perforated
                         className={bought ? "pd-scanned" : ""}
@@ -2505,7 +2510,7 @@ export default function Home() {
                   บนรูปมีแค่รูปตั๋ว / ล่างตั๋วมีราคา + จำนวนใบ + ปุ่ม + - + นับถอยหลังปิดรับ
                   มือถือ: เต็มความกว้างเหมือนเดิม / คอมพิวเตอร์: กว้างเท่าตั๋ว Lucky Draw วางกึ่งกลางใต้ 2 ใบ */}
               {packOpen && (
-                <div className="pd-rise md:col-span-2">
+                <div className="pd-rise order-first md:order-none md:col-span-2">
                   <div className="w-full md:mx-auto md:w-[calc(50%-0.75rem)]">
                     <Perforated
                       bg={PACK_DEF.shimmer}
