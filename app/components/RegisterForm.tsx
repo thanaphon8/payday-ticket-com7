@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent, Ref } from "react";
+import type { FocusEvent, FormEvent, KeyboardEvent, Ref } from "react";
 import {
   ArrowIcon,
   AuthShell,
@@ -21,38 +21,24 @@ import {
 } from "./auth-shared";
 import type { AuthErrors, AuthFormProps } from "./auth-shared";
 import { COMPANIES, departmentsOf, getCompany } from "./departments";
-import {
-  branchesOf,
-  branchFullLabel,
-  branchProvince,
-  branchRegion,
-} from "./branches";
 
 /* ------------------------------------------------------------------ */
 /* ค่าคงที่ / ตัวช่วย                                                    */
 /* ------------------------------------------------------------------ */
 
-// ลำดับขั้น: 0 ข้อมูลของคุณ → 1 บริษัท → 2 ที่ทำงาน (สำนักงานใหญ่/หน้าร้าน) → 3 แผนกหรือสาขา → 4 บัญชี
-// ขั้น 2 จะข้ามไปเองถ้าบริษัทนั้นมีแค่แผนกหรือแค่สาขาอย่างเดียว
-const STEPS = ["ข้อมูลของคุณ", "บริษัท", "ที่ทำงาน", "แผนก/สาขา", "บัญชี"] as const;
-// ข้อความใต้วงกลมแต่ละขั้น (ขั้น 3 เปลี่ยนเป็น "เลือกสาขา" ตอนเลือกหน้าร้าน)
+// ลำดับขั้น: 0 ข้อมูลของคุณ → 1 บริษัท → 2 แผนก (สำนักงานใหญ่) → 3 บัญชี
+const STEPS = ["ข้อมูลของคุณ", "บริษัท", "แผนก", "บัญชี"] as const;
+// ข้อความใต้วงกลมแต่ละขั้น
 const STEP_LABELS = [
   "กรอกข้อมูล",
   "เลือกบริษัท",
-  "ที่ทำงาน",
   "เลือกแผนก",
   "ตั้งรหัสผ่าน",
 ] as const;
-const LAST_STEP = STEPS.length - 1; // 4 = ขั้นตั้งบัญชี (กดสมัครที่ขั้นนี้)
+const LAST_STEP = STEPS.length - 1; // 3 = ขั้นตั้งบัญชี (กดสมัครที่ขั้นนี้)
 
-// สาขาที่แสดงก่อนพิมพ์ค้นหา กด "ดูเพิ่ม" ได้ทีละ BRANCH_STEP
-const BRANCH_PREVIEW = 80;
-const BRANCH_STEP = 200;
-
-// รายการเลือก (บริษัท / แผนก / สาขา ใช้โครงเดียวกัน)
+// รายการเลือก (บริษัท / แผนก ใช้โครงเดียวกัน)
 type Item = { id: number; label: string; sub?: string };
-// สำนักงานใหญ่ = เลือกแผนก / หน้าร้าน = เลือกสาขา
-type Place = "hq" | "store";
 
 const fold = (s: string) => s.toLowerCase().replace(/\s+/g, "");
 
@@ -94,17 +80,40 @@ const stepOfErrors = (e: AuthErrors): number | null =>
     ? 0
     : e.companyId
       ? 1
-      : e.departmentId || e.branchId
-        ? 3
+      : e.departmentId
+        ? 2
         : e.username || e.password || e.confirm
-          ? 4
+          ? 3
           : null;
+
+// ตรวจว่าคีย์บอร์ดมือถือเปิดอยู่ไหม (visualViewport หดลงมาก)
+function useKeyboardOpen() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    let maxH = vv.height;
+    let lastW = vv.width;
+    const check = () => {
+      // หมุนจอ/เปลี่ยนความกว้าง = รีเซ็ตค่าฐาน
+      if (vv.width !== lastW) {
+        lastW = vv.width;
+        maxH = vv.height;
+      }
+      if (vv.height > maxH) maxH = vv.height;
+      setOpen(maxH - vv.height > 120);
+    };
+    vv.addEventListener("resize", check);
+    return () => vv.removeEventListener("resize", check);
+  }, []);
+  return open;
+}
 
 /* ------------------------------------------------------------------ */
 /* ส่วนประกอบย่อย                                                        */
 /* ------------------------------------------------------------------ */
 
-// รายการให้เลือก (ใช้ร่วมกันทั้งบริษัท / แผนก / สาขา)
+// รายการให้เลือก (ใช้ร่วมกันทั้งบริษัท / แผนก)
 function PickList({
   items,
   selectedId,
@@ -112,8 +121,8 @@ function PickList({
   onHover,
   onPick,
   listRef,
-  limit,
   label,
+  compact,
 }: {
   items: Item[];
   selectedId: string;
@@ -121,23 +130,24 @@ function PickList({
   onHover: (i: number) => void;
   onPick: (id: number) => void;
   listRef?: Ref<HTMLDivElement>;
-  limit?: number;
   label: string;
+  compact?: boolean;
 }) {
-  const shown = limit ? items.slice(0, limit) : items;
   return (
     <div
       ref={listRef}
       role="listbox"
       aria-label={label}
-      className="relative mt-3 max-h-[min(52dvh,460px)] overflow-y-auto rounded-2xl border border-white/10 bg-[#1f1f1f]"
+      className={`relative mt-3 overflow-y-auto overscroll-contain rounded-2xl border border-white/10 bg-[#1f1f1f] ${
+        compact ? "max-h-[min(28dvh,220px)]" : "max-h-[min(52dvh,460px)]"
+      }`}
     >
-      {shown.length === 0 ? (
+      {items.length === 0 ? (
         <p className="px-4 py-5 text-center text-sm text-white/60">
           ไม่พบรายการที่ตรงกัน ลองพิมพ์คำอื่น
         </p>
       ) : (
-        shown.map((it, i) => {
+        items.map((it, i) => {
           const selected = String(it.id) === selectedId;
           return (
             <button
@@ -169,11 +179,6 @@ function PickList({
           );
         })
       )}
-      {items.length > shown.length && (
-        <p className="px-4 py-3 text-center text-xs text-white/50">
-          พิมพ์ค้นหาเพื่อดูอีก {items.length - shown.length} รายการ
-        </p>
-      )}
     </div>
   );
 }
@@ -190,12 +195,8 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
   const [phone, setPhone] = useState("");
   const [empCode, setEmpCode] = useState("");
   const [companyId, setCompanyId] = useState("");
-  const [workplace, setWorkplace] = useState<Place | "">(""); // สำนักงานใหญ่ / หน้าร้าน
   const [departmentId, setDepartmentId] = useState("");
-  const [branchId, setBranchId] = useState("");
   const [deptQuery, setDeptQuery] = useState(""); // คำค้นหา (ใช้กรองรายการแผนก)
-  const [branchQuery, setBranchQuery] = useState(""); // คำค้นหา (ใช้กรองรายการสาขา)
-  const [branchLimit, setBranchLimit] = useState(BRANCH_PREVIEW); // จำนวนสาขาที่แสดงตอนยังไม่พิมพ์ค้นหา
   const [hi, setHi] = useState(-1); // แถวที่ไฮไลต์ในรายการ (-1 = ไม่มี)
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -204,6 +205,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
   const [errors, setErrors] = useState<AuthErrors>({});
   const [busy, setBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const kb = useKeyboardOpen();
 
   // ชื่อเต็มที่ส่งให้เซิร์ฟเวอร์ = ชื่อ + นามสกุล (ถ้ามี) คั่นด้วยช่องว่าง
   const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
@@ -213,7 +215,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
     setHi(-1);
   }, [step]);
 
-  // รายการบริษัท / แผนก / สาขา (แผนกและสาขาขึ้นกับบริษัทที่เลือก)
+  // รายการบริษัท / แผนก (แผนกขึ้นกับบริษัทที่เลือก)
   const companyItems = useMemo<Item[]>(
     () => COMPANIES.map((c) => ({ id: c.id, label: c.name })),
     []
@@ -222,55 +224,21 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
     () => departmentsOf(Number(companyId)).map((d) => ({ id: d.id, label: d.name })),
     [companyId]
   );
-  // สาขา: แสดง "ID xxx · ชื่อสาขา" และใต้ชื่อเป็น "จังหวัด · ภาค" (ค้นหาได้ทั้ง label และ sub)
-  const branchItems = useMemo<Item[]>(
-    () =>
-      branchesOf(Number(companyId)).map((b) => ({
-        id: b.id,
-        label: branchFullLabel(b),
-        sub: [branchProvince(b), branchRegion(b)].filter(Boolean).join(" · "),
-      })),
-    [companyId]
-  );
 
-  // ถามว่าสำนักงานใหญ่/หน้าร้าน เฉพาะบริษัทที่มีทั้งแผนกและสาขา
-  // บริษัทที่มีอย่างเดียวจะเลือกให้เอง (มีแต่แผนก = สำนักงานใหญ่ / มีแต่สาขา = หน้าร้าน)
-  const askType = deptItems.length > 0 && branchItems.length > 0;
-  const place: Place | "" = askType
-    ? workplace
-    : deptItems.length > 0
-      ? "hq"
-      : branchItems.length > 0
-        ? "store"
-        : "";
-  // ขั้นที่ผู้ใช้ต้องผ่านจริง (ข้ามขั้น 2 ถ้าไม่ต้องถาม)
-  const flow = askType ? [0, 1, 2, 3, 4] : [0, 1, 3, 4];
-  const stepLabel = (id: number) =>
-    id === 3 && place === "store" ? "เลือกสาขา" : STEP_LABELS[id];
+  // ขั้นที่ผู้ใช้ต้องผ่านทั้งหมด
+  const flow = [0, 1, 2, 3];
 
   // ยังไม่พิมพ์ = ทุกรายการ / พิมพ์แล้ว = กรองและเรียงตามความใกล้เคียง
   const visibleDepts = useMemo(
     () => searchItems(deptQuery, deptItems),
     [deptQuery, deptItems]
   );
-  const visibleBranches = useMemo(
-    () => searchItems(branchQuery, branchItems),
-    [branchQuery, branchItems]
-  );
-
-  // ยังไม่พิมพ์ = จำกัดตาม branchLimit (กด "ดูเพิ่ม" เพิ่มได้) / พิมพ์แล้ว = แสดงทั้งหมดที่ตรง
-  const branchCap = branchQuery.trim() ? undefined : branchLimit;
-  // รายการสาขาที่แสดงอยู่จริง (ใช้กับลูกศรขึ้น/ลง ไม่ให้ไฮไลต์หลุดไปแถวที่มองไม่เห็น)
-  const shownBranches = useMemo(
-    () => visibleBranches.slice(0, branchCap),
-    [visibleBranches, branchCap]
-  );
 
   const selectedCompany = useMemo(() => getCompany(Number(companyId)), [companyId]);
 
   // เลื่อนรายการให้เห็นแถวที่ไฮไลต์ (เลื่อนในกล่องรายการเท่านั้น ไม่เลื่อนทั้งหน้า)
   useEffect(() => {
-    if (step !== 3 || hi < 0) return;
+    if (step !== 2 || hi < 0) return;
     const box = listRef.current;
     const el = box?.querySelector<HTMLElement>('[data-hi="true"]');
     if (!box || !el) return;
@@ -281,6 +249,15 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
       box.scrollTop = bottom - box.clientHeight;
   }, [hi, step]);
 
+  // โฟกัสช่องพิมพ์ → เลื่อนให้ช่องอยู่กลางจอ ไม่ให้คีย์บอร์ดบัง
+  const onFocusField = (e: FocusEvent<HTMLFormElement>) => {
+    const t = e.target as HTMLElement;
+    if (t.tagName !== "INPUT" && t.tagName !== "TEXTAREA") return;
+    window.setTimeout(() => {
+      t.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 300);
+  };
+
   const clearErr = (key: keyof AuthErrors) =>
     setErrors((p) => ({ ...p, [key]: undefined, form: undefined }));
 
@@ -290,34 +267,16 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
       clearErr(key);
     };
 
-  /* ---------------- บริษัท / ที่ทำงาน / แผนก / สาขา ---------------- */
+  /* ---------------- บริษัท / แผนก ---------------- */
 
-  // เปลี่ยนบริษัท = ล้างที่ทำงาน แผนก และสาขาที่เลือกไว้ (เพราะเป็นของบริษัทเดิม)
+  // เปลี่ยนบริษัท = ล้างแผนกที่เลือกไว้ (เพราะเป็นของบริษัทเดิม)
   const pickCompany = (id: number) => {
     if (String(id) !== companyId) {
       setCompanyId(String(id));
-      setWorkplace("");
       setDepartmentId("");
-      setBranchId("");
       setDeptQuery("");
-      setBranchQuery("");
-      setBranchLimit(BRANCH_PREVIEW);
     }
     clearErr("companyId");
-  };
-
-  // เลือกสำนักงานใหญ่ = ล้างสาขา / เลือกหน้าร้าน = ล้างแผนก
-  const pickPlace = (p: Place) => {
-    setWorkplace(p);
-    if (p === "hq") {
-      setBranchId("");
-      setBranchQuery("");
-      setBranchLimit(BRANCH_PREVIEW);
-    } else {
-      setDepartmentId("");
-      setDeptQuery("");
-    }
-    clearErr("form");
   };
 
   const pickDept = (id: number) => {
@@ -325,22 +284,10 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
     clearErr("departmentId");
   };
 
-  const pickBranch = (id: number) => {
-    setBranchId(String(id));
-    clearErr("branchId");
-  };
-
   const onDeptQuery = (v: string) => {
     setDeptQuery(v);
     setHi(v.trim() ? 0 : -1);
     clearErr("departmentId");
-  };
-
-  const onBranchQuery = (v: string) => {
-    setBranchQuery(v);
-    setBranchLimit(BRANCH_PREVIEW);
-    setHi(v.trim() ? 0 : -1);
-    clearErr("branchId");
   };
 
   // ลูกศรขึ้น/ลง เลื่อนรายการ, Enter (ตอนมีคำค้น) เลือกแถวที่ไฮไลต์
@@ -379,14 +326,10 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
     } else if (s === 1) {
       if (!companyId) err.companyId = "เลือกบริษัทของคุณ";
     } else if (s === 2) {
-      // ต้องเลือกสำนักงานใหญ่/หน้าร้าน เฉพาะบริษัทที่มีทั้งสองแบบ
-      if (askType && !place) err.form = "เลือกว่าคุณอยู่สำนักงานใหญ่หรือหน้าร้าน";
+      if (deptItems.length === 0)
+        err.form = "บริษัทนี้ยังไม่มีรายการแผนก กรุณาติดต่อเจ้าหน้าที่";
+      else if (!departmentId) err.departmentId = "เลือกแผนกของคุณจากรายการ";
     } else if (s === 3) {
-      // สำนักงานใหญ่ = ต้องเลือกแผนก / หน้าร้าน = ต้องเลือกสาขา
-      if (place === "hq" && !departmentId) err.departmentId = "เลือกแผนกของคุณจากรายการ";
-      else if (place === "store" && !branchId) err.branchId = "เลือกสาขาของคุณจากรายการ";
-      else if (!place) err.form = "บริษัทนี้ยังไม่มีรายการแผนก กรุณาติดต่อเจ้าหน้าที่";
-    } else if (s === 4) {
       if (!USERNAME_RE.test(username.trim()))
         err.username = "username ต้องยาว 3-20 ตัว ใช้ได้เฉพาะ a-z 0-9 . _";
       if (password.length < MIN_PASSWORD)
@@ -410,7 +353,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
 
     setBusy(true);
     setErrors({});
-    // สำนักงานใหญ่ส่งแค่แผนก / หน้าร้านส่งแค่สาขา (เซิร์ฟเวอร์ตรวจซ้ำด้วย validateOrg)
+    // ส่งแผนกของสำนักงานใหญ่ (เซิร์ฟเวอร์ตรวจซ้ำด้วย validateOrg)
     const r = await postAuth("/api/auth/register", {
       username: username.trim(),
       password,
@@ -418,8 +361,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
       phone: digitsOnly(phone),
       empCode: digitsOnly(empCode),
       companyId: Number(companyId),
-      ...(place === "hq" ? { departmentId: Number(departmentId) } : {}),
-      ...(place === "store" ? { branchId: Number(branchId) } : {}),
+      departmentId: Number(departmentId),
     });
     setBusy(false);
     if (!r.ok) {
@@ -440,21 +382,14 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
       return;
     }
     setErrors({});
-    if (step < LAST_STEP) {
-      let n = step + 1;
-      if (n === 2 && !askType) n = 3; // ข้ามขั้นถามที่ทำงาน
-      setStep(n);
-    } else {
-      register();
-    }
+    if (step < LAST_STEP) setStep(step + 1);
+    else register();
   };
 
   const back = () => {
     if (busy || step === 0) return;
     setErrors({});
-    let p = step - 1;
-    if (p === 2 && !askType) p = 1; // ข้ามขั้นถามที่ทำงาน
-    setStep(p);
+    setStep(step - 1);
   };
 
   // แตะวงกลมของขั้นที่ผ่านมาแล้วเพื่อย้อนกลับไปแก้
@@ -472,31 +407,30 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
       t: "คุณอยู่บริษัทไหน",
       s: "บริษัทและแผนกเลือกตอนสมัครเท่านั้น แก้ไขภายหลังไม่ได้",
     },
-    { t: "คุณทำงานที่ไหน", s: "เลือกสำนักงานใหญ่ หรือหน้าร้าน" },
-    place === "store"
-      ? {
-          t: "คุณประจำสาขาไหน",
-          s: "เลือกจากรายการ หรือพิมพ์ค้นหาเลข ID / ชื่อสาขา / จังหวัด",
-        }
-      : {
-          t: "คุณอยู่แผนกไหน",
-          s: selectedCompany
-            ? `แผนกใน ${selectedCompany.name} เลือกจากรายการ หรือพิมพ์ค้นหา`
-            : "เลือกจากรายการ ถ้าหาไม่เจอพิมพ์ค้นหาได้",
-        },
+    {
+      t: "คุณอยู่แผนกไหน",
+      s: selectedCompany
+        ? `แผนกใน ${selectedCompany.name} เลือกจากรายการ หรือพิมพ์ค้นหา`
+        : "เลือกจากรายการ ถ้าหาไม่เจอพิมพ์ค้นหาได้",
+    },
     { t: "ตั้งค่าบัญชี", s: "ใช้ username และรหัสผ่านนี้เข้าสู่ระบบ" },
   ][step];
 
-  // ตำแหน่งของขั้นปัจจุบันในลำดับที่แสดงจริง (ใช้วาดวงกลมลำดับขั้น)
-  const pos = Math.max(0, flow.indexOf(step));
+  // ตำแหน่งของขั้นปัจจุบัน (ใช้วาดวงกลมลำดับขั้น)
+  const pos = step;
 
   return (
     <AuthShell onBack={onBack}>
-      <form onSubmit={next} noValidate className="flex flex-1 flex-col">
+      <form
+        onSubmit={next}
+        onFocus={onFocusField}
+        noValidate
+        className="flex flex-1 flex-col"
+      >
         {/* ขั้นตอน: วงกลมมีลำดับที่ + ข้อความบอกว่าต้องทำอะไร (แตะขั้นที่ผ่านแล้วเพื่อย้อนกลับ) */}
         <ol className="mt-2 flex shrink-0 items-start" aria-label="ขั้นตอนการสมัคร">
           {flow.map((id, p) => {
-            const label = stepLabel(id);
+            const label = STEP_LABELS[id];
             const done = p < pos;
             const cur = p === pos;
             const circleCls = `relative z-10 flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold tabular-nums transition-all duration-300 ${
@@ -547,8 +481,8 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
           })}
         </ol>
 
-        {/* เนื้อหาของแต่ละขั้น */}
-        <div className="flex-1 pb-4">
+        {/* เนื้อหาของแต่ละขั้น (เว้นที่ท้ายตอนคีย์บอร์ดเปิด ให้เลื่อนช่องล่างสุดขึ้นมาได้) */}
+        <div className={`flex-1 ${kb ? "pb-24" : "pb-4"}`}>
           <div key={step} className="pd-rise">
             <h1 className="mt-6 text-3xl font-bold leading-tight">{heading.t}</h1>
             <p className="mt-1 text-sm text-white/60">{heading.s}</p>
@@ -622,48 +556,8 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
               </div>
             )}
 
-            {/* ขั้น 3: สำนักงานใหญ่ หรือ หน้าร้าน (แสดงเฉพาะบริษัทที่มีทั้งแผนกและสาขา) */}
-            {step === 2 && (
-              <div role="radiogroup" aria-label="ที่ทำงาน" className="mt-6 grid gap-3">
-                {(
-                  [
-                    ["hq", "สำนักงานใหญ่", "ทำงานที่ออฟฟิศ เลือกแผนกของคุณ"],
-                    ["store", "หน้าร้าน", "ประจำที่สาขา เลือกสาขาของคุณ"],
-                  ] as const
-                ).map(([k, title, sub]) => {
-                  const sel = place === k;
-                  return (
-                    <button
-                      key={k}
-                      type="button"
-                      role="radio"
-                      aria-checked={sel}
-                      onClick={() => pickPlace(k)}
-                      className={`flex min-h-[72px] w-full items-center justify-between gap-3 rounded-2xl px-5 py-4 text-left transition active:scale-[0.99] ${
-                        sel
-                          ? "bg-[#e50914] text-white"
-                          : "border border-white/10 bg-[#1f1f1f]"
-                      }`}
-                    >
-                      <span className="min-w-0">
-                        <span className="block text-lg font-bold">{title}</span>
-                        <span
-                          className={`block text-sm ${
-                            sel ? "text-white/80" : "text-white/50"
-                          }`}
-                        >
-                          {sub}
-                        </span>
-                      </span>
-                      {sel && <CheckIcon className="h-5 w-5 shrink-0" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* ขั้น 4: สำนักงานใหญ่ = เลือกแผนก (แสดงให้เลือกเลย พิมพ์ค้นหาเมื่อหาไม่เจอ) */}
-            {step === 3 && place === "hq" && (
+            {/* ขั้น 3: แผนก (แสดงให้เลือกเลย พิมพ์ค้นหาเมื่อหาไม่เจอ) */}
+            {step === 2 && deptItems.length > 0 && (
               <div
                 className="mt-4"
                 onKeyDown={onListKey(visibleDepts, deptQuery, departmentId, pickDept)}
@@ -684,56 +578,20 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
                   onHover={setHi}
                   onPick={pickDept}
                   listRef={listRef}
+                  compact={kb}
                 />
               </div>
             )}
 
-            {/* ขั้น 4: หน้าร้าน = เลือกสาขา (ยังไม่พิมพ์ = แสดงทีละช่วง กด "ดูเพิ่ม" / พิมพ์แล้ว = แสดงทั้งหมดที่ตรง) */}
-            {step === 3 && place === "store" && (
-              <div
-                className="mt-4"
-                onKeyDown={onListKey(shownBranches, branchQuery, branchId, pickBranch)}
-              >
-                <Field
-                  label="ค้นหาสาขา"
-                  value={branchQuery}
-                  onChange={onBranchQuery}
-                  placeholder="พิมพ์เลข ID, ชื่อสาขา หรือจังหวัด"
-                  autoComplete="off"
-                  error={errors.branchId}
-                />
-                <PickList
-                  label="รายการสาขา"
-                  items={visibleBranches}
-                  selectedId={branchId}
-                  hi={hi}
-                  onHover={setHi}
-                  onPick={pickBranch}
-                  listRef={listRef}
-                  limit={branchCap}
-                />
-                {branchCap !== undefined && visibleBranches.length > branchCap && (
-                  <button
-                    type="button"
-                    onClick={() => setBranchLimit((n) => n + BRANCH_STEP)}
-                    className="mt-2 flex h-11 w-full items-center justify-center rounded-full border border-white/30 text-sm font-semibold text-white/90 transition-colors hover:bg-white/10 active:scale-95"
-                  >
-                    ดูเพิ่มอีก {Math.min(BRANCH_STEP, visibleBranches.length - branchCap)} สาขา
-                    (เหลือ {visibleBranches.length - branchCap})
-                  </button>
-                )}
-              </div>
-            )}
-
-            {/* ขั้น 4: บริษัทที่ไม่มีทั้งแผนกและสาขา */}
-            {step === 3 && place === "" && (
+            {/* ขั้น 3: บริษัทที่ไม่มีแผนก */}
+            {step === 2 && deptItems.length === 0 && (
               <p className="mt-4 rounded-2xl bg-white/10 px-4 py-5 text-center text-sm">
                 บริษัทนี้ยังไม่มีรายการแผนก กรุณาติดต่อเจ้าหน้าที่
               </p>
             )}
 
-            {/* ขั้น 5: username / password */}
-            {step === 4 && (
+            {/* ขั้น 4: username / password */}
+            {step === 3 && (
               <div className="mt-6 space-y-4">
                 <Field
                   label="Username"
@@ -780,8 +638,14 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
           )}
         </div>
 
-        {/* แถบปุ่มล่าง: ติดขอบล่างจอ ย้อนกลับ + ถัดไป อยู่แถวเดียวกัน */}
-        <div className="sticky bottom-0 z-10 -mx-5 border-t border-white/10 bg-[#141414] px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 md:-mx-8 md:px-8">
+        {/* แถบปุ่มล่าง: ปกติติดขอบล่างจอ / ตอนคีย์บอร์ดเปิดเลิกติด จะได้ไม่บังช่องพิมพ์ */}
+        <div
+          className={`-mx-5 border-t border-white/10 bg-[#141414] px-5 pt-3 md:-mx-8 md:px-8 ${
+            kb
+              ? "relative pb-3"
+              : "sticky bottom-0 z-10 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+          }`}
+        >
           <div className="flex items-center gap-3">
             {step > 0 && (
               <button type="button" onClick={back} disabled={busy} className={secondaryBtn}>
