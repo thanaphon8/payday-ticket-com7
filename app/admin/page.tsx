@@ -57,6 +57,8 @@ type Summary = {
   orders: number;
   booth: { count: number; amount: number };
   lucky: { count: number; amount: number };
+  // แพ็ค Pre-order (อนุมัติแล้วเท่านั้น): count = จำนวนแพ็ค / buyers = จำนวนคนที่ซื้อ / tickets = Lucky Draw ที่ออกจากแพ็ค (ใบ)
+  pack: { count: number; buyers: number; tickets: number; amount: number };
   total: { count: number; amount: number };
   pending: { count: number; amount: number };
   rejected: number;
@@ -1374,6 +1376,11 @@ export default function AdminPage() {
                         title="ตั๋ว Lucky Draw"
                         value={`${num(summary.lucky.count)} ใบ`}
                         sub={`รวมเป็นเงิน ${baht(summary.lucky.amount)}`}
+                      />
+                      <Stat
+                        title="แพ็ค Lucky Draw Pre-order"
+                        value={`${num(summary.pack.count)} แพ็ค`}
+                        sub={`${num(summary.pack.buyers)} คน · Lucky Draw ${num(summary.pack.tickets)} ใบ · ${baht(summary.pack.amount)}`}
                       />
                       <Stat
                         title="ตั๋วเข้าซุ้มที่จำหน่ายแล้ว"
