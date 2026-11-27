@@ -13,6 +13,8 @@ const TICKET_W = 13; // ความกว้างตั๋ว (% ของค�
 const POLL_MS = 2000; // ดึงข้อมูลสดทุกกี่ ms
 const TOAST_MS = 3500; // ป้าย "+N ใบใหม่" แสดงกี่ ms
 const CURSOR_HIDE_MS = 5000; // ไม่ขยับเมาส์กี่ ms แล้วซ่อนเมาส์
+const SHAKE_EVERY_MS = 10000; // เขย่าโหลทุกกี่ ms
+const SHAKE_DUR_MS = 1300; // เขย่าโหลนานกี่ ms
 const LOGO_SRC = "/img/com.png";
 const QR_SRC = "/img/qr.png"; // รูป QR code เข้าเว็บซื้อตั๋ว (ใส่ไฟล์ที่ public/img/qr.png)
 const END_AT = new Date("2026-12-11T00:00:00+07:00").getTime(); // นับถอยหลังถึง 00:00 น. 11 ธ.ค. 2569 (เวลาไทย)
@@ -45,8 +47,25 @@ function ticketStyle(code: string, idx: number, n: number) {
     rot: -80 + r01(code, 3) * 160,
     delay: r01(code, 4) * 1.6,
     dur: 0.9 + r01(code, 5) * 0.7,
+    // ค่าสุ่มตอนโหลถูกเขย่า: หน่วง / เหวี่ยงซ้ายขวา (cqw) / หมุน (องศา) / ลอยสูงแค่ไหน (cqw)
+    tdelay: r01(code, 6) * 0.3,
+    jx: (r01(code, 7) - 0.5) * 7,
+    jr: (r01(code, 8) - 0.5) * 100,
+    lift: 14 + r01(code, 9) * 34,
   };
 }
+
+// keyframes ตั๋วถูกเขย่า: ลอยขึ้น → กระเด็นซ้ำ → หล่นลงมากระดอนนิด ๆ (สร้าง 2 ชื่อเพื่อให้เล่นซ้ำทุกรอบเขย่า)
+const tossFrames = (name: string) => `
+        @keyframes ${name} {
+          0% { transform: translate(0, 0) rotate(var(--rot)); animation-timing-function: ease-out; }
+          18% { transform: translate(var(--jx), calc(var(--lift) * -1)) rotate(calc(var(--rot) + var(--jr))); animation-timing-function: ease-in; }
+          38% { transform: translate(calc(var(--jx) * 0.4), calc(var(--lift) * -0.12)) rotate(calc(var(--rot) + var(--jr) * 0.3)); animation-timing-function: ease-out; }
+          54% { transform: translate(calc(var(--jx) * -0.6), calc(var(--lift) * -0.7)) rotate(calc(var(--rot) - var(--jr) * 0.7)); animation-timing-function: ease-in; }
+          80% { transform: translate(0, 0) rotate(var(--rot)); animation-timing-function: ease-out; }
+          88% { transform: translate(0, calc(var(--lift) * -0.06)) rotate(var(--rot)); animation-timing-function: ease-in; }
+          100% { transform: translate(0, 0) rotate(var(--rot)); }
+        }`;
 
 // ขอบตัวหนังสือมนด้วย text-shadow รอบทิศ (ใช้กับชื่องาน)
 const ring = (r: number, c: string, dy = 0) =>
@@ -238,9 +257,13 @@ export default function DisplayPage() {
   const [sold, setSold] = useState<Sold | null>(null);
   const [qrFailed, setQrFailed] = useState(false);
   const [now, setNow] = useState(0); // 0 = ยังไม่ได้อ่านเวลา (อ่านเฉพาะฝั่งเบราว์เซอร์)
+  const [shakeN, setShakeN] = useState(0); // นับจำนวนครั้งที่เขย่าโหล
+  const [shaking, setShaking] = useState(false); // กำลังเขย่าอยู่หรือไม่
 
   const initialRef = useRef<Set<string> | null>(null); // ตั๋วที่อยู่ในโหลตอนเปิดหน้า (หล่นตามจังหวะ)
   const knownRef = useRef<Set<string>>(new Set()); // ตั๋วที่เคยเห็นแล้ว (ใช้หาตั๋วใหม่)
+  const shakeRef = useRef(0); // เลขรอบเขย่าล่าสุด (ให้ fetchPool อ่านได้)
+  const bornRef = useRef<Map<string, number>>(new Map()); // ตั๋วแต่ละใบโผล่มาตอนเขย่ารอบที่เท่าไร
   const toastN = useRef(0);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -265,10 +288,14 @@ export default function DisplayPage() {
       if (initialRef.current === null) {
         initialRef.current = new Set(codes);
         knownRef.current = new Set(codes);
+        codes.forEach((c) => bornRef.current.set(c, shakeRef.current));
       } else {
         const fresh = codes.filter((c) => !knownRef.current.has(c));
         if (fresh.length > 0) {
-          fresh.forEach((c) => knownRef.current.add(c));
+          fresh.forEach((c) => {
+            knownRef.current.add(c);
+            bornRef.current.set(c, shakeRef.current);
+          });
           showToast(fresh.length);
         }
       }
@@ -300,6 +327,24 @@ export default function DisplayPage() {
     const t = setInterval(fetchPool, POLL_MS);
     return () => clearInterval(t);
   }, [gate, fetchPool]);
+
+  // เขย่าโหลทุก SHAKE_EVERY_MS (ข้ามถ้าผู้ใช้ตั้งค่าลดการเคลื่อนไหว)
+  useEffect(() => {
+    if (gate !== "ok") return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let off: ReturnType<typeof setTimeout> | undefined;
+    const t = setInterval(() => {
+      shakeRef.current += 1;
+      setShakeN(shakeRef.current);
+      setShaking(true);
+      if (off) clearTimeout(off);
+      off = setTimeout(() => setShaking(false), SHAKE_DUR_MS);
+    }, SHAKE_EVERY_MS);
+    return () => {
+      clearInterval(t);
+      if (off) clearTimeout(off);
+    };
+  }, [gate]);
 
   useEffect(() => {
     return () => {
@@ -460,6 +505,19 @@ export default function DisplayPage() {
           12% { opacity: 1; }
           100% { transform: translateY(0) rotate(var(--rot)); opacity: 1; }
         }
+        ${tossFrames("pdTossA")}
+        ${tossFrames("pdTossB")}
+        @keyframes pdJarShake {
+          0%, 100% { transform: translate(0, 0) rotate(0deg); }
+          8% { transform: translate(-0.7cqw, -2.4cqw) rotate(-0.7deg); }
+          18% { transform: translate(0.7cqw, 2cqw) rotate(0.7deg); }
+          28% { transform: translate(-0.6cqw, -2.6cqw) rotate(-0.6deg); }
+          38% { transform: translate(0.6cqw, 2.2cqw) rotate(0.6deg); }
+          48% { transform: translate(-0.5cqw, -1.8cqw) rotate(-0.5deg); }
+          58% { transform: translate(0.5cqw, 1.4cqw) rotate(0.4deg); }
+          70% { transform: translate(-0.3cqw, -0.9cqw) rotate(-0.3deg); }
+          82% { transform: translate(0.2cqw, 0.5cqw) rotate(0.2deg); }
+        }
         @keyframes pdNewGlow {
           0% { filter: brightness(2) drop-shadow(0 0 2cqw #ffd54a); }
           100% { filter: brightness(1) drop-shadow(0 0 0 transparent); }
@@ -519,6 +577,8 @@ export default function DisplayPage() {
 
         .pd-nocursor,
         .pd-nocursor * { cursor: none !important; }
+
+        .pd-shake { animation: pdJarShake ${SHAKE_DUR_MS}ms ease-in-out both; }
 
         .pd-stage {
           background:
@@ -688,7 +748,7 @@ export default function DisplayPage() {
         .pd-pop { animation: pdPop 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
         .pd-toast { animation: pdToast 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
         @media (prefers-reduced-motion: reduce) {
-          .pd-rays, .pd-ember, .pd-star, .pd-spark, .pd-float, .pd-gold-text, .pd-bulb, .pd-chev, .pd-glass-shine, .pd-podium, .pd-lid, .pd-pop, .pd-toast { animation: none; }
+          .pd-rays, .pd-ember, .pd-star, .pd-spark, .pd-float, .pd-gold-text, .pd-bulb, .pd-chev, .pd-glass-shine, .pd-podium, .pd-lid, .pd-pop, .pd-toast, .pd-shake { animation: none; }
         }
       `}</style>
 
@@ -782,15 +842,19 @@ export default function DisplayPage() {
           className="relative z-10 flex min-h-0 w-full flex-1 flex-col items-center"
           style={{ padding: "1cqw 5cqw 2cqw" }}
         >
+          {/* ฝา + โหล: เขย่าขึ้นลงทุก SHAKE_EVERY_MS */}
+          <div className={`relative flex min-h-0 w-full flex-1 flex-col items-center${shaking ? " pd-shake" : ""}`}>
           <div className="pd-lid relative z-20 flex-none" style={{ width: "58cqw", height: "6.5cqw", borderRadius: "2.4cqw", marginBottom: "-1.2cqw" }} />
           <div className="pd-jar relative min-h-0 w-full flex-1 overflow-hidden" style={{ borderRadius: "13cqw 13cqw 10cqw 10cqw" }}>
             {shown.map((t, idx) => {
               const s = ticketStyle(t.code, idx, shown.length);
               const isNew = initialRef.current ? !initialRef.current.has(t.code) : false;
+              const born = bornRef.current.get(t.code) ?? shakeN;
+              const tossed = shakeN > born; // เคยโดนเขย่าตั้งแต่ตั๋วใบนี้โผล่มา
               const delay = isNew ? 0 : s.delay; // ตั๋วใหม่หล่นทันที / ตั๋วตอนเปิดหน้าหล่นเรียงตามจังหวะ
-              const anim = `pdDrop ${s.dur}s cubic-bezier(.3,1.2,.5,1) ${delay}s both${
-                isNew ? ", pdNewGlow 1.8s ease-out 0s both" : ""
-              }`;
+              const anim = tossed
+                ? `${shakeN % 2 ? "pdTossA" : "pdTossB"} ${(s.dur + 1).toFixed(2)}s linear ${s.tdelay.toFixed(2)}s both`
+                : `pdDrop ${s.dur}s cubic-bezier(.3,1.2,.5,1) ${delay}s both${isNew ? ", pdNewGlow 1.8s ease-out 0s both" : ""}`;
               return (
                 <div
                   key={t.code}
@@ -803,6 +867,9 @@ export default function DisplayPage() {
                       aspectRatio: "56 / 36",
                       fontSize: "1.8cqw",
                       "--rot": `${s.rot}deg`,
+                      "--jx": `${s.jx.toFixed(2)}cqw`,
+                      "--jr": `${s.jr.toFixed(1)}deg`,
+                      "--lift": `${s.lift.toFixed(1)}cqw`,
                       animation: anim,
                       transition: "left 0.6s ease, bottom 0.6s ease",
                     } as CSSProperties
@@ -893,6 +960,7 @@ export default function DisplayPage() {
               <span className="absolute rounded-full bg-white/25 blur-[1px]" style={{ left: "4cqw", top: "6cqw", bottom: "30cqw", width: "2.4cqw" }} />
               <span className="absolute rounded-full bg-white/15" style={{ left: "9cqw", top: "14cqw", bottom: "40cqw", width: "0.9cqw" }} />
             </div>
+          </div>
           </div>
         </section>
 
