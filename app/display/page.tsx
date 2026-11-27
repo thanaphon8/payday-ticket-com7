@@ -5,7 +5,7 @@ import { Prompt } from "next/font/google";
 
 const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600", "700", "800"] });
 
-const SHOW_MAX = 240; // จำนวนตั๋วสูงสุดที่วาดในโหล (ตัวเลขรวมนับจริงทั้งหมด)
+const SHOW_MAX = 120; // จำนวนตั๋วสูงสุดที่วาดในโหล (ตัวเลขรวมนับจริงทั้งหมด)
 const JAR_COLS = 7; // จำนวนตั๋วต่อ 1 ชั้นในโหล
 const JAR_ROW_MAX = 5; // ระยะห่างชั้นสูงสุด (% ของความสูงโหล) ตอนตั๋วน้อย
 const JAR_FILL = 20; // ตอนตั๋วเยอะ กองจะสูงถึงกี่ % ของโหล
