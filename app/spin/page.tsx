@@ -7,14 +7,17 @@ const appFont = Prompt({ subsets: ["thai", "latin"], weight: ["400", "500", "600
 
 // ต้องตรงกับ EMP_CODE_LENGTH ใน lib/tickets.ts (จำนวนหลักสูงสุด / รหัสสั้นกว่านี้ช่องหน้าแสดง x)
 const EMP_LEN = 7;
-const SHOW_MAX = 140; // จำนวนตั๋วสูงสุดที่วาดหล่นในโหล (ตัวเลข "เหลือ ... ใบ" นับจริงทั้งหมด)
-const JAR_COLS = 10; // จำนวนตั๋วต่อ 1 ชั้นในโหล (ยิ่งมาก ยิ่งแน่น)
-const JAR_ROW_MAX = 9; // ระยะห่างชั้นสูงสุด (% ของความสูงโหล) ตอนตั๋วน้อย
-const JAR_FILL = 92; // ตอนตั๋วเยอะ กองจะสูงถึงกี่ % ของโหล (ตั๋วสูง ~12% จึงล้นขอบบนเล็กน้อย)
+const SHOW_MAX = 120; // จำนวนตั๋วสูงสุดที่วาดหล่นในโหล (ตัวเลข "เหลือ ... ใบ" นับจริงทั้งหมด)
+const JAR_COLS = 7; // จำนวนตั๋วต่อ 1 ชั้นในโหล
+const JAR_ROW_MAX = 5; // ระยะห่างชั้นสูงสุด (% ของความสูงโหล) ตอนตั๋วน้อย
+const JAR_FILL = 20; // ตอนตั๋วเยอะ กองจะสูงถึงกี่ % ของโหล (กองอยู่ก้นโหล)
+const TICKET_W = 13; // ความกว้างตั๋ว (% ของความกว้างโหล)
 const FIRST_STOP_MS = 2000; // ตัวเลขสปินกี่ ms (นับจากกดเริ่ม) ก่อนหยุดหลักแรก
 const ZOOM_CENTER_Y = 0.6; // ตอนซูม ตัวเลขอยู่สูงจากบนจอกี่ส่วน (0.5 = กลางจอ / มากกว่า = ตัวตู้ต่ำลง)
 const STEP_MS = 1000; // ระยะห่างระหว่างการหยุดแต่ละหลัก (รอ 1 วิก่อนแสดงเลขถัดไป)
 const POLL_MS = 3000; // รีเฟรชโหลสด: ตั๋วที่ admin เพิ่งอนุมัติจะหล่นเข้าโหลเอง
+const TOAST_MS = 3500; // ป้าย "+N ใบใหม่" แสดงกี่ ms ก่อนเริ่มจางหาย
+const TOAST_FADE_MS = 600; // ระยะเวลาจางหายของป้าย (ต้องตรงกับ keyframes pdToastOut)
 const BULBS = 22; // จำนวนหลอดไฟประดับตู้
 const WIN_BULBS_X = 16; // จำนวนหลอดไฟขอบบน/ล่างของการ์ดผู้ถูกรางวัล
 const WIN_BULBS_Y = 6; // จำนวนหลอดไฟขอบซ้าย/ขวาของการ์ดผู้ถูกรางวัล
@@ -152,8 +155,8 @@ function hash(s: string) {
 }
 const r01 = (s: string, k: number) => (hash(`${s}:${k}`) % 1000) / 1000;
 
-// ตำแหน่งตั๋วในโหล: แบ่งโหลเป็นช่อง ๆ (ชั้นละ JAR_COLS ใบ) แล้วสุ่มขยับ/หมุนในช่องของตัวเอง
-// = ดูสุ่มไม่เป็นระเบียบ แต่กระจายทั่วโหล ไม่มีช่องว่างโหว่ / ยิ่งตั๋วเยอะ ชั้นยิ่งชิด กองยิ่งสูงจนเต็มและล้นขอบบนเล็กน้อย
+// ตำแหน่งตั๋วในโหล (เหมือนหน้า display): แบ่งโหลเป็นช่อง ๆ (ชั้นละ JAR_COLS ใบ) แล้วสุ่มขยับ/หมุนในช่องของตัวเอง
+// กองอยู่ก้นโหล ยิ่งตั๋วเยอะชั้นยิ่งชิด แต่กองสูงไม่เกิน JAR_FILL %
 // idx = ลำดับตั๋วในกอง, n = จำนวนตั๋วที่วาดอยู่
 function ticketStyle(code: string, idx: number, n: number) {
   const rows = Math.max(1, Math.ceil(n / JAR_COLS));
@@ -161,11 +164,11 @@ function ticketStyle(code: string, idx: number, n: number) {
   const inRow = row === rows - 1 ? n - row * JAR_COLS : JAR_COLS; // ชั้นบนสุดมีตั๋วไม่เต็ม ก็กระจายให้ทั่วชั้น
   const pos = idx - row * JAR_COLS;
   const rowH = rows > 1 ? Math.min(JAR_ROW_MAX, JAR_FILL / (rows - 1)) : JAR_ROW_MAX;
-  const colW = 89 / inRow;
+  const colW = (100 - TICKET_W) / inRow;
   return {
-    left: Math.min(89, Math.max(0, (pos + 0.5) * colW + (r01(code, 1) - 0.5) * colW * 0.9)),
-    bottom: Math.max(-3, -1 + row * rowH + (r01(code, 2) - 0.5) * rowH * 1.3),
-    rot: -50 + r01(code, 3) * 100,
+    left: Math.min(100 - TICKET_W, Math.max(0, (pos + 0.5) * colW + (r01(code, 1) - 0.5) * colW * 0.9)),
+    bottom: Math.max(-2, -1 + row * rowH + (r01(code, 2) - 0.5) * rowH * 1.3),
+    rot: -80 + r01(code, 3) * 160,
     delay: r01(code, 4) * 1.6,
     dur: 0.9 + r01(code, 5) * 0.7,
   };
@@ -335,6 +338,7 @@ export default function SpinPage() {
   const [pool, setPool] = useState<PoolTicket[]>([]);
   const [total, setTotal] = useState(0);
   const [winners, setWinners] = useState<Winner[]>([]);
+  const [toast, setToast] = useState<{ n: number; id: number; out: boolean } | null>(null); // ป้าย "+N ใบใหม่" (out = กำลังจางหาย)
   const [digits, setDigits] = useState<string[]>(Array(EMP_LEN).fill("-"));
   const [stopped, setStopped] = useState<boolean[]>(Array(EMP_LEN).fill(false));
   const [spinning, setSpinning] = useState(false);
@@ -369,8 +373,30 @@ export default function SpinPage() {
   // รีเฟรชสด: ไม่เขียนทับตอนกำลังสุ่ม และทิ้งผลที่ขอไว้ก่อนเริ่ม/จบการสุ่ม (กันตั๋วที่ถูกตัดแล้วกลับมาในโหล)
   const spinningRef = useRef(false);
   const seqRef = useRef(0);
-  // ตั๋วที่อยู่ในโหลตอนเปิดหน้า: หล่นตามจังหวะสุ่ม / ตั๋วที่เพิ่งเข้ามาทีหลังหล่นทันที
+  // ตั๋วที่อยู่ในโหลตอนเปิดหน้า: หล่นตามจังหวะสุ่ม / ตั๋วที่เพิ่งเข้ามาทีหลังหล่นทันที + เรืองแสง
   const initialRef = useRef<Set<string> | null>(null);
+  const knownRef = useRef<Set<string>>(new Set()); // ตั๋วที่เคยเห็นแล้ว (ใช้หาตั๋วใหม่)
+  const toastN = useRef(0);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null); // เริ่มจางหาย
+  const toastEndTimer = useRef<ReturnType<typeof setTimeout> | null>(null); // ลบป้ายออกหลังจางจบ
+
+  // ป้าย "+N ใบใหม่": ตั๋วเข้ามาต่อเนื่องระหว่างที่ป้ายยังอยู่จะนับรวม / ครบเวลาแล้วจางหายนุ่ม ๆ
+  const showToast = useCallback((n: number) => {
+    toastN.current = (toastTimer.current ? toastN.current : 0) + n;
+    setToast({ n: toastN.current, id: Date.now(), out: false });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    if (toastEndTimer.current) clearTimeout(toastEndTimer.current);
+    toastEndTimer.current = null;
+    toastTimer.current = setTimeout(() => {
+      toastTimer.current = null;
+      toastN.current = 0;
+      setToast((t) => (t ? { ...t, out: true } : t));
+      toastEndTimer.current = setTimeout(() => {
+        toastEndTimer.current = null;
+        setToast(null);
+      }, TOAST_FADE_MS);
+    }, TOAST_MS);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -381,7 +407,10 @@ export default function SpinPage() {
       const data = (await res.json()) as { total: number; pool: PoolTicket[]; winners: Winner[] };
       setGate("ok");
       setNote("");
-      if (initialRef.current === null) initialRef.current = new Set(data.pool.map((p) => p.code));
+      if (initialRef.current === null) {
+        initialRef.current = new Set(data.pool.map((p) => p.code));
+        knownRef.current = new Set(data.pool.map((p) => p.code));
+      }
       setPool(data.pool);
       setTotal(data.total);
       setWinners(data.winners);
@@ -402,13 +431,19 @@ export default function SpinPage() {
       if (!res.ok) return;
       const data = (await res.json()) as { total: number; pool: PoolTicket[]; winners: Winner[] };
       if (spinningRef.current || seq !== seqRef.current) return;
+      // ตั๋วที่ไม่เคยเห็นมาก่อน = ตั๋วใหม่ (admin เพิ่งอนุมัติ) → โชว์ป้าย +N
+      const fresh = data.pool.filter((p) => !knownRef.current.has(p.code));
+      if (fresh.length > 0) {
+        fresh.forEach((p) => knownRef.current.add(p.code));
+        showToast(fresh.length);
+      }
       setPool(data.pool);
       setTotal(data.total);
       setWinners(data.winners);
     } catch {
       /* เน็ตหลุดชั่วคราว รอบถัดไปลองใหม่เอง */
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     load();
@@ -436,6 +471,8 @@ export default function SpinPage() {
     return () => {
       timers.current.forEach(clearTimeout);
       fx.current.forEach(clearTimeout);
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      if (toastEndTimer.current) clearTimeout(toastEndTimer.current);
       stopSpin();
       stopVictory();
       fwActive.current = false;
@@ -1008,6 +1045,21 @@ export default function SpinPage() {
           12% { opacity: 1; }
           100% { transform: translateY(0) rotate(var(--rot)); opacity: 1; }
         }
+        /* ตั๋วใหม่เรืองแสงทองตอนหล่น แล้วค่อยจางกลับเป็นปกติ */
+        @keyframes pdNewGlow {
+          0% { filter: brightness(2) drop-shadow(0 0 2cqw #ffd54a); }
+          100% { filter: brightness(1) drop-shadow(0 0 0 transparent); }
+        }
+        /* ป้าย +N ใบใหม่: เด้งเข้า / จางหายนุ่ม ๆ ลอยขึ้นเล็กน้อย */
+        @keyframes pdToast {
+          0% { transform: translate(-50%, -40%) scale(0.7); opacity: 0; }
+          60% { transform: translate(-50%, 0) scale(1.08); opacity: 1; }
+          100% { transform: translate(-50%, 0) scale(1); opacity: 1; }
+        }
+        @keyframes pdToastOut {
+          0% { transform: translate(-50%, 0) scale(1); opacity: 1; }
+          100% { transform: translate(-50%, -35%) scale(0.92); opacity: 0; }
+        }
         @keyframes pdShake {
           0%, 100% { transform: translate(0, 0) rotate(0deg); }
           20% { transform: translate(-3px, 1px) rotate(-0.6deg); }
@@ -1109,8 +1161,19 @@ export default function SpinPage() {
           border: 2px solid #f4f6fb;
           box-shadow: inset 0 3px 0 #ffffff, inset 0 -6px 0 #c9d0dc, -9px 0 0 #7b8499;
         }
+        /* ตั๋วในโหล (เหมือนหน้า display): ขอบหยักซ้ายขวา + กรอบขาวด้านใน / หน่วย cqw อิงความกว้างโหล */
         .pd-ticket {
-          box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), 0 3px 0 #3a0a10;
+          background: linear-gradient(160deg, #d0202c, #a80d1c 60%, #8c0814);
+          color: #fff;
+          box-shadow: inset 0 0.2cqw 0 rgba(255, 150, 150, 0.6), 0 0.4cqw 0.6cqw rgba(50, 0, 5, 0.6);
+          clip-path: polygon(0 0, 100% 0, 96% 12.5%, 100% 25%, 96% 37.5%, 100% 50%, 96% 62.5%, 100% 75%, 96% 87.5%, 100% 100%, 0 100%, 4% 87.5%, 0 75%, 4% 62.5%, 0 50%, 4% 37.5%, 0 25%, 4% 12.5%);
+        }
+        .pd-ticket::before {
+          content: "";
+          position: absolute;
+          inset: 0.55cqw 0.9cqw;
+          border: 0.2cqw solid rgba(255, 220, 215, 0.75);
+          border-radius: 0.6cqw;
         }
         /* ป้ายหัวตู้ */
         .pd-marquee {
@@ -1562,6 +1625,9 @@ export default function SpinPage() {
         .pd-bulb { animation: pdBulb 1s steps(1) infinite; }
         .pd-bulb-fast { animation-duration: 0.28s; }
         .pd-jackpot { animation: pdJackpot 0.5s ease-in-out 6; }
+        /* ป้าย +N ใบใหม่ */
+        .pd-toast { animation: pdToast 0.5s cubic-bezier(0.3, 1.5, 0.5, 1) both; }
+        .pd-toast-out { animation: pdToastOut 0.6s ease-in forwards; }
         /* กรอบทองการ์ดผู้ถูกรางวัล: พื้นนิ่ง + แสงเรืองด้วย opacity (เบากว่า animate box-shadow / background) */
         @keyframes pdGlowOp {
           from { opacity: 0.35; }
@@ -1594,7 +1660,7 @@ export default function SpinPage() {
         .pd-gold-text-sub { color: #ffd54a; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55); }
         @media (prefers-reduced-motion: reduce) {
           .pd-row-pop { animation: none; }
-          .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-rumble, .pd-kick-a, .pd-kick-b, .pd-batch-wrap, .pd-zap, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-quake, .pd-quake-win, .pd-bokeh-dot, .pd-gold-frame::before { animation: none; }
+          .pd-btn-red, .pd-btn-red::before, .pd-btn-red::after, .pd-reel-stop, .pd-strip, .pd-shake, .pd-rumble, .pd-kick-a, .pd-kick-b, .pd-batch-wrap, .pd-zap, .pd-bulb, .pd-lamp, .pd-jackpot, .pd-wash, .pd-wash::before, .pd-quake, .pd-quake-win, .pd-bokeh-dot, .pd-gold-frame::before, .pd-toast { animation: none; }
           .pd-half-l { animation: none; transform: translate(-6px, 12px) rotate(13deg); }
           .pd-half-r { animation: none; transform: translate(6px, 12px) rotate(-13deg); }
           .pd-hammer, .pd-shard, .pd-boom { display: none; }
@@ -2077,34 +2143,68 @@ export default function SpinPage() {
             <section aria-label="โหลตั๋ว Lucky Draw" className="flex flex-none flex-col items-center">
               <div className="pd-gold h-4 w-40 rounded-t-xl sm:w-52" />
               <div className="relative w-full max-w-lg">
-                <div className="pd-jar relative h-64 w-full overflow-hidden rounded-b-[3rem] rounded-t-2xl border-4 border-white/30 lg:h-[36vh] lg:min-h-[15rem]">
+                <div
+                  className="pd-jar relative h-64 w-full overflow-hidden rounded-b-[3rem] rounded-t-2xl border-4 border-white/30 lg:h-[36vh] lg:min-h-[15rem]"
+                  style={{ containerType: "inline-size" }}
+                >
                   {shown.map((t, idx) => {
                     const s = ticketStyle(t.code, idx, shown.length);
-                    // ตั๋วที่อยู่ตั้งแต่เปิดหน้า: หล่นตามจังหวะสุ่ม / ตั๋วที่เพิ่งเข้าโหล (admin เพิ่งอนุมัติ): หล่นทันที
-                    const delay = initialRef.current?.has(t.code) ? s.delay : 0;
+                    // ตั๋วที่อยู่ตั้งแต่เปิดหน้า: หล่นตามจังหวะสุ่ม / ตั๋วที่เพิ่งเข้าโหล (admin เพิ่งอนุมัติ): หล่นทันที + เรืองแสง
+                    const isNew = initialRef.current ? !initialRef.current.has(t.code) : false;
+                    const delay = isNew ? 0 : s.delay;
+                    const anim = `pdDrop ${s.dur}s cubic-bezier(.3,1.2,.5,1) ${delay}s both${
+                      isNew ? ", pdNewGlow 1.8s ease-out 0s both" : ""
+                    }`;
                     return (
                       <div
                         key={t.code}
-                        className="absolute flex h-8 w-14 flex-col items-center justify-center rounded-md pd-ticket border border-dashed border-white/50 bg-[#6b1d24] text-[8px] font-bold leading-tight text-white"
+                        className="pd-ticket absolute flex flex-col items-center justify-center font-bold leading-none"
                         style={
                           {
                             left: `${s.left}%`,
                             bottom: `${s.bottom}%`,
+                            width: `${TICKET_W}%`,
+                            aspectRatio: "56 / 36",
+                            fontSize: "2cqw",
                             "--rot": `${s.rot}deg`,
-                            animation: `pdDrop ${s.dur}s cubic-bezier(.3,1.2,.5,1) ${delay}s both`,
+                            animation: anim,
                             // ตั๋วเพิ่ม/ลด ตำแหน่งจะค่อย ๆ เลื่อนจัดกองใหม่อย่างนุ่มนวล
                             transition: "left 0.6s ease, bottom 0.6s ease",
                           } as CSSProperties
                         }
                       >
-                        <span className="tracking-widest">LUCKY</span>
-                        <span className="font-mono text-[7px] opacity-80">{t.empCode}</span>
+                        <span>LUCKY</span>
+                        <span>DRAW</span>
+                        <span className="font-mono opacity-90" style={{ fontSize: "1.5cqw", marginTop: "0.15cqw" }}>
+                          {t.empCode}
+                        </span>
                       </div>
                     );
                   })}
                   {total === 0 && (
                     <p className="absolute inset-0 flex items-center justify-center text-sm text-white/50">โหลว่างเปล่า</p>
                   )}
+
+                  {/* ป้าย +N ใบใหม่ เมื่อมีตั๋วใหม่ร่วงเข้าโหล (ครบเวลาแล้วจางหายนุ่ม ๆ) */}
+                  {toast && (
+                    <div
+                      key={toast.id}
+                      aria-live="polite"
+                      className={`${
+                        toast.out ? "pd-toast-out" : "pd-toast"
+                      } pointer-events-none absolute left-1/2 z-30 whitespace-nowrap rounded-full bg-[#58cc02] font-extrabold text-white`}
+                      style={{
+                        bottom: "42%",
+                        fontSize: "6cqw",
+                        padding: "1cqw 5cqw",
+                        border: "0.6cqw solid #fff6c9",
+                        boxShadow: "0 1cqw 0 #3a8f00, 0 0 5cqw rgba(125, 255, 107, 0.6)",
+                      }}
+                    >
+                      +{toast.n} ใบใหม่
+                    </div>
+                  )}
+
                   {/* แสงสะท้อนบนแก้วโหล */}
                   <span
                     aria-hidden
