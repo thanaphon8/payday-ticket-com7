@@ -884,6 +884,7 @@ function SlipPay({
   const [stage, setStage] = useState<"upload" | "verify">("upload"); // upload = กำลังอัปโหลดรูป / verify = รอเซิร์ฟเวอร์ตรวจสลิป
   const [err, setErr] = useState("");
   const [qrFailed, setQrFailed] = useState(false);
+  const [qrFile, setQrFile] = useState<File | null>(null); // ไฟล์ QR ที่เตรียมไว้แล้ว (ต้องเรียก share ทันทีตอนกด ไม่งั้นมือถือบล็อก)
 
   // เช็กสถานะทุก SLIP_POLL_MS: อนุมัติแล้ว → ไปหน้ารับตั๋วเอง
   useEffect(() => {
@@ -932,6 +933,47 @@ function SlipPay({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paymentId]);
+
+  // โหลดรูป QR เตรียมเป็นไฟล์ไว้ล่วงหน้า
+  useEffect(() => {
+    const url = pay?.qrUrl;
+    if (!url) return;
+    let cancelled = false;
+    fetch(url)
+      .then((r) => r.blob())
+      .then((b) => {
+        if (!cancelled) {
+          setQrFile(new File([b], `payday-${pay?.ref ?? "qr"}.png`, { type: b.type || "image/png" }));
+        }
+      })
+      .catch(() => {
+        /* ignore: ปุ่มจะใช้ดาวน์โหลดแบบเดิมแทน */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pay?.qrUrl, pay?.ref]);
+
+  // บันทึก QR: เปิดชีตแชร์ให้เลือก "บันทึกรูปภาพ" ลงแอปรูปภาพ / ไม่รองรับ = ดาวน์โหลดไฟล์
+  async function saveQr() {
+    if (!pay?.qrUrl) return;
+    if (qrFile && navigator.canShare?.({ files: [qrFile] })) {
+      try {
+        await navigator.share({ files: [qrFile] });
+        return;
+      } catch (e) {
+        if ((e as DOMException).name === "AbortError") return; // ผู้ใช้ปิดชีตเอง
+      }
+    }
+    const href = qrFile ? URL.createObjectURL(qrFile) : pay.qrUrl;
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = `payday-${pay.ref}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    if (qrFile) setTimeout(() => URL.revokeObjectURL(href), 10000);
+  }
 
   // พรีวิวรูปที่เลือก + ย่อรูปเตรียมไว้เบื้องหลังทันที
   useEffect(() => {
@@ -1065,13 +1107,13 @@ function SlipPay({
                 รหัสอ้างอิง <span className="font-mono font-bold text-white">{pay.ref}</span>
               </p>
               {pay.qrUrl && (
-                <a
-                  href={pay.qrUrl}
-                  download={`payday-${pay.ref}.png`}
+                <button
+                  type="button"
+                  onClick={saveQr}
                   className="mt-3 inline-block rounded-full border border-white/40 px-4 py-2 text-xs font-semibold"
                 >
                   บันทึก QR Code
-                </a>
+                </button>
               )}
               <p className="mt-3 text-sm font-bold">
                 {secsLeft > 0 ? `ส่งสลิปภายใน ${fmtCountdown(secsLeft)}` : "หมดเวลาแล้ว กำลังตรวจสอบ..."}
