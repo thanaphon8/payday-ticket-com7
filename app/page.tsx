@@ -2801,8 +2801,23 @@ export default function Home() {
                         />
                       );
 
+                      // กดที่ตัว card ของตั๋ว = เปิดหน้าต่างแสดงตั๋วเหมือนกดปุ่ม "แสดงตั๋ว"
                       return (
-                        <div key={t.id} className="pd-rise">
+                        <div
+                          key={t.id}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`${t.showLabel}`}
+                          onClick={() => openSheet(t.id)}
+                          onKeyDown={(e) => {
+                            if (e.target !== e.currentTarget) return;
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              openSheet(t.id);
+                            }
+                          }}
+                          className="pd-rise cursor-pointer transition duration-300 active:scale-[0.98]"
+                        >
                           {goldWin ? <GoldFrame>{card}</GoldFrame> : card}
                         </div>
                       );
