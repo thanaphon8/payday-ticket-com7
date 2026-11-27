@@ -21,21 +21,24 @@ import {
 } from "./auth-shared";
 import type { AuthErrors, AuthFormProps } from "./auth-shared";
 import { COMPANIES, departmentsOf, getCompany } from "./departments";
+import { Icon } from "./Navbar";
+import type { IconProps } from "./Navbar";
 
 /* ------------------------------------------------------------------ */
 /* ค่าคงที่ / ตัวช่วย                                                    */
 /* ------------------------------------------------------------------ */
 
-// ลำดับขั้น: 0 ข้อมูลของคุณ → 1 บริษัท → 2 แผนก (สำนักงานใหญ่) → 3 บัญชี
-const STEPS = ["ข้อมูลของคุณ", "บริษัท", "แผนก", "บัญชี"] as const;
+// ลำดับขั้น: 0 ข้อมูลของคุณ → 1 บริษัท → 2 แผนก (สำนักงานใหญ่) → 3 บัญชี → 4 รูปโปรไฟล์
+const STEPS = ["ข้อมูลของคุณ", "บริษัท", "แผนก", "บัญชี", "รูปโปรไฟล์"] as const;
 // ข้อความใต้วงกลมแต่ละขั้น
 const STEP_LABELS = [
   "กรอกข้อมูล",
   "เลือกบริษัท",
   "เลือกแผนก",
   "ตั้งรหัสผ่าน",
+  "รูปโปรไฟล์",
 ] as const;
-const LAST_STEP = STEPS.length - 1; // 3 = ขั้นตั้งบัญชี (กดสมัครที่ขั้นนี้)
+const LAST_STEP = STEPS.length - 1; // 4 = ขั้นรูปโปรไฟล์ (กดสมัครที่ขั้นนี้)
 
 // รายการเลือก (บริษัท / แผนก ใช้โครงเดียวกัน)
 type Item = { id: number; label: string; sub?: string };
@@ -107,6 +110,259 @@ function useKeyboardOpen() {
     return () => vv.removeEventListener("resize", check);
   }, []);
   return open;
+}
+
+/* ------------------------------------------------------------------ */
+/* รูปโปรไฟล์ (ใช้ร่วมกับหน้าโปรไฟล์ใน page.tsx)                            */
+/* ------------------------------------------------------------------ */
+
+const IconMinus = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M5 12h14" />
+  </Icon>
+);
+const IconPlus = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M12 5v14M5 12h14" />
+  </Icon>
+);
+const IconCamera = ({ className }: IconProps) => (
+  <Icon className={className}>
+    <path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+    <circle cx="12" cy="13" r="3.5" />
+  </Icon>
+);
+
+// ย่อรูปใหญ่ก่อนส่ง (ส่งไวขึ้น + กันไฟล์ใหญ่เกินลิมิตของโฮสต์) รูปเล็กอยู่แล้วส่งตามเดิม
+// 1600px ยังอ่าน QR บนสลิปได้ชัด
+export async function shrinkImage(file: File): Promise<File> {
+  if (file.size <= 1024 * 1024) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext("2d")?.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.85));
+    return blob && blob.size < file.size ? new File([blob], "slip.jpg", { type: "image/jpeg" }) : file;
+  } catch {
+    return file;
+  }
+}
+
+// อัปโหลดรูปโปรไฟล์หลังสมัครสำเร็จ (ล้มเหลวก็ไม่เป็นไร ตั้งทีหลังที่หน้าโปรไฟล์ได้)
+async function uploadAvatar(file: File) {
+  try {
+    const fd = new FormData();
+    fd.append("avatar", await shrinkImage(file));
+    await fetch("/api/profile/avatar", { method: "POST", body: fd });
+  } catch {
+    /* ignore */
+  }
+}
+
+/* ---------- ปรับรูปโปรไฟล์ก่อนบันทึก ----------
+   เลือกรูปแล้วเปิดหน้าต่างนี้: ลากรูปเพื่อขยับ / เลื่อนแถบหรือหมุนล้อเมาส์เพื่อซูม / กด "บันทึก"
+   จึงตัดตามกรอบวงกลมเป็นรูปจัตุรัส 512×512 แล้วส่งไฟล์ที่ตัดแล้วกลับไปทาง onSave */
+const AVATAR_FRAME = 280; // ขนาดกรอบวงกลมบนจอ (px)
+const AVATAR_OUT = 512; // ขนาดรูปที่บันทึกจริง (px)
+const AVATAR_MAX_ZOOM = 4;
+
+export function AvatarCropper({
+  file,
+  busy,
+  error,
+  onCancel,
+  onSave,
+}: {
+  file: File;
+  busy: boolean;
+  error: string;
+  onCancel: () => void;
+  onSave: (f: File) => void;
+}) {
+  const [src, setSrc] = useState("");
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [loadErr, setLoadErr] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [off, setOff] = useState({ x: 0, y: 0 }); // ระยะที่รูปเลื่อนจากกึ่งกลางกรอบ
+  const drag = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    setSrc(url);
+    setImg(null);
+    setLoadErr(false);
+    setZoom(1);
+    setOff({ x: 0, y: 0 });
+    const im = new Image();
+    im.onload = () => setImg(im);
+    im.onerror = () => setLoadErr(true);
+    im.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  // กด Esc ปิด (ระหว่างบันทึกไม่ปิด)
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
+
+  const F = AVATAR_FRAME;
+  const base = img ? F / Math.min(img.naturalWidth, img.naturalHeight) : 1; // ขนาดพอดีเต็มกรอบ (cover)
+  const dw = img ? img.naturalWidth * base * zoom : 0;
+  const dh = img ? img.naturalHeight * base * zoom : 0;
+
+  // รูปต้องคลุมกรอบเต็มเสมอ ไม่ให้เห็นขอบว่าง
+  const clamp = (x: number, y: number, w: number, h: number) => ({
+    x: Math.max(-(w - F) / 2, Math.min((w - F) / 2, x)),
+    y: Math.max(-(h - F) / 2, Math.min((h - F) / 2, y)),
+  });
+
+  const changeZoom = (z: number) => {
+    if (!img) return;
+    const nz = Math.max(1, Math.min(AVATAR_MAX_ZOOM, z));
+    setZoom(nz);
+    setOff((o) => clamp(o.x, o.y, img.naturalWidth * base * nz, img.naturalHeight * base * nz));
+  };
+
+  const move = (dx: number, dy: number) => setOff((o) => clamp(o.x + dx, o.y + dy, dw, dh));
+
+  const save = () => {
+    if (!img || busy) return;
+    const k = AVATAR_OUT / F;
+    const canvas = document.createElement("canvas");
+    canvas.width = AVATAR_OUT;
+    canvas.height = AVATAR_OUT;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, AVATAR_OUT, AVATAR_OUT);
+    ctx.drawImage(img, (F / 2 + off.x - dw / 2) * k, (F / 2 + off.y - dh / 2) * k, dw * k, dh * k);
+    canvas.toBlob(
+      (b) => {
+        if (b) onSave(new File([b], `avatar-${Date.now()}.jpg`, { type: "image/jpeg" }));
+      },
+      "image/jpeg",
+      0.9,
+    );
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="avatar-crop-title"
+      className="pd-fade fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
+    >
+      <div className="pd-dialog w-full max-w-sm rounded-3xl bg-[#1f1f1f] p-6 text-center text-white">
+        <h2 id="avatar-crop-title" className="text-lg font-bold">
+          ปรับรูปโปรไฟล์
+        </h2>
+        <p className="mt-1 text-xs text-white/60">ลากรูปเพื่อขยับ เลื่อนแถบเพื่อซูม แล้วกดบันทึก</p>
+
+        <div
+          tabIndex={0}
+          role="img"
+          aria-label="กรอบปรับรูปโปรไฟล์ ใช้ปุ่มลูกศรเพื่อขยับรูป"
+          style={{ width: F, height: F, touchAction: "none" }}
+          className="relative mx-auto mt-5 cursor-grab select-none overflow-hidden rounded-full bg-[#2a2a2a] ring-4 ring-white/20 active:cursor-grabbing"
+          onPointerDown={(e) => {
+            if (!img || busy) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            drag.current = { px: e.clientX, py: e.clientY, ox: off.x, oy: off.y };
+          }}
+          onPointerMove={(e) => {
+            const d = drag.current;
+            if (!d) return;
+            setOff(clamp(d.ox + (e.clientX - d.px), d.oy + (e.clientY - d.py), dw, dh));
+          }}
+          onPointerUp={() => {
+            drag.current = null;
+          }}
+          onPointerCancel={() => {
+            drag.current = null;
+          }}
+          onWheel={(e) => changeZoom(zoom - e.deltaY * 0.002)}
+          onKeyDown={(e) => {
+            const step = 10;
+            if (e.key === "ArrowLeft") move(step, 0);
+            else if (e.key === "ArrowRight") move(-step, 0);
+            else if (e.key === "ArrowUp") move(0, step);
+            else if (e.key === "ArrowDown") move(0, -step);
+            else return;
+            e.preventDefault();
+          }}
+        >
+          {img && src && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={src}
+              alt=""
+              draggable={false}
+              style={{
+                width: dw,
+                height: dh,
+                left: F / 2 + off.x - dw / 2,
+                top: F / 2 + off.y - dh / 2,
+              }}
+              className="pointer-events-none absolute max-w-none select-none"
+            />
+          )}
+          {!img && !loadErr && (
+            <span className="absolute inset-0 flex items-center justify-center text-sm text-white/60">
+              กำลังโหลดรูป...
+            </span>
+          )}
+        </div>
+
+        <div className="mx-auto mt-5 flex items-center gap-3" style={{ maxWidth: F }}>
+          <IconMinus className="h-4 w-4 shrink-0 text-white/60" />
+          <input
+            type="range"
+            min={1}
+            max={AVATAR_MAX_ZOOM}
+            step={0.01}
+            value={zoom}
+            onChange={(e) => changeZoom(Number(e.target.value))}
+            disabled={!img || busy}
+            aria-label="ซูมรูป"
+            className="h-2 w-full cursor-pointer accent-[#e50914] disabled:opacity-50"
+          />
+          <IconPlus className="h-4 w-4 shrink-0 text-white/60" />
+        </div>
+
+        {error && (
+          <p role="alert" className="mt-3 text-sm font-medium text-red-500">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-5 flex gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="flex-1 rounded-2xl border border-white/40 py-3 text-sm font-semibold transition active:scale-[0.98] disabled:opacity-60"
+          >
+            ยกเลิก
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={!img || busy}
+            className="flex-1 rounded-2xl bg-[#e50914] py-3 text-sm font-bold text-white transition active:scale-[0.98] disabled:opacity-60"
+          >
+            {busy ? "กำลังบันทึก..." : "บันทึก"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -207,13 +463,34 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
   const listRef = useRef<HTMLDivElement>(null);
   const kb = useKeyboardOpen();
 
+  // รูปโปรไฟล์ (ไม่บังคับ): avatarFile = รูปที่ปรับแล้ว รออัปโหลดหลังสมัครสำเร็จ / avatarDraft = รูปที่เพิ่งเลือก รอปรับตำแหน่ง
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState("");
+  const [avatarDraft, setAvatarDraft] = useState<File | null>(null);
+  const [avatarError, setAvatarError] = useState("");
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+
   // ชื่อเต็มที่ส่งให้เซิร์ฟเวอร์ = ชื่อ + นามสกุล (ถ้ามี) คั่นด้วยช่องว่าง
   const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(" ");
+
+  // ตัวอักษรย่อตอนยังไม่มีรูป (ข้ามสระหน้า เ แ โ ใ ไ)
+  const initial = fullName.replace(/^[เแโใไ]/, "").charAt(0).toUpperCase();
 
   // เปลี่ยนขั้น = ล้างแถวที่ไฮไลต์
   useEffect(() => {
     setHi(-1);
   }, [step]);
+
+  // พรีวิวรูปโปรไฟล์ที่เลือก
+  useEffect(() => {
+    if (!avatarFile) {
+      setAvatarPreview("");
+      return;
+    }
+    const url = URL.createObjectURL(avatarFile);
+    setAvatarPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [avatarFile]);
 
   // รายการบริษัท / แผนก (แผนกขึ้นกับบริษัทที่เลือก)
   const companyItems = useMemo<Item[]>(
@@ -226,7 +503,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
   );
 
   // ขั้นที่ผู้ใช้ต้องผ่านทั้งหมด
-  const flow = [0, 1, 2, 3];
+  const flow = [0, 1, 2, 3, 4];
 
   // ยังไม่พิมพ์ = ทุกรายการ / พิมพ์แล้ว = กรองและเรียงตามความใกล้เคียง
   const visibleDepts = useMemo(
@@ -253,6 +530,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
   const onFocusField = (e: FocusEvent<HTMLFormElement>) => {
     const t = e.target as HTMLElement;
     if (t.tagName !== "INPUT" && t.tagName !== "TEXTAREA") return;
+    if ((t as HTMLInputElement).type === "file") return;
     window.setTimeout(() => {
       t.scrollIntoView({ block: "center", behavior: "smooth" });
     }, 300);
@@ -266,6 +544,26 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
       set(v);
       clearErr(key);
     };
+
+  /* ---------------- รูปโปรไฟล์ ---------------- */
+
+  // เลือกรูป: ตรวจไฟล์ แล้วเปิดหน้าต่างให้ปรับตำแหน่ง (ยังไม่อัปโหลดจนกว่าสมัครสำเร็จ)
+  const pickAvatarFile = (file: File) => {
+    if (busy) return;
+    setAvatarError("");
+    if (!file.type.startsWith("image/")) {
+      setAvatarError("เลือกไฟล์รูปภาพเท่านั้น");
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setAvatarError("รูปใหญ่เกินไป เลือกรูปอื่น");
+      return;
+    }
+    setAvatarDraft(file);
+  };
+
+  // กดที่รูปโปรไฟล์หรือไอคอนกล้อง = เปิดหน้าต่างเลือกไฟล์
+  const openAvatarPicker = () => avatarInputRef.current?.click();
 
   /* ---------------- บริษัท / แผนก ---------------- */
 
@@ -363,13 +661,16 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
       companyId: Number(companyId),
       departmentId: Number(departmentId),
     });
-    setBusy(false);
     if (!r.ok) {
+      setBusy(false);
       setErrors(r.errors);
       const s = stepOfErrors(r.errors);
       if (s !== null) setStep(s); // เด้งกลับไปขั้นที่มีปัญหา
       return;
     }
+    // สมัครสำเร็จ (ล็อกอินแล้ว): ถ้าเลือกรูปไว้ อัปโหลดก่อนไปต่อ ให้หน้าหลักโหลดรูปมาพร้อมบัญชี
+    if (avatarFile) await uploadAvatar(avatarFile);
+    setBusy(false);
     onAuthed(r.user);
   };
 
@@ -414,6 +715,7 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
         : "เลือกจากรายการ ถ้าหาไม่เจอพิมพ์ค้นหาได้",
     },
     { t: "ตั้งค่าบัญชี", s: "ใช้ username และรหัสผ่านนี้เข้าสู่ระบบ" },
+    { t: "รูปโปรไฟล์", s: "ใส่รูปโปรไฟล์หรือข้ามก็ได้ ตั้งทีหลังที่หน้าโปรไฟล์ได้" },
   ][step];
 
   // ตำแหน่งของขั้นปัจจุบัน (ใช้วาดวงกลมลำดับขั้น)
@@ -626,6 +928,101 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
                 />
               </div>
             )}
+
+            {/* ขั้น 5: รูปโปรไฟล์ (ไม่บังคับ) หน้าตาเหมือนหน้าโปรไฟล์ */}
+            {step === 4 && (
+              <div className="mt-6 flex flex-col items-center rounded-3xl border border-white/10 bg-[#1f1f1f] p-5 text-center">
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={openAvatarPicker}
+                    disabled={busy}
+                    aria-label={avatarFile ? "เปลี่ยนรูปโปรไฟล์" : "อัปโหลดรูปโปรไฟล์"}
+                    className="block cursor-pointer rounded-full transition active:scale-[0.98] disabled:cursor-not-allowed"
+                  >
+                    {avatarPreview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={avatarPreview}
+                        alt="รูปโปรไฟล์ที่เลือก"
+                        className="h-44 w-44 rounded-full object-cover md:h-56 md:w-56"
+                      />
+                    ) : (
+                      <span
+                        aria-hidden
+                        className="flex h-44 w-44 items-center justify-center rounded-full bg-[#2a2a2a] text-7xl font-bold md:h-56 md:w-56 md:text-8xl"
+                      >
+                        {initial}
+                      </span>
+                    )}
+                  </button>
+                  {busy && avatarFile && (
+                    <span
+                      role="status"
+                      className="absolute inset-0 flex items-center justify-center rounded-full bg-black/60 text-sm font-semibold"
+                    >
+                      กำลังอัปโหลด...
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={openAvatarPicker}
+                    disabled={busy}
+                    tabIndex={-1}
+                    aria-hidden
+                    className="absolute bottom-1 right-1 flex h-12 w-12 items-center justify-center rounded-full border-4 border-[#1f1f1f] bg-white text-black shadow-[0_2px_8px_rgba(0,0,0,0.5)] transition active:scale-90 disabled:opacity-60"
+                  >
+                    <IconCamera className="h-6 w-6" />
+                  </button>
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="sr-only"
+                    tabIndex={-1}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = ""; // เลือกรูปเดิมซ้ำได้
+                      if (f) pickAvatarFile(f);
+                    }}
+                  />
+                </div>
+                {avatarFile && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAvatarFile(null);
+                      setAvatarError("");
+                    }}
+                    disabled={busy}
+                    className="mt-3 rounded-full px-4 py-1.5 text-xs font-semibold text-white/70 transition hover:bg-white/10 active:opacity-60 disabled:opacity-50"
+                  >
+                    ลบรูปโปรไฟล์
+                  </button>
+                )}
+                {avatarError && (
+                  <p role="alert" className="mt-2 text-sm font-medium text-red-500">
+                    {avatarError}
+                  </p>
+                )}
+                <p className="mt-3 max-w-full truncate text-lg font-bold md:text-xl">{fullName}</p>
+                <p className="max-w-full truncate text-xs text-white/60 md:text-sm">
+                  @{username.trim()}
+                </p>
+
+                {/* ข้าม: สมัครสมาชิกโดยไม่ใส่รูป (เลือกรูปแล้วจะซ่อนปุ่มนี้) */}
+                {!avatarFile && (
+                  <button
+                    type="button"
+                    onClick={register}
+                    disabled={busy}
+                    className="mt-5 h-11 w-full rounded-full border border-white/30 text-sm font-semibold text-white/80 transition hover:bg-white/10 active:scale-[0.98] disabled:opacity-50"
+                  >
+                    ข้าม
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {errors.form && (
@@ -672,6 +1069,20 @@ export default function RegisterForm({ onAuthed, onSwitch, onBack }: AuthFormPro
           )}
         </div>
       </form>
+
+      {/* หน้าต่างปรับรูปโปรไฟล์ (ลากขยับ/ซูม แล้วกดบันทึก) */}
+      {avatarDraft && (
+        <AvatarCropper
+          file={avatarDraft}
+          busy={false}
+          error=""
+          onCancel={() => setAvatarDraft(null)}
+          onSave={(f) => {
+            setAvatarFile(f);
+            setAvatarDraft(null);
+          }}
+        />
+      )}
     </AuthShell>
   );
 }
